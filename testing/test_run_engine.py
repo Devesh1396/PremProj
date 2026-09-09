@@ -231,6 +231,78 @@ def main() -> int:
           conn.execute("select count(*) from dead_letter_jobs where entity_id=%s",
                        (dead.run_id,)).fetchone()[0] == 1)
 
+    print("\ntransient provider failures")
+    # A 503 is the provider being busy, not the engine emitting a bad control
+    # block. These assert that the two are told apart: a transient is waited
+    # out on its own budget, a permanent error is not retried at all, and
+    # neither is allowed to masquerade as a schema violation.
+    import urllib.error
+
+    def http_error(code):
+        return urllib.error.HTTPError("http://x", code, "boom", {}, None)
+
+    original_base = RE.TRANSPORT_BACKOFF_BASE
+    RE.TRANSPORT_BACKOFF_BASE = 0.001   # keep the suite fast; the maths is unchanged
+    original = RE.select_provider
+    try:
+        busy = {"n": 0}
+
+        def busy_twice(system, user, params):
+            busy["n"] += 1
+            if busy["n"] <= 2:
+                raise http_error(503)
+            return ('ok\n<CONTROL_BLOCK>\n{"CASE_VERSION":1,"ENGINE_RUN_STATUS":"SUCCEEDED"}\n'
+                    '</CONTROL_BLOCK>'), 11, 22
+
+        RE.select_provider = lambda: (busy_twice, "test")
+        recovered = RE.run_engine(conn, RE.EngineRequest(
+            engine="E2", structured_input={"CASE_VERSION": 1},
+            client_id=client, cycle_id=cycle))
+        check("transient 503 retried until it succeeds",
+              recovered.status == "SUCCEEDED" and busy["n"] == 3,
+              f"status={recovered.status} calls={busy['n']}")
+        check("a transient does not spend a repair attempt",
+              recovered.attempts == 1, f"attempts={recovered.attempts}")
+
+        perm = {"n": 0}
+
+        def bad_request(system, user, params):
+            perm["n"] += 1
+            raise http_error(400)
+
+        RE.select_provider = lambda: (bad_request, "test")
+        rejected = RE.run_engine(conn, RE.EngineRequest(
+            engine="E3", structured_input={"CASE_VERSION": 1},
+            client_id=client, cycle_id=cycle))
+        check("a 400 is never retried", perm["n"] == 1, f"calls={perm['n']}")
+        check("a permanent provider error dead-letters",
+              rejected.status == "DEAD_LETTER", f"status={rejected.status}")
+
+        overloaded = {"n": 0}
+
+        def always_busy(system, user, params):
+            overloaded["n"] += 1
+            raise http_error(503)
+
+        RE.select_provider = lambda: (always_busy, "test")
+        gave_up = RE.run_engine(conn, RE.EngineRequest(
+            engine="E4", structured_input={"CASE_VERSION": 1},
+            client_id=client, cycle_id=cycle))
+        check("transport retries are bounded",
+              overloaded["n"] == RE.MAX_TRANSPORT_ATTEMPTS,
+              f"calls={overloaded['n']} budget={RE.MAX_TRANSPORT_ATTEMPTS}")
+        check("provider failure is not recorded as a schema violation",
+              conn.execute("select error_class from engine_runs where run_id=%s",
+                           (gave_up.run_id,)).fetchone()[0] == "PROVIDER_ERROR",
+              str(conn.execute("select error_class from engine_runs where run_id=%s",
+                               (gave_up.run_id,)).fetchone()))
+        check("every failed physical attempt is costed",
+              conn.execute("select count(*) from cost_events where run_id=%s and not success",
+                           (gave_up.run_id,)).fetchone()[0] == RE.MAX_TRANSPORT_ATTEMPTS)
+    finally:
+        RE.select_provider = original
+        RE.TRANSPORT_BACKOFF_BASE = original_base
+
     print("\ncost telemetry")
     rows = conn.execute(
         """select count(*), sum(input_tokens + output_tokens)

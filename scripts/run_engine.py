@@ -26,6 +26,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import random
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -42,6 +43,24 @@ PROMPTS_DIR = REPO / "prompts"
 SCHEMA_PATH = REPO / "schemas" / "orchestration" / "control_contract.v1.json"
 
 MAX_ATTEMPTS = 3          # initial + repair + final
+
+# A 503 is not a malformed answer. Transport failures get their own budget
+# and their own backoff, so one overloaded-provider window cannot silently
+# spend the repair retries that exist for an invalid control block. Without
+# this the three repair attempts fire within seconds of each other and a
+# live run dies on a transient that a few seconds of waiting would clear.
+# A provider demand spike lasts longer than a few seconds -- Gemini answers
+# "This model is currently experiencing high demand" with a 503 for minutes
+# at a time -- so the budget has to be minutes, not seconds. Six attempts
+# backing off 2/4/8/16/32s (jittered, capped) rides out roughly a minute of
+# unavailability. Env-tunable because the right ceiling is a property of the
+# provider and the run, not of this code: a knowledge batch may want to give
+# up early where a single measurement run should wait.
+MAX_TRANSPORT_ATTEMPTS = int(os.environ.get("LLM_TRANSPORT_MAX_ATTEMPTS", "6"))
+TRANSPORT_BACKOFF_BASE = 2.0    # seconds, exponentiated per attempt
+TRANSPORT_BACKOFF_CAP = 60.0    # never sleep longer than this between tries
+RETRYABLE_HTTP_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
+
 CONTROL_TAG = "CONTROL_BLOCK"
 
 ENGINE_PROMPTS = {
@@ -264,6 +283,76 @@ def select_provider() -> tuple[Provider, str]:
     return fixture_provider, "fixture"
 
 
+def _is_retryable(exc: Exception) -> bool:
+    """Is this the provider being busy, or the request being wrong?
+
+    A 503 or a 429 means the same request will very likely succeed shortly.
+    A 400 or a 401 means it will not, ever: retrying that spends wall-clock
+    and, on a metered endpoint, money. Anything unrecognised is treated as
+    permanent -- a retry loop that fires on unknown errors is how a bad
+    request turns into a bill.
+    """
+    import urllib.error
+
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code in RETRYABLE_HTTP_STATUS
+    # URLError covers DNS failure, connection refused, and the socket
+    # timeouts urlopen surfaces through it.
+    return isinstance(exc, (urllib.error.URLError, TimeoutError, ConnectionError))
+
+
+def _retry_after(exc: Exception) -> float | None:
+    """Seconds the provider asked us to wait, if it said so.
+
+    Only the delta-seconds form is honoured. The HTTP-date form is legal but
+    needs clock-skew handling to be safe, and no provider here sends it; an
+    unparseable value falls back to our own backoff rather than to zero.
+    """
+    headers = getattr(exc, "headers", None)
+    if headers is None:
+        return None
+    try:
+        return max(0.0, float(headers.get("Retry-After", "")))
+    except (TypeError, ValueError):
+        return None
+
+
+def _call_provider(conn, req: EngineRequest, provider: Provider, system_prompt: str,
+                   user_prompt: str, params: dict, model_name: str, run_id: str):
+    """One logical model call, retrying transient transport failures.
+
+    Every PHYSICAL attempt is recorded in cost_events, failures included: a
+    retry invisible in the cost table makes the measurement understate what
+    a call really costs, and D5 is a decision made on those numbers.
+
+    Returns (raw, in_tok, out_tok, duration_ms, error). `error` is None on
+    success; on failure it is the last exception and the rest is empty.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(1, MAX_TRANSPORT_ATTEMPTS + 1):
+        started = time.time()
+        try:
+            raw, in_tok, out_tok = provider(system_prompt, user_prompt, params)
+        except Exception as exc:
+            _record_cost(conn, req, model_name, run_id, 0, 0,
+                         int((time.time() - started) * 1000), False,
+                         type(exc).__name__)
+            last_exc = exc
+            if not _is_retryable(exc) or attempt == MAX_TRANSPORT_ATTEMPTS:
+                break
+            # Exponential, capped, with jitter so that concurrent
+            # knowledge-batch calls do not all return at the same instant and
+            # re-overload a provider that is already shedding load. A
+            # Retry-After from the provider wins: it knows when it will be
+            # back and we do not.
+            delay = min(TRANSPORT_BACKOFF_CAP, TRANSPORT_BACKOFF_BASE ** attempt)
+            delay *= 0.5 + random.random()
+            time.sleep(min(TRANSPORT_BACKOFF_CAP, _retry_after(exc) or delay))
+            continue
+        return raw, in_tok, out_tok, int((time.time() - started) * 1000), None
+    return "", 0, 0, 0, last_exc
+
+
 # ---------------------------------------------------------------------
 # RUN_ENGINE
 # ---------------------------------------------------------------------
@@ -324,18 +413,22 @@ def run_engine(conn: psycopg.Connection, req: EngineRequest) -> EngineResult:
     # across every attempt, which is what a repair retry actually cost.
     totals = {"input_tokens": 0, "output_tokens": 0, "duration_ms": 0}
 
+    provider_failed = False
+
     while attempts < MAX_ATTEMPTS:
         attempts += 1
-        started = time.time()
-        try:
-            raw, in_tok, out_tok = provider(prompt_content, user_prompt, params)
-        except Exception as exc:
+        raw, in_tok, out_tok, duration_ms, exc = _call_provider(
+            conn, req, provider, prompt_content, user_prompt, params,
+            model_name, run_id)
+        if exc is not None:
+            # Transport retries are exhausted. The payload is fine and the
+            # provider is not, so a repair retry -- which resends the same
+            # request with repair instructions bolted on -- would only fail
+            # the same way. Stop and dead-letter with an honest error class.
             errors = [f"provider error: {exc}"]
-            _record_cost(conn, req, model_name, run_id, 0, 0,
-                         int((time.time() - started) * 1000), False, type(exc).__name__)
-            continue
+            provider_failed = True
+            break
 
-        duration_ms = int((time.time() - started) * 1000)
         _record_cost(conn, req, model_name, run_id, in_tok, out_tok, duration_ms, True, None)
         totals["input_tokens"] += in_tok
         totals["output_tokens"] += out_tok
@@ -362,10 +455,12 @@ def run_engine(conn: psycopg.Connection, req: EngineRequest) -> EngineResult:
             """update engine_runs
                   set status='DEAD_LETTER', attempts=%s, completed_at=now(),
                       input_tokens=%s, output_tokens=%s, duration_ms=%s,
-                      error_class='SCHEMA_INVALID', error_detail=%s
+                      error_class=%s, error_detail=%s
                 where run_id=%s""",
             (attempts, totals["input_tokens"], totals["output_tokens"],
-             totals["duration_ms"], "; ".join(errors)[:2000], run_id),
+             totals["duration_ms"],
+             "PROVIDER_ERROR" if provider_failed else "SCHEMA_INVALID",
+             "; ".join(errors)[:2000], run_id),
         )
         conn.execute(
             """insert into dead_letter_jobs
