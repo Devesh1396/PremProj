@@ -1,0 +1,12 @@
+.env
+*.log
+__pycache__/
+*.pyc
+knowledge/inbox/*
+knowledge/processed/*
+knowledge/failed/*
+!knowledge/*/.gitkeep
+pgdata/
+backups/
+__pycache__/
+*.pyc

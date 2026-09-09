@@ -1,0 +1,148 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://prem-health-intelligence/schemas/orchestration/control_contract.v1.json",
+  "title": "Orchestration Control Contract v1",
+  "description": "The deterministic subset of engine output that n8n routes on. Deliberately small. Report formatting, deep extraction and client-facing output contracts are separate and deferred. n8n must never parse free-text prose to decide what runs next.",
+
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["CASE_VERSION", "ENGINE_RUN_STATUS"],
+
+  "properties": {
+    "CASE_VERSION": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Case version this run read. Engine 6 increments; other engines echo."
+    },
+
+    "ENGINE_RUN_STATUS": {
+      "enum": ["SUCCEEDED", "PARTIAL", "FAILED", "INSUFFICIENT_INPUT"],
+      "description": "The engine's own assessment. Distinct from engine_runs.status, which is the orchestrator's."
+    },
+
+    "REVIEW_REQUIRED": {
+      "type": "boolean",
+      "default": false,
+      "description": "Engine requests practitioner review before downstream work proceeds."
+    },
+
+    "HOLD_FLAG_PRESENT": {
+      "type": "boolean",
+      "default": false,
+      "description": "LLM-raised hold. Additive only: it can create a flag, never clear a deterministic one."
+    },
+
+    "MEDICAL_COORDINATION_PRESENT": {
+      "type": "boolean",
+      "default": false,
+      "description": "Engine 1 Part 18 / Engine 4 Part 21 populated. Does not by itself block release; the deterministic rule set decides HOLD vs NOTE."
+    },
+
+    "LIVE_RESEARCH_REQUIRED": {
+      "type": "boolean",
+      "default": false,
+      "description": "Engine 7 case mode: library coverage inadequate, escalate to targeted live research."
+    },
+
+    "KNOWLEDGE_SUFFICIENT": {
+      "type": "boolean",
+      "description": "Engine 7: existing library answers the case question. When false and LIVE_RESEARCH_REQUIRED is false, the gap is recorded rather than researched."
+    },
+
+    "ROUTING_RECOMMENDATION": {
+      "enum": ["NONE", "ENGINE1", "ENGINE2", "ENGINE3", "MULTIPLE", "MEDICAL_COORDINATION", "MORE_DATA"],
+      "default": "NONE"
+    },
+    "ROUTING_REASON": { "type": "string", "maxLength": 2000 },
+
+    "ENGINE1_ACTION_REQUIRED": { "type": "boolean", "default": false },
+    "ENGINE2_ACTION_REQUIRED": { "type": "boolean", "default": false },
+    "ENGINE3_ACTION_REQUIRED": { "type": "boolean", "default": false },
+    "ENGINE4_REASSESSMENT_REQUIRED": { "type": "boolean", "default": false },
+
+    "CURRENT_DECISION": {
+      "enum": [
+        "CONTINUE", "PROGRESS", "INTENSIFY", "SIMPLIFY", "MODIFY", "REPLACE",
+        "REMOVE", "INVESTIGATE_FURTHER", "ROUTE_TO_ENGINE1", "ROUTE_TO_ENGINE2",
+        "ROUTE_TO_ENGINE3", "MEDICAL_COORDINATION", "MORE_DATA_BEFORE_DECISION"
+      ],
+      "description": "Engine 4 section 48. Several may apply in reasoning; this field carries the primary decision that routing acts on."
+    },
+
+    "PRIMARY_FAILURE_TYPE": {
+      "enum": ["STRATEGY", "ADHERENCE", "IMPLEMENTATION", "MEASUREMENT",
+               "INSUFFICIENT_EXPOSURE", "WRONG_HYPOTHESIS", "NORMAL_VARIABILITY", "NONE"],
+      "default": "NONE"
+    },
+
+    "FOLLOWUP_PHASE": { "type": "string", "maxLength": 120 },
+
+    "NEXT_ENGINE": {
+      "enum": ["E1", "E2", "E3", "E4", "E5", "E6", "E7", "REVIEW", "NONE"],
+      "description": "Explicit next step. NONE ends the cycle; REVIEW parks it in the practitioner queue."
+    },
+
+    "LOOP_COUNT": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Routing depth within the current cycle. Compared against case_cycles.max_loops before any re-route."
+    },
+
+    "ERROR_STATE": {
+      "type": ["string", "null"],
+      "maxLength": 500,
+      "default": null
+    },
+
+    "RESEARCH_QUESTIONS": {
+      "type": "array",
+      "maxItems": 25,
+      "items": { "type": "string", "maxLength": 600 },
+      "description": "Engine 1 Pass A output. Consumed by Engine 7 case mode. Empty on Pass B."
+    },
+
+    "NORMALIZATION_PHRASES": {
+      "type": "array",
+      "maxItems": 100,
+      "items": { "type": "string", "maxLength": 300 },
+      "description": "Clinical phrases the engine used, handed to the normalization layer for concept resolution. Engines are never asked to emit canonical keys themselves."
+    }
+  },
+
+  "allOf": [
+    {
+      "description": "A routing recommendation must name a reason, so the practitioner can see why a case moved.",
+      "if": {
+        "properties": {
+          "ROUTING_RECOMMENDATION": {
+            "enum": ["ENGINE1", "ENGINE2", "ENGINE3", "MULTIPLE", "MEDICAL_COORDINATION", "MORE_DATA"]
+          }
+        },
+        "required": ["ROUTING_RECOMMENDATION"]
+      },
+      "then": { "required": ["ROUTING_REASON"] }
+    },
+    {
+      "description": "Live research is only escalated when the library was found insufficient.",
+      "if": {
+        "properties": { "LIVE_RESEARCH_REQUIRED": { "const": true } },
+        "required": ["LIVE_RESEARCH_REQUIRED"]
+      },
+      "then": {
+        "properties": { "KNOWLEDGE_SUFFICIENT": { "const": false } },
+        "required": ["KNOWLEDGE_SUFFICIENT"]
+      }
+    },
+    {
+      "description": "A failed run must say why.",
+      "if": {
+        "properties": { "ENGINE_RUN_STATUS": { "const": "FAILED" } },
+        "required": ["ENGINE_RUN_STATUS"]
+      },
+      "then": {
+        "properties": { "ERROR_STATE": { "type": "string", "minLength": 1 } },
+        "required": ["ERROR_STATE"]
+      }
+    }
+  ]
+}
