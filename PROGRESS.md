@@ -309,6 +309,37 @@ by a test rather than assumed.
     `engine_outputs`, both row-level secured, and is owned by `phi_admin`.
     Caught before 008 was committed, and now asserted by test so the next
     view cannot repeat it.
+29. **Fixture estimates were costed as money.** RUN_ENGINE recorded
+    `model_name` from the role's env var, falling back to a fixture
+    placeholder only when it was empty — so setting `MODEL_ANALYSIS` before
+    the key arrived made a fixture run match the price registry and report
+    `$0.039902` for a cycle that never left the machine, printed under the
+    banner saying the tokens are estimates. Fixture runs now record
+    `fixture:<model>`: nothing matches, cost stays NULL, and UNPRICED keeps
+    the meaning 008 documents.
+30. **An unset model role was sent to the provider as a model id.** The same
+    fallback put the literal `fixture:live` in the request when
+    `LLM_API_KEY` was set and the role was not, so a configuration error
+    arrived as an opaque 400. Now raises `ModelRoleUnset` naming the
+    variable.
+31. **The test suite made real API calls.** Both engine-running suites took
+    their provider from the environment. Correct in production, wrong in a
+    test: the moment a real key reached the environment,
+    `bash testing/run_all.sh` would spend money on every run, vary between
+    runs, and go red whenever the provider was down or out of quota. Hidden
+    because CI sets the key empty. Both suites now force the fixture
+    provider and assert they got it.
+32. **`measure_engine1.py` crashed on its last line.** A refactor replaced
+    the two-pass pass/fail boolean with a three-way verdict string and left
+    the `return` referencing the deleted name. Every line of the report
+    printed correctly, then `NameError`. **`run_all.sh` never ran this
+    script**, so only the CI step caught it — the first thing CI found that
+    a local run could not. The suite now exercises `print_report`'s exit
+    code directly, on a complete cycle and on one missing Pass B.
+33. **An incomplete cycle was reported as a fork.** A run where Pass B never
+    happened is not evidence of two Engine 1 specifications; calling it
+    `NO — FORK DETECTED` sends the reader hunting an architectural
+    violation that is not there. Now `INCOMPLETE`, still a non-zero exit.
 
 ## The E1 two-pass rule is enforced, not documented
 `trg_enforce_two_pass` rejects an insert where Pass A and Pass B in the

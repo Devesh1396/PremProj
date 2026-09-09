@@ -17,6 +17,8 @@ that Pass A and Pass B still record one prompt hash after going through it.
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import os
 import sys
@@ -258,6 +260,42 @@ def main() -> int:
     check("Pass B carries more input than Pass A — the E7 slot is populated",
           by_call[("E1", "B")]["prompt_tokens"] >= by_call[("E1", "A")]["prompt_tokens"],
           f"A={by_call[('E1','A')]['prompt_tokens']} B={by_call[('E1','B')]['prompt_tokens']}")
+
+    # print_report's EXIT CODE, not just its output. It is the last line of
+    # a long function, so every line above it can be correct while it raises
+    # -- which is exactly what happened: a refactor replaced the pass/fail
+    # boolean with a three-way verdict string and left the return statement
+    # referencing the deleted name. The report printed perfectly and then
+    # died with NameError. run_all.sh never ran this script, so only CI
+    # caught it. Now the suite does.
+    print("\nmeasurement: the report's exit code")
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = ME.print_report(conn, context["cycle_id"], "fixture", context)
+    report = buf.getvalue()
+    check("a complete, unforked cycle reports success", rc == 0, f"rc={rc}")
+    check("...and says so in the two-pass verdict",
+          "one specification : YES" in report,
+          str([l for l in report.splitlines() if "one specification" in l]))
+
+    # A cycle where Pass B never ran is INCOMPLETE, not a fork. Reporting it
+    # as a fork sends the reader hunting an architectural violation that is
+    # not there -- but it must still fail, because it is not a success.
+    lone_cycle = conn.execute(
+        """insert into case_cycles (client_id, cycle_number, cycle_type)
+           values (%s,2,'NEW_CLIENT') returning cycle_id""",
+        (context["client_id"],)).fetchone()[0]
+    RE.run_engine(conn, RE.EngineRequest(
+        engine="E1", structured_input={"CASE_VERSION": 1, "MODE": "PASS_A"},
+        client_id=context["client_id"], cycle_id=lone_cycle, pass_label="A"))
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc_partial = ME.print_report(conn, str(lone_cycle), "fixture", context)
+    partial = buf.getvalue()
+    check("a cycle missing Pass B fails", rc_partial != 0, f"rc={rc_partial}")
+    check("...and is called INCOMPLETE, not a fork",
+          "INCOMPLETE" in partial and "FORK DETECTED" not in partial,
+          str([l for l in partial.splitlines() if "one specification" in l]))
 
     print("\nmeasurement: tokens attribute to the run, not just the client")
     unattributed = conn.execute(
