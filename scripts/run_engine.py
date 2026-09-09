@@ -268,12 +268,44 @@ def openai_compatible_provider(system_prompt: str, user_prompt: str, params: dic
     )
     with urllib.request.urlopen(req, timeout=params.get("timeout", 300)) as resp:
         payload = json.loads(resp.read())
+    return parse_completion(payload)
+
+
+def parse_completion(payload: Any) -> tuple[str, int, int]:
+    """Pull content and BILLED token counts out of a chat-completion payload.
+
+    Separated from the HTTP call so the shapes a real provider returns can be
+    asserted without a network round trip -- the payloads in
+    test_run_engine.py are recorded from live responses, not invented.
+    """
+    # Some providers wrap the object in a single-element list.
+    if isinstance(payload, list):
+        payload = payload[0]
+
+    choice = payload["choices"][0]
+    # `content` is ABSENT, not empty, when a reasoning model spends its whole
+    # budget thinking and finishes with reason "length". Subscripting it
+    # raises KeyError, which RUN_ENGINE would report as a provider transport
+    # failure -- a misleading diagnosis for a response that arrived intact.
+    # Return the empty string and let control-block extraction fail honestly.
+    content = choice.get("message", {}).get("content") or ""
+
     usage = payload.get("usage", {})
-    return (
-        payload["choices"][0]["message"]["content"],
-        usage.get("prompt_tokens", 0),
-        usage.get("completion_tokens", 0),
-    )
+    prompt_tokens = usage.get("prompt_tokens", 0)
+    completion_tokens = usage.get("completion_tokens", 0)
+    total_tokens = usage.get("total_tokens", 0)
+
+    # REASONING TOKENS ARE BILLED AS OUTPUT AND ARE NOT IN completion_tokens.
+    # Measured against this provider: prompt 8, completion 1, total 75 -- 66
+    # tokens generated, billed, and invisible to the obvious accounting.
+    # Taking completion_tokens as output would have understated the cost of
+    # this cycle by most of it, and D5 is a decision made on these numbers.
+    #
+    # total - prompt is what was generated and charged at the output rate.
+    # max() guards a provider whose total omits reasoning: never report less
+    # than it explicitly told us.
+    billed_output = max(completion_tokens, total_tokens - prompt_tokens)
+    return content, prompt_tokens, billed_output
 
 
 def select_provider() -> tuple[Provider, str]:

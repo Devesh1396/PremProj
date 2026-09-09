@@ -56,6 +56,55 @@ def main() -> int:
     conn.execute("delete from dead_letter_jobs where job_type like 'RUN_ENGINE_%'")
     conn.execute("delete from cost_events where workflow like 'RUN_ENGINE_%'")
 
+    # ------------------------------------------------------------------
+    # Payload shapes RECORDED from live responses, not invented. Both of
+    # these were found the first time a real key reached this code.
+    print("\nlive provider payload parsing")
+
+    # A reasoning model bills what it thinks, and completion_tokens does not
+    # include it: prompt 8 + completion 1 = 9, but 75 were charged. Reading
+    # completion_tokens as output understated a real cycle by most of its
+    # cost -- and D5 is a decision made on these numbers.
+    content, in_tok, out_tok = RE.parse_completion({
+        "choices": [{"finish_reason": "stop",
+                     "message": {"role": "assistant", "content": "ready"}}],
+        "usage": {"prompt_tokens": 8, "completion_tokens": 1, "total_tokens": 75},
+    })
+    check("reasoning tokens are counted as billed output",
+          (content, in_tok, out_tok) == ("ready", 8, 67),
+          f"{content!r} in={in_tok} out={out_tok}")
+
+    # Whole budget spent thinking: finish_reason "length", completion_tokens
+    # 0, and message carries NO content key at all. Subscripting it raised
+    # KeyError, which RUN_ENGINE reported as a transport failure -- a
+    # misleading diagnosis for a response that arrived intact.
+    content, in_tok, out_tok = RE.parse_completion({
+        "choices": [{"finish_reason": "length", "message": {"role": "assistant"}}],
+        "usage": {"prompt_tokens": 8, "completion_tokens": 0, "total_tokens": 15},
+    })
+    check("absent content yields empty string, not KeyError",
+          (content, in_tok, out_tok) == ("", 8, 7),
+          f"{content!r} in={in_tok} out={out_tok}")
+
+    # Same provider, wrapped in a single-element list.
+    content, _, _ = RE.parse_completion([
+        {"choices": [{"message": {"content": "wrapped"}}],
+         "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}}])
+    check("a list-wrapped payload parses", content == "wrapped", repr(content))
+
+    # A provider whose total omits reasoning must never be reported as
+    # having produced LESS than it explicitly stated.
+    _, _, out_tok = RE.parse_completion({
+        "choices": [{"message": {"content": "x"}}],
+        "usage": {"prompt_tokens": 100, "completion_tokens": 40, "total_tokens": 140},
+    })
+    check("classic usage accounting is unchanged", out_tok == 40, str(out_tok))
+    _, _, out_tok = RE.parse_completion({
+        "choices": [{"message": {"content": "x"}}],
+        "usage": {"prompt_tokens": 100, "completion_tokens": 40, "total_tokens": 0},
+    })
+    check("a missing total never reduces the reported output", out_tok == 40, str(out_tok))
+
     print("\nprompt discipline")
     RE._prompt_cache.clear()
     # Point at a directory with no prompt files. Asserting that prompts/ is
