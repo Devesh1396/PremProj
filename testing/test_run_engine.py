@@ -36,6 +36,18 @@ def check(name: str, condition: bool, detail: str = "") -> None:
 
 
 def main() -> int:
+    # Tests NEVER call a live provider. Without this, a developer or CI
+    # runner with LLM_API_KEY in the environment would have the suite make
+    # real API calls: real money per run, output that varies between runs,
+    # and a suite that goes red when the provider is down or out of quota.
+    # None of that is a property of the code under test.
+    #
+    # The provider-selection checks set and restore this themselves; the
+    # engine runs below must all be fixture runs.
+    os.environ["LLM_API_KEY"] = ""
+    assert RE.select_provider()[1] == "fixture", \
+        "test suite must run on the fixture provider"
+
     conn = psycopg.connect(os.environ["DATABASE_URL"], autocommit=True)
 
     # Idempotent: tests must be re-runnable against a database that already
