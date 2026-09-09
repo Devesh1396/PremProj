@@ -53,28 +53,14 @@ echo "== 3. migrate (admin role, from the host) =="
 python3 scripts/migrate.py
 
 # Roles are CREATED by migration 005 with no password (see its section 1),
-# so this has to happen after migrate, exactly as on the VPS.
-echo "== 4. role passwords =="
-psql_admin -c "ALTER ROLE ${POSTGRES_RUNTIME_USER} WITH PASSWORD '${POSTGRES_RUNTIME_PASSWORD}';" >/dev/null
-psql_admin -c "ALTER ROLE ${POSTGRES_PRACTITIONER_USER} WITH PASSWORD '${POSTGRES_PRACTITIONER_PASSWORD}';" >/dev/null
-echo "set for ${POSTGRES_RUNTIME_USER} and ${POSTGRES_PRACTITIONER_USER}"
+# so this has to happen after migrate, exactly as on the VPS. Delegated to
+# a script shared with CI: it quotes the password as a SQL literal rather
+# than interpolating it through the shell, which a password containing a
+# quote does not survive, and it verifies the roles afterwards.
+echo "== 4. role passwords and verification =="
+python3 scripts/set_role_passwords.py
 
-echo "== 5. verify roles =="
-psql_admin -c "
-  SELECT rolname, rolcanlogin, rolsuper, rolbypassrls, rolcreatedb, rolcreaterole
-    FROM pg_roles
-   WHERE rolname IN ('phi_admin','phi_runtime','phi_practitioner')
-   ORDER BY rolname;"
-
-# The one property that makes RLS real rather than cosmetic.
-psql_admin -t -c "
-  SELECT CASE WHEN rolsuper OR rolbypassrls
-              THEN 'FAIL: phi_runtime can bypass RLS'
-              ELSE 'ok: phi_runtime is NOSUPERUSER NOBYPASSRLS' END
-    FROM pg_roles WHERE rolname='phi_runtime';" | grep -q '^ *ok' \
-  || { echo "phi_runtime is not correctly constrained"; exit 1; }
-
-echo "== 6. capabilities =="
+echo "== 5. capabilities =="
 psql_admin -c "SELECT capability, enabled FROM system_capabilities ORDER BY capability;"
 
 cat <<MSG

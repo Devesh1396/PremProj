@@ -71,27 +71,16 @@ python scripts/migrate.py
 if ($LASTEXITCODE -ne 0) { throw "migrations failed" }
 
 # Roles are CREATED by migration 005 with no password (see its section 1),
-# so this has to happen after migrate, exactly as on the VPS.
-Write-Host "== 4. role passwords =="
-Invoke-PsqlAdmin -c "ALTER ROLE $($cfg['POSTGRES_RUNTIME_USER']) WITH PASSWORD '$($cfg['POSTGRES_RUNTIME_PASSWORD'])';" | Out-Null
-Invoke-PsqlAdmin -c "ALTER ROLE $($cfg['POSTGRES_PRACTITIONER_USER']) WITH PASSWORD '$($cfg['POSTGRES_PRACTITIONER_PASSWORD'])';" | Out-Null
-Write-Host "set for $($cfg['POSTGRES_RUNTIME_USER']) and $($cfg['POSTGRES_PRACTITIONER_USER'])"
+# so this has to happen after migrate, exactly as on the VPS. Delegated to
+# a script shared with CI and with the bash setup: it quotes the password
+# as a SQL literal rather than interpolating it into a command line, which
+# a password containing a quote does not survive, and it verifies the roles
+# afterwards.
+Write-Host "== 4. role passwords and verification =="
+python scripts/set_role_passwords.py
+if ($LASTEXITCODE -ne 0) { throw "role setup failed" }
 
-Write-Host "== 5. verify roles =="
-Invoke-PsqlAdmin -c @"
-  SELECT rolname, rolcanlogin, rolsuper, rolbypassrls, rolcreatedb, rolcreaterole
-    FROM pg_roles
-   WHERE rolname IN ('phi_admin','phi_runtime','phi_practitioner')
-   ORDER BY rolname;
-"@
-
-# The one property that makes RLS real rather than cosmetic.
-$bypass = (Invoke-PsqlAdmin -t -A -c `
-    "SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname='phi_runtime';").Trim()
-if ($bypass -ne "f") { throw "phi_runtime is not NOSUPERUSER NOBYPASSRLS (got '$bypass')" }
-Write-Host "ok: phi_runtime is NOSUPERUSER NOBYPASSRLS"
-
-Write-Host "== 6. capabilities =="
+Write-Host "== 5. capabilities =="
 Invoke-PsqlAdmin -c "SELECT capability, enabled FROM system_capabilities ORDER BY capability;"
 
 Write-Host ""
