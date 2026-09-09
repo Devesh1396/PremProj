@@ -15,6 +15,8 @@ import json
 import os
 import sys
 
+from urllib.parse import urlsplit, urlunsplit
+
 import psycopg
 
 FAILS: list[str] = []
@@ -37,6 +39,19 @@ def expect_error(conn, sql, params, name, fragment):
         check(name, fragment.lower() in str(exc).lower(), f"unexpected: {exc}")
 
 
+
+def _with_user(dsn: str, user: str) -> str:
+    """Return dsn with its username replaced, preserving everything else."""
+    parts = urlsplit(dsn)
+    if parts.scheme:  # URL form
+        host = parts.hostname or ""
+        netloc = f"{user}@{host}" + (f":{parts.port}" if parts.port else "")
+        return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
+    # keyword/value form: drop any existing user= and append ours
+    kv = [t for t in dsn.split() if not t.startswith("user=")]
+    return " ".join(kv + [f"user={user}"])
+
+
 def main() -> int:
     admin_dsn = os.environ["DATABASE_URL"]
     admin = psycopg.connect(admin_dsn, autocommit=True)
@@ -44,10 +59,12 @@ def main() -> int:
     admin.execute("delete from clients where external_ref like 'RLS-%'")
 
     # Runtime connection. Same host, different role, so RLS is in force.
-    runtime_dsn = admin_dsn.replace("postgres@", "phi_runtime@").replace(
-        "postgresql://postgres", "postgresql://phi_runtime")
-    if "phi_runtime" not in runtime_dsn:
-        runtime_dsn = admin_dsn + "&user=phi_runtime"
+    # Rewrite the username properly rather than string-replacing "postgres":
+    # per docs/OPERATIONS.md the admin role is phi_admin, so any assumption
+    # that the admin DSN says "postgres" is wrong on a real deployment, and
+    # appending "&user=" to a DSN with no query string produces a DSN whose
+    # database name is literally "phi&user=phi_runtime".
+    runtime_dsn = _with_user(admin_dsn, "phi_runtime")
     runtime = psycopg.connect(runtime_dsn)
 
     print("\nrole configuration")
@@ -131,7 +148,7 @@ def main() -> int:
                   "row-level security" in str(exc).lower(), str(exc)[:90])
 
     print("\npractitioner cross-client read path")
-    prac_dsn = admin_dsn.replace("postgresql://postgres", "postgresql://phi_practitioner")
+    prac_dsn = _with_user(admin_dsn, "phi_practitioner")
     prac = psycopg.connect(prac_dsn)
     with prac.transaction():
         seen = {r[0] for r in prac.execute("select marker from client_labs")}

@@ -11,8 +11,8 @@
   "properties": {
     "CASE_VERSION": {
       "type": "integer",
-      "minimum": 1,
-      "description": "Case version this run read. Engine 6 increments; other engines echo."
+      "minimum": 0,
+      "description": "Case version this run read. Engine 6 increments; other engines echo. 0 is reserved for knowledge-clock runs (Engine 7 FOUNDATION, UPDATE, INBOX) which are not attached to any client case; real client case versions begin at 1 and client_case_versions.case_version >= 1 enforces that, so 0 can never denote a genuine case."
     },
 
     "ENGINE_RUN_STATUS": {

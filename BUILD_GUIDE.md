@@ -98,27 +98,68 @@ authorization; `missing_data_reports`; draft vs delivery.
 
 # PART B — REMAINING
 
-## Step 10 — Install the canonical prompts
+## Step 9b — `006_knowledge_inbox` — Engine 7 ingestion foundations
 
-**This is your first task.** Everything downstream is blocked on it.
+Schema only. `source_kinds` as an extensible **registry table** (not an
+enum), `source_envelopes`, `source_delta_analyses`,
+`envelope_derived_records`, `medication_knowledge`, `medication_aliases`,
+`drug_nutrient_claims`. Views `v_ingestion_status`, `v_client_safe_sources`,
+`v_engine_run_clock`. Adds `ck_run_clock_coherent` to `engine_runs`.
 
-Place the seven clean texts verbatim in `prompts/`:
-`engine1_prevention.md`, `engine2_behaviour.md`, `engine3_nutrition.md`,
-`engine4_progress.md`, `engine5_communication.md`, `engine6_memory.md`,
-`engine7_research_practice.md`.
+**Acceptance:** `test_knowledge_inbox.py` — 38 checks. Adding a new source
+kind is a plain `INSERT`; `OTHER` cannot be deleted or deactivated; an
+envelope cannot reach an extracted state without its raw source preserved;
+purchased material is excluded from `v_client_safe_sources` while staying
+available internally.
 
-Do not shorten, summarise or reformat beyond what Markdown requires.
+---
 
-```bash
-python3 scripts/run_engine.py     # must report all seven present
-```
+## Step 9c — `007_coverage_and_provenance` — corrections before freeze
 
-Then set `LLM_BASE_URL`, `LLM_API_KEY` and the five model roles, and
-re-run `test_run_engine.py` against the live provider.
+18 recovered coverage dimensions (`EFFECT_MAGNITUDE`,
+`ALTERNATIVE_STRATEGIES`; no `KNOWLEDGE_GAPS`). Gap governance in
+`domain_gap_assessments` + `knowledge_gaps.severity`. `v_domain_readiness`
+rebuilt so readiness = coverage + gap assessment performed + no open
+CRITICAL gap. `knowledge_entities` registry binds provenance edges.
 
-**Measure Engine 1** at this point: actual input tokens, output tokens, and
-whether quality holds across the full report. Record in `PROGRESS.md`.
-This is the D5 measurement. Do not pre-emptively split the engine.
+**Acceptance:** covered by `test_knowledge_inbox.py` (59 checks) and
+`test_prompt_contracts.py` (78 checks). A provenance edge to a nonexistent
+entity is rejected; an open non-critical gap does not block readiness; an
+open CRITICAL gap does.
+
+---
+
+## Step 10 — Canonical prompts *(done)*
+
+All seven are installed in `prompts/`, ~44,550 words, seven distinct
+hashes, zero non-printing characters, exactly one control-block
+specification each. Engine 7 is the four-layer merge described in
+`DECISIONS.md` D16.
+
+`knowledge/seed/foundation_domains.md` holds Engine 7's A–Z foundation
+curriculum verbatim, referenced from the prompt by path and hash. Load it
+for K1 seeding, domain mapping and foundation research — not on CASE,
+INBOX or routine UPDATE runs.
+
+**Acceptance:** `test_prompt_contracts.py` — 55 checks binding prompt ↔
+`coverage_dimension` enum ↔ `v_domain_readiness`, plus control-block
+uniqueness across all seven prompts and the seed file's content hash.
+
+**Your first task is now Step 10b.**
+
+---
+
+## Step 10b — Wire the provider and measure Engine 1
+
+Set `LLM_API_KEY` and `LLM_BASE_URL`. `run_engine.py` switches from the
+fixture provider automatically.
+
+Then run E1 Pass A on a synthetic case and record **actual** input and
+output tokens in `cost_events`. This is the D5 measurement that was
+deferred: only act on call size if quality actually degrades across the
+19-part report. Measure, do not pre-empt.
+
+---
 
 ## Step 11 — n8n `RUN_ENGINE` subworkflow
 
@@ -256,23 +297,26 @@ a backup.
 ## Order summary
 
 ```
-10 prompts + API key          ← blocked on client input
-11 n8n RUN_ENGINE
-12 ontology seed  ┐ parallel
-13 normalization  ┘
-14 intake V1
-15 CLIENT_NEW
-16 knowledge factory
-17 retrieval
-18 evaluation
-19 controversy / negative knowledge
-20 E2 E3 review E5 + flag rules
-21 CLIENT_FOLLOWUP + E4
-22 Wave-1 build
-23 practice intelligence
-24 backup drill
+1–9   done: VPS, migrations 000–005, contract, RUN_ENGINE
+9b    done: 006 knowledge inbox schema
+9c    done: 007 coverage dimensions, gap governance, provenance registry
+10    done: seven canonical prompts + foundation domain seed
+10b   NEXT: wire provider, measure E1 call size
+11    n8n RUN_ENGINE subworkflow
+12/13 K1 ontology seed  ||  C3 normalization layer
+14    intake form V1                     <- gates the case track
+15    CLIENT_NEW workflow
+16    Knowledge Factory K02–K11
+17    K14 embedding and hybrid retrieval
+18    evaluation layers A–E
+19    K12/K13 controversy, negative knowledge, gaps
+20    E2, E3, review queue, E5
+21    CLIENT_FOLLOWUP and E4
+22    Wave-1 foundation build
+23    practice intelligence
+24    backup restore drill               <- do this early, not last
 ```
 
-Steps 12–13 and 16–19 are the knowledge clock; 14–15 and 20–21 the case
-clock. They run **concurrently**. They meet at Step 17 (retrieval) and
-Step 23 (practice aggregation).
+`bash testing/run_all.sh` must pass before every commit. Seven suites.
+
+**This layer is frozen.** Do not reopen D16–D21 without instruction.

@@ -32,7 +32,7 @@ export POSTGRES_HOST=localhost
 
 python scripts/migrate.py --status
 python scripts/migrate.py
-python testing/test_concept_layer.py
+bash testing/run_all.sh
 ```
 
 n8n at http://localhost:5678
@@ -46,6 +46,7 @@ schemas/orchestration/ strict JSON Schema for control-flow fields
 schemas/engine_outputs/ engine output contracts
 n8n/workflows/         exported workflows
 knowledge/inbox/       drop books and documents here for ingestion
+knowledge/seed/        recovered reference material (E7 foundation curriculum)
 testing/               functional tests
 docs/                  ARCHITECTURE, DATABASE, WORKFLOWS, KNOWLEDGE_FACTORY,
                        OPERATIONS, RESTORE, TESTING

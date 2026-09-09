@@ -366,6 +366,164 @@ dependency**.
 
 ---
 
+## D16 — Engine 7's client revision is merged, not swapped
+**SETTLED**
+
+The client supplied a full replacement Engine 7 master prompt (87 sections,
+7,679 words). It is a rewrite, longer than the original, and richer on
+philosophy, epistemics and acquisition architecture. It also drops runtime
+detail the build already depends on.
+
+`prompts/engine7_research_practice.md` is therefore a merge in four layers:
+Addendum A (runtime), Part I §1–§87 (client text, verbatim), Part II
+§R1–§R3 and Part III §R4–§R9 (retained original operating detail), and §88
+(the control contract).
+
+**Do not "simplify" this back to one document.** The five retained pieces
+each carry weight the client's revision does not:
+
+- **§R8/§R9 handoff blocks.** The client's §78–§82 describe handoff
+  *content* in prose and contain **no XML tags**. `RUN_ENGINE` parses tags.
+  Without these, nothing reaches Engines 1–4.
+- **§R2 coverage test.** The source of `coverage_dimension`, which
+  `domain_coverage` stores and `v_domain_readiness` computes readiness from.
+- **§R1/§R3** foundation build and case retrieval process.
+- **§R4/§R5** self-audits.
+
+*Rejected:* shipping the client's file as-is. Every run would have
+dead-lettered on the missing tags, and domain readiness would have become
+uncomputable.
+
+---
+
+## D17 — 18 coverage dimensions; gap assessment is governance
+**SETTLED**
+
+The prompt once claimed 19 dimensions and listed 18. Checked against the
+original OCR rather than reconciled by guess: **the source has 18
+questions**, and `coverage_dimension` now carries exactly those 18.
+
+`KNOWLEDGE_GAPS` was briefly kept as a nineteenth because it is
+operationally useful. That was a misclassification. "Have we identified what
+we still don't know?" is a **readiness and governance** question about the
+library, not another domain of content. It now lives in
+`domain_gap_assessments` and `knowledge_gaps.severity`.
+
+Two names were also semantic shortcuts taken to force an 18-to-18 mapping,
+and were corrected while the database still held foundation data:
+
+- `MEASUREMENT` → **`EFFECT_MAGNITUDE`**. "How large might the effects be?"
+  is magnitude — absolute change, relative change, responder proportion —
+  not how something is measured.
+- `NUTRITION_STRATEGIES` → **`ALTERNATIVE_STRATEGIES`**. "What alternatives
+  exist?" spans food, exercise, supplement, behaviour, implementation, or a
+  different intervention family entirely.
+
+`foundation_ready` = sufficient coverage across the 18 **+** a gap
+assessment actually performed **+** no unresolved CRITICAL gap.
+
+**It does not require zero gaps, and zero currently identified critical gaps
+never implies COMPLETE.** Open non-critical gaps are the normal state of a
+living library. `foundation_status` has no `COMPLETE` value and §70 forbids
+one. The earlier prompt sentence "recording zero gaps is a claim that the
+domain is finished" was wrong and has been removed.
+
+*Rejected:* keeping `KNOWLEDGE_GAPS` as a content dimension because it was
+convenient; and keeping the two shortcut names to avoid a migration.
+
+---
+
+## D18 — `CASE_VERSION = 0` is the knowledge-clock value
+**SETTLED**
+
+The control contract requires `CASE_VERSION` on every run, but Engine 7
+foundation, update and inbox runs have no case. The contract previously
+declared `minimum: 1`, so **every knowledge-clock run would have failed
+validation and dead-lettered** — the entire knowledge clock was unrunnable
+through `RUN_ENGINE`.
+
+Resolved as `minimum: 0`, with 0 reserved and documented as "not attached
+to a client case". Four properties are asserted by test:
+
+- `client_case_versions.case_version >= 1`, so 0 can never denote a stored
+  case version
+- `ck_run_clock_coherent` on `engine_runs` rejects a row carrying a case
+  version or cycle without a client
+- `v_engine_run_clock` reports `KNOWLEDGE` vs `CASE`, returning
+  `case_version` **NULL** for knowledge runs — never 0, because 0 is a wire
+  value and not a stored version
+- the prompt instructs 0 on knowledge-clock runs and rejects it on case runs
+
+*Rejected:* echoing `1` on knowledge runs. It asserts a case version that
+does not exist and makes the run indistinguishable from a case run.
+
+---
+
+## D19 — Source kinds are a registry, not an enum
+**SETTLED**
+
+Engine 7 §47, §48 and §85 require that **a new source tomorrow is a data
+operation, not a software-development event**, and forbid depending on the
+coder having known a source type existed at build time.
+
+`source_kinds` is therefore a reference table with 22 seeded rows. Adding
+`SUBSTACK_POST` is an `INSERT`. `OTHER` is protected by trigger from
+deletion and deactivation, because §48 makes it the landing state for
+previously unseen kinds.
+
+Enums are still used where the value set is genuinely stable and
+safety-bearing: `rights_context`, `delta_classification`,
+`envelope_status`, `drug_claim_support`.
+
+*Rejected:* a `source_kind` enum. Correct-looking, and it would have made
+every new source type a migration — precisely the outcome the
+specification names as the failure.
+
+---
+
+## D20 — `006` is schema only
+**SETTLED**
+
+`006_knowledge_inbox.sql` adds the structural foundation for the Knowledge
+Inbox, source envelope, rights context, delta analysis, reprocessing,
+source→derived provenance and medication-context knowledge.
+
+It deliberately builds **no UI, no ingestion pipeline and no acquisition
+adapters**, and does not touch K1–K11. Same rationale as `005`: cheap now,
+expensive as a retrofit once E7 ingestion is wired.
+
+Two rules are enforced structurally rather than requested:
+`ck_raw_before_derived` blocks an envelope reaching an extracted state
+without its raw source preserved (§50), and `v_client_safe_sources` is the
+single path that filters purchased and private material out of anything
+client-facing (§52) — nothing else may assume that filtering.
+
+---
+
+## D21 — Provenance integrity without typed foreign keys
+**SETTLED**
+
+`envelope_derived_records` originally held `derived_id` as a bare UUID with
+no target, to avoid one foreign key per derived kind. That preserved
+extensibility and broke the guarantee the table exists for: an edge could
+name a claim that did not exist, and Postgres accepted it.
+
+Resolved with `knowledge_entities` — a registry every derived object joins
+automatically by trigger, across all nine kinds today. The provenance edge
+carries a **composite** foreign key on `(derived_id, derived_kind)`, so an
+edge can neither point at a nonexistent object nor mislabel a real one's
+kind. Deleting the object deregisters the entity and cascades the edge away.
+
+Extensibility survives intact: **a new derived kind adds an enum value and a
+registration trigger, not a foreign key here.** That is the same principle
+as `source_kinds` in D19 — the integrity mechanism is generic, so growth
+stays a data operation.
+
+*Rejected:* nine typed foreign keys, which would have made every new
+derived kind a schema change to the provenance table.
+
+---
+
 ## OPEN
 
 **O1 — Intake form.** The largest unstarted piece on the case track, and it

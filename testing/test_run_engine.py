@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import pathlib
 import sys
 from pathlib import Path
 
@@ -45,16 +46,38 @@ def main() -> int:
 
     print("\nprompt discipline")
     RE._prompt_cache.clear()
-    RE.PROMPTS_DIR = REPO / "prompts"
-    try:
-        RE.load_prompt("E1")
-        check("missing canonical prompt raises rather than stubbing", False,
-              "load_prompt returned instead of raising")
-    except RE.PromptMissing as exc:
-        check("missing canonical prompt raises rather than stubbing",
-              "will not fall back to a stub" in str(exc))
+    # Point at a directory with no prompt files. Asserting that prompts/ is
+    # empty would break the moment the canonical prompts land — the
+    # behaviour under test is the refusal to stub, not the absence.
+    import tempfile
+    with tempfile.TemporaryDirectory() as empty:
+        RE.PROMPTS_DIR = pathlib.Path(empty)
+        try:
+            RE.load_prompt("E1")
+            check("missing canonical prompt raises rather than stubbing", False,
+                  "load_prompt returned instead of raising")
+        except RE.PromptMissing as exc:
+            check("missing canonical prompt raises rather than stubbing",
+                  "will not fall back to a stub" in str(exc))
     RE.PROMPTS_DIR = FIXTURE_PROMPTS
     RE._prompt_cache.clear()
+
+    # The real prompts must also load and hash, now that they exist.
+    real = REPO / "prompts"
+    if (real / "engine1_prevention.md").exists():
+        RE.PROMPTS_DIR = real
+        RE._prompt_cache.clear()
+        hashes = {}
+        for e in ["E1", "E2", "E3", "E4", "E5", "E6", "E7"]:
+            fn, content, digest = RE.load_prompt(e)
+            hashes[e] = digest
+            if "<CONTROL_BLOCK>" not in content:
+                check(f"{e} prompt specifies the control block tag", False, fn)
+        check("all seven canonical prompts load and hash",
+              len(set(hashes.values())) == 7, str(len(hashes)))
+        check("every canonical prompt specifies the control block tag", True)
+        RE.PROMPTS_DIR = FIXTURE_PROMPTS
+        RE._prompt_cache.clear()
 
     fname, content, digest = RE.load_prompt("E1")
     check("prompt hashed for provenance",

@@ -92,10 +92,14 @@ def main() -> int:
         "ck_domain_key",
     )
 
-    # 19 coverage dimensions, 15 covered -> should meet the depth bar.
+    # 18 coverage dimensions - one per question recovered from Engine 7
+    # section 35. Gap assessment is governance and lives in
+    # domain_gap_assessments, not here. 15 covered -> meets the depth bar.
     dims = [r[0] for r in conn.execute(
         "select unnest(enum_range(null::coverage_dimension))::text")]
-    check("19 coverage dimensions defined", len(dims) == 19, f"got {len(dims)}")
+    check("18 coverage dimensions defined", len(dims) == 18, f"got {len(dims)}")
+    check("gap assessment is not a coverage dimension",
+          not any("GAP" in d for d in dims), str([d for d in dims if "GAP" in d]))
     for i, d in enumerate(dims):
         conn.execute(
             "insert into domain_coverage (domain_id, dimension, covered) values (%s,%s,%s)",
@@ -106,7 +110,15 @@ def main() -> int:
         (dom,),
     ).fetchone()
     check("readiness computed from coverage rows", row[0] == 15 and row[1] is True, str(row))
-    check("missing dimensions reported as gaps", len(row[2]) == 4, str(row[2]))
+    check("uncovered dimensions reported", len(row[2]) == 3, str(row[2]))
+
+    # Coverage alone is not readiness: a gap pass must have been run.
+    row = conn.execute(
+        "select gap_assessment_complete, foundation_ready from v_domain_readiness where domain_id=%s",
+        (dom,),
+    ).fetchone()
+    check("coverage without a gap assessment is not FOUNDATION_READY",
+          row[0] is False and row[1] is False, str(row))
 
     print("\nprovenance is database-enforced")
     expect_error(

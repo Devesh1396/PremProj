@@ -26,12 +26,13 @@ finished it must keep working on n8n + PostgreSQL + an LLM API alone.
 
 | File | When |
 |---|---|
-| `docs/DECISIONS.md` | **Before proposing any structural change.** 15 settled decisions with rationale and rejected alternatives. |
+| `docs/DECISIONS.md` | **Before proposing any structural change.** 21 settled decisions with rationale and rejected alternatives. |
 | `docs/MASTER_SPEC.md` | The 40-phase build specification plus amendments. |
 | `BUILD_PLAN.md` | Milestones, dependencies, acceptance criteria. |
 | `PROGRESS.md` | What actually works, tests passed, bugs fixed, next exact task. |
 | `docs/OPERATIONS.md` | VPS deployment, roles, backup, restore. |
 | `prompts/*.md` | The seven engine specifications. Authoritative domain logic. |
+| `knowledge/seed/foundation_domains.md` | Engine 7's A–Z foundation curriculum, verbatim. Load for K1 seeding, domain mapping and foundation research — not on CASE, INBOX or routine UPDATE runs. |
 
 Several constraints in this repo look like overhead if you don't know what
 they protect against. `DECISIONS.md` explains each one. **If a decision
@@ -67,6 +68,12 @@ E6 → E1 Pass A → normalization → E7 → E1 Pass B → E2 → E3
 ### 1. Engine prompts are authoritative
 Never shorten, summarise, rewrite or "optimise" a file in `prompts/`.
 They are master reasoning specifications. Technical formatting fixes only.
+
+Engine 7 is a **four-layer merge** — Addendum A, Part I §1–§87 (the client's
+text, verbatim), Parts II/III §R1–§R9 (retained original operating detail),
+and §88. It is not redundant. See `DECISIONS.md` D16 before consolidating
+anything: the client's revision carries no handoff XML tags, so §R8/§R9 are
+what let output reach Engines 1–4 at all.
 
 **Prompt length is not output length.** A 5,000-word specification
 describes how an engine reasons; it is not a template for a 50-page report.
@@ -104,6 +111,12 @@ Routing reads typed fields from
 `schemas/orchestration/control_contract.v1.json`. Roughly 17 strict fields.
 The remaining handoff content stays prose for now, by decision.
 
+**Exactly one control-block specification per prompt file.** A second one is
+a merge accident, not a variant — it happened once already. `CASE_VERSION`
+is required on every run: echo the real version on case runs, emit **0** on
+Engine 7 knowledge-clock runs (FOUNDATION / UPDATE / INBOX). Stored case
+versions always start at 1, so 0 can never denote a real case.
+
 ### 6. Practice experience is never evidence
 `practice_strategy_outcomes` has no foreign key to `evidence_records` and
 no view joins them. Do not add one. De-identified aggregates only, minimum
@@ -135,6 +148,29 @@ checksum. Add a new one.
 
 `norm_phrase()` backs STORED generated columns; changing it requires a
 migration that also rewrites those columns and rebuilds their indexes.
+
+### 11. Readiness is not completion
+`coverage_dimension` holds exactly the **18** questions recovered from
+Engine 7 §35 — no build-invented dimensions. Gap assessment is governance,
+tracked in `domain_gap_assessments`, not a coverage dimension.
+
+`foundation_ready` needs coverage **+** a gap assessment performed **+** no
+open CRITICAL gap. It never requires zero gaps, and zero identified gaps
+never means finished. There is no `COMPLETE` status anywhere and §70 forbids
+adding one.
+
+### 12. Provenance edges cannot dangle
+Every derived knowledge object registers in `knowledge_entities` by trigger.
+`envelope_derived_records` foreign-keys `(derived_id, derived_kind)` to it.
+A new derived kind adds an enum value and a registration trigger — never a
+new foreign key on the provenance table.
+
+### 13. A new source type is data, not code
+`source_kinds` is a registry table. Adding a source kind is an `INSERT`, not
+a migration and not an enum edit. `OTHER` is protected and always available
+as the landing state for unseen kinds. Never hard-code a creator or a
+source type into ingestion logic (Engine 7 §47); route on format, content
+type, source role and access level.
 
 ---
 
@@ -178,13 +214,13 @@ Database is in India; model inference is not. Engine payloads carry
 
 ## State as of this writing
 
-**Complete and verified** — M0 foundations, M1 schema (5 migrations),
-M2 engine execution layer.
+**Complete and verified** — M0 foundations, M1 schema (8 migrations),
+M2 engine execution layer, and all seven canonical prompts installed.
 
-61 tables, 12 views, 42 enums, 156 indexes, 32 check constraints,
-15 triggers, 26 RLS tables, 52 policies. Five test suites, all passing
-from an empty database, idempotent, verified on a build with **no pg_trgm
-and no btree_gin**.
+70 tables, 15 views, 48 enums, 183 indexes, 44 check constraints,
+38 triggers, 26 RLS tables, 52 policies. **Seven test suites**, all passing
+from an empty database three consecutive times, idempotent, and verified on
+a build with **no pg_trgm and no btree_gin**.
 
 Working end to end with the fixture provider:
 ```
@@ -192,13 +228,12 @@ E6 init → case v1 → E1 Pass A → research questions
         → E7 → E1 Pass B → both passes, one prompt hash
 ```
 
-**Blocked pending input:** the seven canonical prompt files, and
-`LLM_API_KEY`. Everything around both is built and tested.
+**Blocked pending input:** `LLM_API_KEY` and provider base URL. Nothing
+else. The seven prompts are installed and hashed.
 
 **Next:** C3 normalization layer (case track) and K1 ontology seed
-(knowledge track), in parallel. See `BUILD_PLAN.md`.
-
----
+(knowledge track), in parallel. K1 reads
+`knowledge/seed/foundation_domains.md`. See `BUILD_PLAN.md`.
 
 ## Do NOT build
 
@@ -206,9 +241,11 @@ Chat UI. Chat intent router. RHT scoring engine. WhatsApp integration.
 General-chat interface. Learning dashboards. Client portal. Mobile app.
 Billing. Multi-tenant anything.
 
-Schema hooks for chat, assessments and case events exist in migration 005
-**so these can be added later without a rewrite**. That is not permission
-to build them now.
+Schema hooks for chat, assessments and case events exist in migration 005,
+and for the Knowledge Inbox, source envelope, delta analysis and medication
+knowledge in migration 006, **so these can be added later without a
+rewrite**. That is not permission to build them now. `006` is schema only:
+no inbox UI, no ingestion pipeline, no acquisition adapters.
 
 ---
 
