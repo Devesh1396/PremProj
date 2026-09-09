@@ -15,7 +15,7 @@ import json
 import os
 import sys
 
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
 import psycopg
 
@@ -40,19 +40,96 @@ def expect_error(conn, sql, params, name, fragment):
 
 
 
-def _with_user(dsn: str, user: str) -> str:
-    """Return dsn with its username replaced, preserving everything else."""
+def _role_password(env_var: str) -> str | None:
+    """The role's own password, or None where the server does not want one.
+
+    Roles are created without a password by migration 005; docs/OPERATIONS.md
+    step 5 sets them with ALTER ROLE afterwards, on the VPS and locally
+    alike. So the password does not live in DATABASE_URL and has to come
+    from the environment. None is returned when it is unset, which keeps
+    trust/peer development setups working.
+    """
+    value = os.environ.get(env_var, "").strip()
+    return value or None
+
+
+def _with_user(dsn: str, user: str, password: str | None = None) -> str:
+    """Return dsn with its credentials replaced, preserving everything else.
+
+    The admin password MUST be dropped rather than carried over: it does not
+    authenticate this role, and silently reusing it would either fail
+    confusingly or, worse, succeed and mean the connection is not the role
+    the test thinks it is.
+    """
     parts = urlsplit(dsn)
     if parts.scheme:  # URL form
         host = parts.hostname or ""
-        netloc = f"{user}@{host}" + (f":{parts.port}" if parts.port else "")
+        # Percent-encode: a generated password may contain @ : / or #, any
+        # of which re-parses the DSN into a different host or database.
+        credentials = quote(user, safe="")
+        if password is not None:
+            credentials += f":{quote(password, safe='')}"
+        netloc = f"{credentials}@{host}" + (f":{parts.port}" if parts.port else "")
         return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
-    # keyword/value form: drop any existing user= and append ours
-    kv = [t for t in dsn.split() if not t.startswith("user=")]
-    return " ".join(kv + [f"user={user}"])
+    # keyword/value form: drop any existing user=/password= and append ours
+    kv = [t for t in dsn.split() if not t.startswith(("user=", "password="))]
+    kv.append(f"user={user}")
+    if password is not None:
+        kv.append(f"password={password}")
+    return " ".join(kv)
+
+
+def check_dsn_rewriting() -> None:
+    """_with_user decides which ROLE the isolation tests run as.
+
+    Get it wrong and every assertion below still passes -- as the wrong
+    role, against a superuser that RLS does not bind. So it is asserted
+    directly rather than trusted.
+    """
+    print("\ndsn rewriting")
+    url = _with_user("postgresql://phi_admin:adminpw@db.internal:5432/phi",
+                     "phi_runtime", "runtimepw")
+    check("URL form takes the role's own credentials",
+          url == "postgresql://phi_runtime:runtimepw@db.internal:5432/phi", url)
+    check("URL form does not carry the admin password over",
+          "adminpw" not in url, url)
+    check("URL form keeps host, port and database",
+          urlsplit(url).hostname == "db.internal"
+          and urlsplit(url).port == 5432
+          and urlsplit(url).path == "/phi", url)
+
+    no_port = _with_user("postgresql://phi_admin:adminpw@db.internal/phi",
+                         "phi_runtime", "runtimepw")
+    check("URL form without a port stays without one",
+          no_port == "postgresql://phi_runtime:runtimepw@db.internal/phi", no_port)
+
+    # A generated password (openssl rand) can contain @ : / #. Unescaped,
+    # "pa@ss" turns the host into "ss" and the connection goes somewhere else
+    # entirely -- or fails in a way that looks like a server problem.
+    escaped = _with_user("postgresql://phi_admin@db.internal:5432/phi",
+                         "phi_runtime", "p@ss:w/rd#1")
+    # urlsplit does not decode, so the raw component must be the escaped
+    # form and only unquoting it may give the password back. libpq
+    # percent-decodes URI components, which is why encoding is the fix.
+    check("special characters in a password are percent-encoded",
+          urlsplit(escaped).hostname == "db.internal"
+          and urlsplit(escaped).password == "p%40ss%3Aw%2Frd%231"
+          and unquote(urlsplit(escaped).password) == "p@ss:w/rd#1", escaped)
+
+    kv = _with_user("host=db.internal port=5432 dbname=phi user=phi_admin "
+                    "password=adminpw", "phi_runtime", "runtimepw")
+    check("keyword/value form replaces user and password",
+          " user=phi_runtime" in kv and " password=runtimepw" in kv
+          and "phi_admin" not in kv and "adminpw" not in kv, kv)
+
+    trust = _with_user("postgresql://phi_admin@db.internal/phi", "phi_runtime")
+    check("no password given emits no password (trust/peer setups)",
+          trust == "postgresql://phi_runtime@db.internal/phi", trust)
 
 
 def main() -> int:
+    check_dsn_rewriting()
+
     admin_dsn = os.environ["DATABASE_URL"]
     admin = psycopg.connect(admin_dsn, autocommit=True)
 
@@ -64,10 +141,23 @@ def main() -> int:
     # that the admin DSN says "postgres" is wrong on a real deployment, and
     # appending "&user=" to a DSN with no query string produces a DSN whose
     # database name is literally "phi&user=phi_runtime".
-    runtime_dsn = _with_user(admin_dsn, "phi_runtime")
+    runtime_dsn = _with_user(admin_dsn, "phi_runtime",
+                             _role_password("POSTGRES_RUNTIME_PASSWORD"))
     runtime = psycopg.connect(runtime_dsn)
 
     print("\nrole configuration")
+    # Assert the identity of the connection, not just the properties of the
+    # role in pg_roles. Every isolation assertion below is meaningless if
+    # this connection is not actually phi_runtime.
+    #
+    # Inside an explicit transaction block deliberately: this connection is
+    # NOT autocommit, so a bare execute() would open a transaction and leave
+    # it open, turning every later `with runtime.transaction()` into a
+    # savepoint instead of a top-level transaction -- and transaction-local
+    # client scope would then leak between them.
+    with runtime.transaction():
+        check("runtime connection is authenticated as phi_runtime",
+              runtime.execute("select current_user").fetchone()[0] == "phi_runtime")
     row = admin.execute(
         "select rolsuper, rolbypassrls from pg_roles where rolname='phi_runtime'"
     ).fetchone()
@@ -148,8 +238,12 @@ def main() -> int:
                   "row-level security" in str(exc).lower(), str(exc)[:90])
 
     print("\npractitioner cross-client read path")
-    prac_dsn = _with_user(admin_dsn, "phi_practitioner")
+    prac_dsn = _with_user(admin_dsn, "phi_practitioner",
+                          _role_password("POSTGRES_PRACTITIONER_PASSWORD"))
     prac = psycopg.connect(prac_dsn)
+    with prac.transaction():
+        check("practitioner connection is authenticated as phi_practitioner",
+              prac.execute("select current_user").fetchone()[0] == "phi_practitioner")
     with prac.transaction():
         seen = {r[0] for r in prac.execute("select marker from client_labs")}
     check("practitioner role sees across clients (the deliberate path)",
