@@ -222,12 +222,18 @@ def print_report(conn, cycle_id: str, mode: str, context: dict) -> int:
     # where the second pass never happened is incomplete, and reporting that
     # as a fork sends the reader hunting an architectural violation that is
     # not there. Say which one it is.
+    # ok_two_pass gates the exit code and must be set on every branch:
+    # only a complete, unforked pair is a pass. INCOMPLETE is not a fork,
+    # but it is not a success either.
     if len(e1) < 2:
+        ok_two_pass = False
         verdict = (f"INCOMPLETE — {len(e1)} of 2 passes ran; "
                    "no fork is implied by this run")
     elif len(hashes) == 1 and len(files) == 1:
+        ok_two_pass = True
         verdict = "YES"
     else:
+        ok_two_pass = False
         verdict = "NO — FORK DETECTED"
     print(f"  one specification : {verdict}")
 
