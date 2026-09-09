@@ -152,7 +152,7 @@ uniqueness across all seven prompts and the seed file's content hash.
 
 ---
 
-## Step 10b — Wire the provider and measure Engine 1 *(built; awaiting the key)*
+## Step 10b — Wire the provider and measure Engine 1 *(DONE — measured live)*
 
 Everything that does not need credentials is done and proven on the fixture
 provider. What remains is setting `LLM_API_KEY` and `LLM_BASE_URL`;
@@ -329,8 +329,8 @@ a backup.
 9b    done: 006 knowledge inbox schema
 9c    done: 007 coverage dimensions, gap governance, provenance registry
 10    done: seven canonical prompts + foundation domain seed
-10b   built: synthetic client, measurement runner, 008. Live run
-      needs LLM_API_KEY + LLM_BASE_URL
+10b   DONE: measured live. 19/19 parts both passes, no degradation,
+      $0.386/cycle. D5 stands — do not stage Engine 1.
 11    n8n RUN_ENGINE subworkflow
 12/13 K1 ontology seed  ||  C3 normalization layer
 14    intake form V1                     <- gates the case track

@@ -336,6 +336,20 @@ by a test rather than assumed.
     script**, so only the CI step caught it — the first thing CI found that
     a local run could not. The suite now exercises `print_report`'s exit
     code directly, on a complete cycle and on one missing Pass B.
+34. **Reasoning tokens were generated, billed, and invisible.** The live
+    provider returns `prompt_tokens` 8, `completion_tokens` 1,
+    `total_tokens` 75 — 66 tokens produced and charged that
+    `completion_tokens` never reports. Recording `completion_tokens` as
+    output would have understated the measured cycle by most of its cost,
+    and D5 is a decision made on those numbers. Output is now
+    `max(completion_tokens, total − prompt)`.
+35. **`message.content` is absent, not empty, when the budget goes to
+    reasoning.** `finish_reason: "length"` arrives with no `content` key at
+    all; `payload["choices"][0]["message"]["content"]` raised `KeyError`,
+    which RUN_ENGINE classified as a transport failure — a misleading
+    diagnosis for a response that arrived intact. Now returns the empty
+    string and fails honestly at control-block extraction. Both shapes are
+    recorded from live responses and asserted in `test_run_engine.py`.
 33. **An incomplete cycle was reported as a fork.** A run where Pass B never
     happened is not evidence of two Engine 1 specifications; calling it
     `NO — FORK DETECTED` sends the reader hunting an architectural
@@ -380,6 +394,50 @@ that cannot be traced to a specification is worse than no output.
 - Routing loop bound per cycle (`ck_loop_bound`)
 - Malformed engine output never reaches `engine_outputs`; it dead-letters
   with the raw payload retained
+
+## D5 ANSWERED — Engine 1 measured on a live provider
+
+Ran `scripts/measure_engine1.py` against gemini-3.8-flash on the synthetic
+client. **Real token counts, not estimates.**
+
+```
+engine pass   status      att retry   prompt   compl   total         cost       ms  parsed
+E6     SINGLE SUCCEEDED     1     0   18,909  12,580  31,489    $0.061357   41,254   yes
+E1     A      SUCCEEDED     1     0   20,869  32,687  53,556    $0.138228  116,621   yes
+E7     SINGLE SUCCEEDED     1     0   20,558   8,885  29,443    $0.048737   33,842   yes
+E1     B      SUCCEEDED     1     0   20,922  32,529  53,451    $0.137675  114,747   yes
+CYCLE                       4     0   81,258  86,681 167,939    $0.385997  306,464
+```
+
+Both passes on one prompt hash `33d857c2dd6f`, one prompt file. Control
+block parsed on all four calls. Zero retries, zero dead letters. 5m07s.
+
+**Engine 1 does not degrade across the 19-part report.** Both passes
+produced every part of §62:
+
+| | chars | parts | first half | second half | ratio |
+|---|---|---|---|---|---|
+| Pass A | 116,661 | 19/19 | 56,306 | 60,119 | **1.07** |
+| Pass B | 116,436 | 19/19 | 58,795 | 57,358 | **0.98** |
+
+The back half carries as much as the front; PART 19 is among the largest
+sections in both. The smallest section is PART 15 at ~2,000 chars, which is
+proportionate to what it asks for, not truncation. The control block sits
+*after* the report and parsed, so the model reached the end of the sequence
+in both passes.
+
+**D5 stands: do not stage Engine 1.** The proposal to split it was
+withdrawn on principle and is now refused on evidence. Revisit only if a
+different model degrades — the measurement is one command.
+
+**Cost per client.** ~$0.39 for these 4 calls, so a full 8-call new-client
+cycle lands near **$0.75–0.80** on this model. That replaces the earlier
+prompt-side-only estimate, which omitted output entirely.
+
+**Free tier is not viable.** `GenerateRequestsPerDayPerProjectPerModel-FreeTier`
+is 20 requests/day: about two clients, and Step 16's Knowledge Factory is
+high-volume extraction by design. Billing is a prerequisite, not an
+optimisation.
 
 ## Working end to end today
 On the synthetic vegetarian PCOS + MASLD + prediabetes client, with the
