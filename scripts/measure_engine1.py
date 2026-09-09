@@ -217,8 +217,19 @@ def print_report(conn, cycle_id: str, mode: str, context: dict) -> int:
     print(f"  passes run        : {sorted(str(r['pass']) for r in e1)}")
     print(f"  prompt file(s)    : {sorted(files)}")
     print(f"  prompt hash(es)   : {sorted(hashes)}")
-    ok_two_pass = len(hashes) == 1 and len(files) == 1 and len(e1) == 2
-    print(f"  one specification : {'YES' if ok_two_pass else 'NO — FORK DETECTED'}")
+    # Three outcomes, not two. A fork is two passes carrying DIFFERENT
+    # hashes -- the thing D4 and trg_enforce_two_pass exist to catch. A run
+    # where the second pass never happened is incomplete, and reporting that
+    # as a fork sends the reader hunting an architectural violation that is
+    # not there. Say which one it is.
+    if len(e1) < 2:
+        verdict = (f"INCOMPLETE — {len(e1)} of 2 passes ran; "
+                   "no fork is implied by this run")
+    elif len(hashes) == 1 and len(files) == 1:
+        verdict = "YES"
+    else:
+        verdict = "NO — FORK DETECTED"
+    print(f"  one specification : {verdict}")
 
     parsed_all = all(r["control_block_parsed"] for r in rows)
     print()

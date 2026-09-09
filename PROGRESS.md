@@ -469,11 +469,76 @@ access context (§52), and reprocessing/versioning (§56).
 Sonnet 5 $0.137 uncached / $0.014 cached. Caching matters: E1 and E6 each
 load twice per cycle.
 
+## Live measurement attempt — 2026-09-09 `BLOCKED (provider quota)`
+
+First run of `scripts/measure_engine1.py` against a real provider
+(OpenAI-compatible Gemini endpoint). **The measurement did not complete.**
+Engine 1 Pass A never returned, so D5 is still open: there is no live
+Engine 1 call size on record and nothing here should be quoted as one.
+
+What the provider actually returned, live, on the synthetic client:
+
+| call | model | prompt | completion | latency | cost |
+|---|---|---|---|---|---|
+| E6 | gemini-3.8-flash | 18,912 | 11,132 | 38.5 s | $0.055929 |
+| E6 | gemini-3.7-flash | 18,911 | 10,254 | 35.2 s | unpriced |
+| E1 prompt alone, no payload | gemini-3.8-flash | 12,136 | — | 2.4 s | — |
+
+E6 is a real measurement and is close to E1 in prompt size (39,903 vs
+49,144 chars), so the order of magnitude for an engine call is now known:
+**~19k prompt tokens, ~10k completion, ~35 s**. That is a bound, not the
+D5 number.
+
+**Why it is blocked.** The key is on the Gemini **free tier**: 20 requests
+per day per project per model
+(`GenerateRequestsPerDayPerProjectPerModel-FreeTier`). Large requests are
+also refused during demand spikes with a 503 — *"This model is currently
+experiencing high demand"* — which is provider capacity, not payload size:
+a 40 KB request succeeded in 4 s minutes earlier, and the full Engine 1
+prompt alone returned fine. A 14.5-minute run with a 12-attempt backoff
+budget still could not land Pass A, on either `gemini-3.8-flash` or
+`gemini-3.7-flash`. Completing this needs a billed key, or a quiet quota
+window; nothing in the repo is at fault.
+
+Also observed, and correct: `gemini-3.7-flash` has no rate in
+`config/model_prices.json`, so its cost reported `unpriced` rather than 0.
+`ck_cost_priced` did its job.
+
+### Fixed while running it
+- **`run_engine.py` had no backoff and one shared attempt budget.** A
+  transport failure fell through the same `MAX_ATTEMPTS` loop as an invalid
+  control block and retried instantly, so three attempts burned in ~26 s
+  and a live run died on a transient that seconds of waiting would clear.
+  Transport failures now have their own budget
+  (`LLM_TRANSPORT_MAX_ATTEMPTS`, default 6) with capped, jittered
+  exponential backoff and `Retry-After` honoured, and they no longer
+  consume the repair retries that exist for schema violations. Retryable is
+  an explicit status set; a 400 or 401 is never retried, because a retry
+  loop that fires on unknown errors is how a bad request becomes a bill.
+  Every **physical** attempt is still costed in `cost_events` — a retry
+  invisible in the cost table understates what a call costs.
+- **A provider failure was dead-lettered as `SCHEMA_INVALID`.** A 503 is
+  not a malformed control block. It now records `PROVIDER_ERROR`.
+- **`measure_engine1.py` reported a one-pass run as `FORK DETECTED`.** A
+  fork is two passes with different hashes, which is what D4 and
+  `trg_enforce_two_pass` exist to catch. A run where Pass B never happened
+  is incomplete, and calling it a fork sends the reader hunting an
+  architectural violation that is not there. It now says `INCOMPLETE`.
+
+Seven new checks in `testing/test_run_engine.py` cover the retry split:
+a transient is waited out, a transient does not spend a repair attempt, a
+400 is never retried, transport retries stay bounded, a provider failure is
+not recorded as a schema violation, and every failed physical attempt is
+costed.
+
 ## Awaiting input
-`LLM_API_KEY` and provider base URL, plus the provider's published rates
-for `config/model_prices.json` and the five `MODEL_*` role assignments.
-Everything around the integration is built and tested against the fixture
-provider, including the synthetic client and the measurement runner.
+`LLM_API_KEY` and the base URL are now **supplied and working** — the live
+provider path is proven end to end, and E6 has completed against it. What
+is still needed to finish D5 is a key **with quota for more than a handful
+of large calls**: the free tier allows 20 requests per day per model and
+sheds large requests during demand spikes, which is what stopped the run
+above. `MODEL_ANALYSIS` and `MODEL_RESEARCH` are set; the other three roles
+are still unassigned and are needed as their engines come online.
 
 Until a rate is configured the cost column reports `unpriced`, not zero.
 
