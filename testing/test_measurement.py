@@ -228,6 +228,9 @@ def main() -> int:
     check("the fixture provider is unpriced, so cost is NULL not 0",
           all(r["cost_usd"] is None and r["has_unpriced_attempt"] for r in rows),
           str([r["cost_usd"] for r in rows]))
+    check("a fixture run records a fixture: model name",
+          all(str(r["model_name"]).startswith("fixture:") for r in rows),
+          str([r["model_name"] for r in rows]))
 
     # The reason migration 008 exists.
     e1 = [r for r in rows if r["engine"] == "E1"]
@@ -258,6 +261,64 @@ def main() -> int:
     check("engine_runs carries its own token and latency totals",
           run_totals[0] > 0 and run_totals[1] > 0 and run_totals[2] is not None,
           str(run_totals))
+
+    # ------------------------------------------------------------------
+    # The regression this exists for: configure a real, PRICED model but
+    # leave the key unset. The run uses the fixture provider, whose token
+    # counts are character estimates -- and if it were recorded under the
+    # real model name the registry would match and the cycle would report a
+    # dollar figure for calls that never left the machine, printed directly
+    # under the banner saying the counts are estimates.
+    print("\nmeasurement: estimated tokens are never costed as money")
+    saved_role = os.environ.get("MODEL_ANALYSIS", "")
+    priced_model = "claude-sonnet-5"
+    assert pricing.price_call(priced_model, 1000, 1000)[1] == pricing.PRICE_REGISTRY
+    os.environ["MODEL_ANALYSIS"] = priced_model
+    try:
+        priced_run = RE.run_engine(conn, RE.EngineRequest(
+            engine="E4", structured_input={"CASE_VERSION": 1},
+            client_id=context["client_id"], cycle_id=context["cycle_id"]))
+    finally:
+        os.environ["MODEL_ANALYSIS"] = saved_role
+        if not saved_role:
+            del os.environ["MODEL_ANALYSIS"]
+
+    row = conn.execute(
+        """select model_name, cost_usd, has_unpriced_attempt, prompt_tokens
+             from v_engine_call_measurement where run_id=%s""",
+        (priced_run.run_id,)).fetchone()
+    check("a priced model configured with no key still runs on the fixture",
+          priced_run.status == "SUCCEEDED" and (row[3] or 0) > 0, str(row))
+    check("...and is recorded under fixture:<model>, not the model itself",
+          row[0] == f"fixture:{priced_model}", str(row[0]))
+    check("...so estimated tokens produce NO cost, not a plausible one",
+          row[1] is None and row[2] is True, str(row))
+
+    print("\nan unset model role fails loudly on a live run")
+    saved_key = os.environ.get("LLM_API_KEY", "")
+    saved_role = os.environ.get("MODEL_ANALYSIS", "")
+    os.environ["LLM_API_KEY"] = "sk-not-a-real-key"
+    os.environ["MODEL_ANALYSIS"] = ""
+    try:
+        RE.run_engine(conn, RE.EngineRequest(
+            engine="E5", structured_input={"CASE_VERSION": 1},
+            client_id=context["client_id"], cycle_id=context["cycle_id"]))
+        check("live run with no model configured raises", False, "no exception")
+    except RE.ModelRoleUnset as exc:
+        # Without this the empty role fell through to the fixture
+        # placeholder and "fixture:live" was sent to the provider AS the
+        # model id, so the real error arrived as an opaque 400.
+        check("live run with no model configured raises", "MODEL_ANALYSIS" in str(exc),
+              str(exc)[:100])
+    except Exception as exc:
+        check("live run with no model configured raises", False,
+              f"wrong exception: {type(exc).__name__}: {exc}")
+    finally:
+        os.environ["LLM_API_KEY"] = saved_key
+        os.environ["MODEL_ANALYSIS"] = saved_role
+        for var, val in (("LLM_API_KEY", saved_key), ("MODEL_ANALYSIS", saved_role)):
+            if not val:
+                del os.environ[var]
 
     # ------------------------------------------------------------------
     print("\nmeasurement: a repair retry is counted as the second call it was")

@@ -63,6 +63,16 @@ class PromptMissing(RuntimeError):
     """
 
 
+class ModelRoleUnset(RuntimeError):
+    """Raised when a live run has no model configured for its role.
+
+    Without this the empty role fell through to the fixture placeholder and
+    that placeholder was sent to the provider as the model id, so a missing
+    MODEL_ANALYSIS surfaced as an opaque 400 from the API rather than as the
+    configuration error it is.
+    """
+
+
 @dataclass
 class EngineRequest:
     engine: str
@@ -261,7 +271,29 @@ def select_provider() -> tuple[Provider, str]:
 def run_engine(conn: psycopg.Connection, req: EngineRequest) -> EngineResult:
     prompt_file, prompt_content, prompt_hash = load_prompt(req.engine)
     provider, mode = select_provider()
-    model_name = os.environ.get(req.model_role, "") or f"fixture:{mode}"
+    # A fixture run is recorded under a `fixture:` model name even when a
+    # real model is configured, and that prefix is load-bearing rather than
+    # cosmetic.
+    #
+    # The fixture provider's token counts are character estimates. Recording
+    # them under the real model name means the price registry matches, and
+    # the run is costed -- so a cycle that never left this machine reports a
+    # dollar figure, printed directly beneath the banner saying the counts
+    # are estimates. Prefixing means no registry entry matches, the call is
+    # UNPRICED, and cost stays NULL. It also keeps UNPRICED's meaning
+    # exactly what migration 008 documents: no rate configured for THIS
+    # model name.
+    configured = os.environ.get(req.model_role, "").strip()
+    if mode == "live":
+        if not configured:
+            raise ModelRoleUnset(
+                f"{req.model_role} is not set, but LLM_API_KEY is. A live run "
+                f"needs a model for its role. Set {req.model_role} in .env, or "
+                "clear LLM_API_KEY to use the fixture provider."
+            )
+        model_name = configured
+    else:
+        model_name = f"fixture:{configured or mode}"
 
     run_id = str(uuid.uuid4())
     conn.execute(
