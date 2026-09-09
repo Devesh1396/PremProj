@@ -5,6 +5,10 @@ Deployment, security, backup and restore.
 **Environment:** Hostinger VPS, India. 2 vCPU, 8 GB RAM, 100 GB disk.
 n8n already running in Docker. PostgreSQL added alongside it.
 
+This document describes the **deployment**. For a throwaway local database
+to develop and run the test suites against, see `docs/LOCAL_DEV.md`; it
+uses a separate compose file and changes nothing here.
+
 ---
 
 ## Deployment

@@ -1,0 +1,85 @@
+# LOCAL DEVELOPMENT AND TEST DATABASE — throwaway.
+#
+# This file is NOT the deployment. `docker-compose.yml` is, and it stays
+# exactly as documented in docs/OPERATIONS.md: it joins n8n's existing
+# external network and publishes no port. Neither of those is workable on a
+# development laptop, where there is no n8n network and the test suites run
+# on the host rather than inside a container.
+#
+# So this is a SEPARATE stack, not an override of that one:
+#
+#   project name    phi-local           (vs `phi`)
+#   container       phi-postgres-local  (vs `phi-postgres`)
+#   volume          phi-local_postgres_data_local
+#   network         phi-local_default (created here; n8n's is not touched)
+#   port            127.0.0.1:55432 published, loopback only
+#
+# Nothing here can collide with, adopt, or destroy a VPS deployment's
+# container, volume or network. Running `docker compose -f docker-compose.yml
+# down -v` on the VPS is unaffected by this file, and vice versa.
+#
+# Usage (from the repo root):
+#   docker compose -f docker-compose.local.yml --env-file .env.local up -d
+#   bash scripts/local_db_setup.sh          # or scripts\local_db_setup.ps1
+#
+# THIS DATABASE IS FOR SYNTHETIC DATA ONLY. Never put real client
+# information in it: it publishes a port, its password is in a file in the
+# repo working tree, and it is meant to be thrown away and recreated.
+
+name: phi-local
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: phi-postgres-local
+    restart: unless-stopped
+
+    environment:
+      # Same admin role name as production, so migrate.py, the test suites
+      # and every psql line in OPERATIONS.md work unchanged.
+      POSTGRES_USER: ${POSTGRES_ADMIN_USER:-phi_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:-localdev}
+      POSTGRES_DB: ${POSTGRES_DB:-phi}
+      POSTGRES_INITDB_ARGS: "--locale=C --encoding=UTF8"
+
+    # Published, unlike production, because the tests run on the host.
+    # Bound to 127.0.0.1 so it is not reachable from the network, and on
+    # 55432 so it cannot collide with a local Postgres on 5432.
+    ports:
+      - "127.0.0.1:${POSTGRES_LOCAL_PORT:-55432}:5432"
+
+    volumes:
+      - postgres_data_local:/var/lib/postgresql/data
+      - ./database:/database:ro
+
+    # Laptop-sized. Production tuning lives in docker-compose.yml and is
+    # sized for the 2 vCPU / 8 GB VPS; copying it here would make a
+    # development container reserve 2 GB of shared buffers for a test run.
+    command:
+      - postgres
+      - -c
+      - shared_buffers=256MB
+      - -c
+      - effective_cache_size=768MB
+      - -c
+      - work_mem=8MB
+      - -c
+      - maintenance_work_mem=128MB
+      - -c
+      - max_connections=40
+      # Development: log everything slow. Statement text still off, so the
+      # habit of never logging engine payloads holds even locally.
+      - -c
+      - log_min_duration_statement=2000
+      - -c
+      - log_statement=none
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_ADMIN_USER:-phi_admin} -d ${POSTGRES_DB:-phi}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+volumes:
+  postgres_data_local:

@@ -10,3 +10,6 @@ pgdata/
 backups/
 __pycache__/
 *.pyc
+
+# Local development stack (docker-compose.local.yml)
+.env.local
