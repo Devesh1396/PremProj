@@ -1,0 +1,180 @@
+# Run the full verification suite on a real PostgreSQL.
+#
+# The suites assert behaviour against a live database -- RLS actually
+# binding, triggers actually rejecting, views actually computing -- so
+# there is no useful way to run them without one. A service container is
+# the whole point of this workflow.
+#
+# Two jobs, because "it works" and "it works without the optional
+# extensions" are different claims and D15 makes the second one a promise:
+#
+#   suites    pgvector/pgvector:pg16 -- the deployment image, full capability
+#   degraded  postgres:16            -- no pgvector at all
+#
+# The degraded job is not a nice-to-have. Every extension is attempted at
+# migration time and recorded in system_capabilities, and later migrations
+# branch on has_capability(). If that branching ever breaks, this is what
+# catches it, and it catches it here rather than on a VPS where pgvector
+# failed to build.
+
+name: tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# A second push to the same PR makes the first run's result irrelevant.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Development-only credentials for an ephemeral container that is
+  # destroyed with the runner. Not secrets, and deliberately not stored as
+  # secrets: a value in GitHub Secrets reads as something that matters.
+  #
+  # The runtime password is chosen to contain a quote and a semicolon on
+  # purpose. Role passwords are set through scripts/set_role_passwords.py,
+  # which quotes them as SQL literals; interpolating this one into a shell
+  # `psql -c` would be a syntax error, so CI would catch a regression back
+  # to that.
+  POSTGRES_DB: phi
+  POSTGRES_ADMIN_USER: phi_admin
+  POSTGRES_ADMIN_PASSWORD: ci_admin_pw
+  POSTGRES_RUNTIME_USER: phi_runtime
+  POSTGRES_RUNTIME_PASSWORD: "ci'runtime;pw"
+  POSTGRES_PRACTITIONER_USER: phi_practitioner
+  POSTGRES_PRACTITIONER_PASSWORD: ci_practitioner_pw
+  DATABASE_URL: postgresql://phi_admin:ci_admin_pw@127.0.0.1:5432/phi
+
+  # No API key: run_engine.py stays on the fixture provider, so CI never
+  # spends money and never depends on a provider being up. The measurement
+  # suite asserts that a key WOULD switch it, without making a call.
+  LLM_API_KEY: ""
+
+jobs:
+  suites:
+    name: suites (pgvector)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: phi_admin
+          POSTGRES_PASSWORD: ci_admin_pw
+          POSTGRES_DB: phi
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U phi_admin -d phi"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install --quiet 'psycopg[binary]' jsonschema
+
+      - name: Apply migrations
+        run: python3 scripts/migrate.py
+
+      - name: Capabilities
+        run: |
+          python3 - <<'PY'
+          import os, psycopg
+          conn = psycopg.connect(os.environ["DATABASE_URL"])
+          rows = conn.execute(
+              "select capability, enabled from system_capabilities order by 1").fetchall()
+          for cap, enabled in rows:
+              print(f"  {cap:<12}{enabled}")
+          missing = [c for c, e in rows if not e]
+          if missing:
+              raise SystemExit(
+                  f"expected every extension on the deployment image: {missing}")
+          PY
+
+      - name: Set role passwords and verify role constraints
+        run: python3 scripts/set_role_passwords.py
+
+      - name: Full suite
+        run: bash testing/run_all.sh
+
+      - name: Re-run against the used database
+        # Every suite clears its own fixtures first. A pass from empty and a
+        # failure on the second run is a real defect, and it is the one a
+        # developer hits on their own machine.
+        run: bash testing/run_all.sh
+
+      - name: Migrations are a no-op when already applied
+        run: |
+          python3 scripts/migrate.py --status
+          test "$(python3 scripts/migrate.py)" = "Up to date."
+
+      - name: Engine 1 call measurement (fixture provider)
+        run: python3 scripts/measure_engine1.py
+
+  degraded:
+    name: suites (no pgvector)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: phi_admin
+          POSTGRES_PASSWORD: ci_admin_pw
+          POSTGRES_DB: phi
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U phi_admin -d phi"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install --quiet 'psycopg[binary]' jsonschema
+
+      - name: Apply migrations without pgvector
+        run: python3 scripts/migrate.py
+
+      - name: Assert pgvector is absent and recorded as absent
+        # The point of the job. If pgvector silently became available the
+        # degradation path would stop being tested and nobody would notice.
+        run: |
+          python3 - <<'PY'
+          import os, psycopg
+          conn = psycopg.connect(os.environ["DATABASE_URL"])
+          rows = dict(conn.execute(
+              "select capability, enabled from system_capabilities").fetchall())
+          print(rows)
+          if rows.get("vector") is not False:
+              raise SystemExit(
+                  "vector is not absent on postgres:16 -- this job is no longer "
+                  "testing the degradation path")
+          PY
+
+      - name: Set role passwords and verify role constraints
+        run: python3 scripts/set_role_passwords.py
+
+      - name: Full suite
+        run: bash testing/run_all.sh

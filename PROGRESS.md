@@ -124,6 +124,21 @@ live provider can supply one.
 ### Verification
 Ran against live PostgreSQL 16, not inspected by eye.
 `bash testing/run_all.sh` rebuilds and verifies everything.
+
+`.github/workflows/tests.yml` runs it on every pull request and every push
+to `main`, in two jobs: **`suites`** on `pgvector/pgvector:pg16` (the
+deployment image, every extension expected present) and **`degraded`** on
+plain `postgres:16` (pgvector absent, and asserted absent so the job cannot
+quietly stop testing the D15 path). Both set the role passwords through
+`scripts/set_role_passwords.py` and run the full suite; `suites` also
+re-runs it against the used database, asserts the migration re-run is a
+no-op, and runs the measurement. No API key in CI, so `run_engine.py` stays
+on the fixture provider: nothing spends and nothing depends on a provider
+being up.
+
+The runtime role password in CI deliberately contains a quote and a
+semicolon, so a regression to interpolating it into a shell `psql -c` fails
+the run.
 - All 9 migrations apply cleanly from an empty database; re-run is a no-op
 - **Eight** suites pass: concept layer, knowledge layer, client layer,
   RUN_ENGINE, case events, **59/59** knowledge inbox, **78/78** prompt

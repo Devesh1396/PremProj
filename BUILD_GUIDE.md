@@ -6,6 +6,7 @@ remaining work.
 
 Run `bash testing/run_all.sh` at any point. Everything must pass.
 It needs a database: see `docs/LOCAL_DEV.md` for a local one.
+CI runs the same suite on every pull request, with and without pgvector.
 
 ---
 

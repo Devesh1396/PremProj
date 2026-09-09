@@ -96,6 +96,19 @@ that is not the role under test proves nothing.
 
 ---
 
+## The same path runs in CI
+
+`.github/workflows/tests.yml` does what `local_db_setup.sh` does, against a
+service container instead of this compose file: migrate, set the role
+passwords through `scripts/set_role_passwords.py`, run the suites. That
+script is shared rather than duplicated, so the step that decides whether
+RLS is real is the same three places it happens — laptop, CI, VPS.
+
+CI runs it twice over: once on `pgvector/pgvector:pg16` and once on plain
+`postgres:16` with pgvector absent.
+
+---
+
 ## What this is not
 
 - **Not a backup target.** The volume is disposable by design.
