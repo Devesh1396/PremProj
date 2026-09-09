@@ -5,6 +5,7 @@ so you can re-run and confirm rather than rebuild. Step 10 onward is the
 remaining work.
 
 Run `bash testing/run_all.sh` at any point. Everything must pass.
+It needs a database: see `docs/LOCAL_DEV.md` for a local one.
 
 ---
 
@@ -145,19 +146,45 @@ INBOX or routine UPDATE runs.
 `coverage_dimension` enum ↔ `v_domain_readiness`, plus control-block
 uniqueness across all seven prompts and the seed file's content hash.
 
-**Your first task is now Step 10b.**
+**Step 10b is built. The live measurement run is the first task once
+`LLM_API_KEY` and `LLM_BASE_URL` are set.**
 
 ---
 
-## Step 10b — Wire the provider and measure Engine 1
+## Step 10b — Wire the provider and measure Engine 1 *(built; awaiting the key)*
 
-Set `LLM_API_KEY` and `LLM_BASE_URL`. `run_engine.py` switches from the
-fixture provider automatically.
+Everything that does not need credentials is done and proven on the fixture
+provider. What remains is setting `LLM_API_KEY` and `LLM_BASE_URL`;
+`run_engine.py` switches by itself and nothing else changes.
 
-Then run E1 Pass A on a synthetic case and record **actual** input and
-output tokens in `cost_events`. This is the D5 measurement that was
-deferred: only act on call size if quality actually degrades across the
-19-part report. Measure, do not pre-empt.
+- `testing/fixtures/synthetic_client.py` — a vegetarian Gujarati woman with
+  PCOS, MASLD, prediabetes and atherogenic dyslipidaemia. 31 labs, 12
+  symptoms, 9 conditions, 4 medications, 3 days of food log written as the
+  client would report them, plus sleep, movement, pain, stress, behaviour
+  and household constraints. `PART_INPUTS` maps each of the 19 parts of
+  §62 to the intake keys it reads, and the suite asserts the map. The
+  medication set is deliberately the one D6 requires to **pass clean**.
+  Synthetic throughout; no engine payload carries a name.
+- `scripts/measure_engine1.py` — runs E6 → E1 Pass A → E7 → E1 Pass B and
+  reports prompt tokens, completion tokens, cost, latency, retries and
+  control-block parse success per call, out of `cost_events`. It names no
+  provider and no model.
+- `database/migrations/008_call_measurement.sql` — `cost_events.run_id`,
+  `price_source`, and `v_engine_call_measurement`. Without run attribution
+  Pass A and Pass B are indistinguishable in the cost table, which are
+  exactly the two calls D5 asks about.
+- `config/model_prices.json` — a price registry. A model with no rate is
+  UNPRICED with a NULL cost, never 0.
+
+**Acceptance:** `test_measurement.py`. Proven end to end on the fixture
+provider: four calls, both E1 passes on one prompt hash, control block
+parsed on every call, zero dead letters, a repair retry counted as two
+provider calls.
+
+Token counts under the fixture provider are **character estimates and the
+report says so on every run**. The D5 question — whether a ~5,000-word
+specification demanding a 19-part report degrades in its later sections —
+is answerable only against a live provider. Measure, do not pre-empt.
 
 ---
 
@@ -301,7 +328,8 @@ a backup.
 9b    done: 006 knowledge inbox schema
 9c    done: 007 coverage dimensions, gap governance, provenance registry
 10    done: seven canonical prompts + foundation domain seed
-10b   NEXT: wire provider, measure E1 call size
+10b   built: synthetic client, measurement runner, 008. Live run
+      needs LLM_API_KEY + LLM_BASE_URL
 11    n8n RUN_ENGINE subworkflow
 12/13 K1 ontology seed  ||  C3 normalization layer
 14    intake form V1                     <- gates the case track
@@ -317,6 +345,6 @@ a backup.
 24    backup restore drill               <- do this early, not last
 ```
 
-`bash testing/run_all.sh` must pass before every commit. Seven suites.
+`bash testing/run_all.sh` must pass before every commit. Eight suites.
 
 **This layer is frozen.** Do not reopen D16–D21 without instruction.

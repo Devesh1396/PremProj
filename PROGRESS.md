@@ -75,21 +75,70 @@
   OpenAI-compatible provider selected automatically once `LLM_API_KEY` is
   set.
 
+### Step 10b — synthetic client and call measurement `COMPLETE (fixture)`
+Everything in step 10b that does not need credentials.
+
+- `docker-compose.local.yml` + `.env.local.example` +
+  `scripts/local_db_setup.sh` / `.ps1` — a throwaway local PostgreSQL 16 +
+  pgvector for development and testing. A **separate stack**, not an
+  override: `docker-compose.yml` is untouched and the VPS deployment is
+  still exactly what `docs/OPERATIONS.md` describes. Rationale and the
+  full comparison in `docs/LOCAL_DEV.md`.
+- `testing/fixtures/synthetic_client.py` — a synthetic vegetarian Gujarati
+  woman, 42, with PCOS + MASLD (grade 2) + prediabetes + atherogenic
+  dyslipidaemia + subclinical hypothyroidism. 31 labs, 13 measurements,
+  12 symptoms, 9 conditions, 4 medications, 2 supplements, 3 days of food
+  log written the way a client reports it, plus imaging, weight history,
+  sleep, movement, pain, stress, behaviour, household constraints and
+  medical-coordination context. `PART_INPUTS` maps each of the **19 parts
+  of Engine 1 §62** to the intake keys it reads; the suite asserts the map
+  rather than assuming coverage. The medication set — metformin,
+  atorvastatin, telmisartan, levothyroxine — is deliberately the ordinary
+  medicated metabolic client **D6 requires to pass the gate clean**.
+- `scripts/measure_engine1.py` — runs E6 → E1 Pass A → E7 → E1 Pass B and
+  reports, per call, prompt tokens, completion tokens, cost, latency,
+  retries and control-block parse success, read out of `cost_events`. It
+  names no provider and no model: `select_provider()` already switches on
+  `LLM_API_KEY`, and the runner just uses it. `--report-only` and `--json`
+  as well.
+- `008_call_measurement.sql` — `cost_events.run_id` (attribution),
+  `cost_events.price_source` with `ck_cost_priced`, and
+  `v_engine_call_measurement`.
+- `config/model_prices.json` + `scripts/pricing.py` — a price **registry**,
+  keyed by model name, matched exactly then by longest prefix so a dated
+  snapshot resolves to its family. Adding a model's rate is a data edit.
+
+Proven end to end on the fixture provider:
+
+```
+E6 → E1 Pass A → E7 → E1 Pass B     4 calls, 0 retries, 0 dead letters
+both E1 passes on one prompt hash   33d857c2dd6f, engine1_prevention.md
+control block parsed                on every call
+```
+
+**Token counts under the fixture provider are character estimates and the
+report says so on every run.** Latency, attempt counts, retries and parse
+success are real. D5 asked for a measurement of the Engine 1 call; only a
+live provider can supply one.
+
 ### Verification
 Ran against live PostgreSQL 16, not inspected by eye.
 `bash testing/run_all.sh` rebuilds and verifies everything.
-- All 8 migrations apply cleanly from an empty database; re-run is a no-op
-- Seven suites pass: concept layer, knowledge layer, client layer,
+- All 9 migrations apply cleanly from an empty database; re-run is a no-op
+- **Eight** suites pass: concept layer, knowledge layer, client layer,
   RUN_ENGINE, case events, **59/59** knowledge inbox, **78/78** prompt
-  contracts. Verified passing **three consecutive times** from empty, and
-  again after a full server stop/start.
+  contracts, and step 10b measurement. Verified passing **three
+  consecutive times** from empty, each followed by a re-run against the
+  used database, and again after a full server stop/start.
 - All suites idempotent and re-runnable against a used database.
 - State survives a full server stop/start
 - Degradation path proven: applies on a build with **no pg_trgm and no
   btree_gin**, capability registry records the absence, trigram indexes
   skipped, schema still functional
-- 70 tables, 15 views, 48 enums, 183 indexes, 44 check constraints,
-  38 triggers, 26 RLS-protected tables, 52 policies
+- 70 tables, 16 views, 49 enums, 26 RLS-protected tables, 52 policies
+- Verified with the three roles **password-authenticated**, not on trust:
+  `phi_runtime` and `phi_practitioner` connect as themselves, and each
+  connection asserts its own `current_user`
 
 ### The cross-condition test that matters
 A vegetarian client with PCOS + MASLD + prediabetes + high triglycerides +
@@ -194,6 +243,58 @@ by a test rather than assumed.
     entity's kind. Extensibility is intact: a new derived kind adds an enum
     value and a registration trigger, not a foreign key.
 
+22. **The RLS suite could not authenticate as the roles it tests.**
+    `test_case_events.py` builds the `phi_runtime` and `phi_practitioner`
+    DSNs from `DATABASE_URL` with `_with_user()`, which correctly drops the
+    admin password and then supplied none. On any server that asks for a
+    password — which is every server configured the way
+    `docs/OPERATIONS.md` describes — the suite died with
+    `fe_sendauth: no password supplied` before reaching a single isolation
+    assertion. Fix 18 corrected the role *name* in these DSNs and left the
+    credential gap, which is invisible on a trust/peer development setup
+    and fatal on the VPS. Roles are created without a password by migration
+    005 and given one by `ALTER ROLE` afterwards, so the password is not in
+    `DATABASE_URL`: `_with_user()` now takes it from
+    `POSTGRES_RUNTIME_PASSWORD` / `POSTGRES_PRACTITIONER_PASSWORD`,
+    percent-encoded, and never falls back to the admin password. Found the
+    first time the suites ran against a password-authenticated database.
+23. **Nothing asserted which role the isolation tests ran as.** The suite
+    checked `rolsuper` and `rolbypassrls` in `pg_roles` but never
+    `current_user` on the connection, so a regression in DSN rewriting
+    would have been diagnosed as an RLS failure rather than a connection
+    failure. Both connections now assert their own identity, and
+    `_with_user()` is asserted directly across four DSN forms including a
+    password containing `@ : / #`.
+24. **Cost events could not be attributed to a run.** `cost_events`
+    carried `entity_id = client_id`, so the two Engine 1 calls in a cycle —
+    Pass A and Pass B, which share a client, a cycle *and* a prompt hash —
+    were indistinguishable in the cost table. Those are exactly the two
+    calls D5 asks to measure, so step 10b could not have reported them.
+    Fixed by `cost_events.run_id` in migration 008, added alongside
+    `entity_id` rather than replacing it: repurposing `entity_id` would
+    have traded the client attribution for the run attribution.
+25. **`cost_events.cost_usd` had never been written and had no provenance
+    rule.** Once something writes to it, an unknown price must not become
+    a zero — a zero reads as "this call was free" and silently corrupts
+    every total built on top of it. Added `price_source` with
+    `ck_cost_priced`, which rejects `UNPRICED` paired with a cost, and a
+    price *registry* so adding a model's rate is a data edit.
+26. **`engine_runs.input_tokens`, `output_tokens` and `duration_ms` were
+    never populated.** They have existed since 004; RUN_ENGINE recorded
+    per-attempt cost events and left the per-run totals NULL. Now written
+    on both terminal paths, success and dead-letter.
+27. **The fixture provider's token estimate ignored the client payload.**
+    It returned `len(system_prompt) // 4`, counting the prompt file and
+    none of the structured input — the half that varies per case, and the
+    half the D5 call-size question is actually about. Now covers the whole
+    request. Still an estimate, and the measurement report says so.
+28. **A new view would have been an RLS bypass.** Migration 005 sets
+    `security_invoker = true` on every view precisely so a view cannot
+    become one; `v_engine_call_measurement` joins `engine_runs` and
+    `engine_outputs`, both row-level secured, and is owned by `phi_admin`.
+    Caught before 008 was committed, and now asserted by test so the next
+    view cannot repeat it.
+
 ## The E1 two-pass rule is enforced, not documented
 `trg_enforce_two_pass` rejects an insert where Pass A and Pass B in the
 same cycle carry different prompt hashes:
@@ -247,9 +348,29 @@ Repair retry and dead-lettering both verified: an invalid first response is
 repaired on attempt 2; persistently invalid output dead-letters after 3
 attempts with no `engine_outputs` row written.
 
+`python3 scripts/measure_engine1.py` reports the whole cycle out of
+`cost_events` — per call: prompt tokens, completion tokens, cost, latency,
+retries, control-block parse success, and the prompt hash of each E1 pass.
+A repair retry shows as two provider attempts and one retry, with the
+failed attempt's tokens included in the run total.
+
 ## Next task
-Both tracks run in parallel. The prompts and `006` are done, so nothing
-below is blocked on schema.
+
+**Immediately, and it needs nothing from the build: the live measurement
+run.** Put `LLM_BASE_URL`, `LLM_API_KEY` and the five `MODEL_*` roles in
+`.env`, add the provider's rates to `config/model_prices.json`, then
+
+```
+python3 scripts/measure_engine1.py
+```
+
+`run_engine.py` switches provider on its own. That produces the real token
+counts D5 deferred — and it is the only way to answer whether Engine 1's
+later sections degrade across a 19-part report. Do not restructure Engine 1
+before that number exists.
+
+Both build tracks run in parallel. The prompts and `006` are done, so
+nothing below is blocked on schema.
 
 **Case track — C1/C2 completion.** Replace the fixture provider on E6 and
 E1 once `LLM_API_KEY` is set. Then C3, the normalization layer:
@@ -334,8 +455,12 @@ Sonnet 5 $0.137 uncached / $0.014 cached. Caching matters: E1 and E6 each
 load twice per cycle.
 
 ## Awaiting input
-`LLM_API_KEY` and provider base URL. Everything around the integration is
-built and tested against the fixture provider.
+`LLM_API_KEY` and provider base URL, plus the provider's published rates
+for `config/model_prices.json` and the five `MODEL_*` role assignments.
+Everything around the integration is built and tested against the fixture
+provider, including the synthetic client and the measurement runner.
+
+Until a rate is configured the cost column reports `unpriced`, not zero.
 
 Two Engine 7 items for the practitioner, neither blocking:
 - Proofread clinical passages carrying a number, dose, threshold or marker
@@ -346,6 +471,15 @@ Two Engine 7 items for the practitioner, neither blocking:
   questions ask. Nothing in the mapping is build-invented any more.
 
 ## Known gaps
+- **`STRIP_IDENTITY_FROM_ENGINE_PAYLOADS` is documented and not enforced.**
+  Nothing in `run_engine.py` reads it; the payload is whatever the caller
+  passes. The synthetic client builds an identity-free payload and asserts
+  it, so the step 10b path is clean, but the intake pipeline (step 14) must
+  either strip at the source or RUN_ENGINE must enforce it. Given the
+  data-residency position in `docs/OPERATIONS.md`, enforcement in
+  RUN_ENGINE is the safer place.
+- Fixture-mode token counts are character estimates, not measurements. The
+  report says so on every run; do not quote them as call sizes.
 - n8n workflows not yet built (M2)
 - n8n subworkflow JSON not yet exported; `scripts/run_engine.py` is the
   reference implementation and both must be validated by the same suite so

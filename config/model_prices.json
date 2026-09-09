@@ -1,0 +1,30 @@
+{
+  "_comment": [
+    "Price registry. This is DATA, not code: adding a model's rates is an",
+    "edit here, never a change to run_engine.py, and never a model name",
+    "written into logic. The five model ROLES in .env decide which model",
+    "runs; this file only says what a model costs once it has run.",
+    "",
+    "A model absent from this file is UNPRICED: cost_usd stays NULL and the",
+    "measurement report says the price is not configured. It is never",
+    "treated as zero -- a zero would read as 'this call was free'.",
+    "",
+    "Rates are USD per million tokens. Keys are matched against",
+    "cost_events.model_name exactly first, then by longest matching prefix,",
+    "so a dated snapshot id resolves to its family entry.",
+    "",
+    "The Claude entries are the comparison rates already recorded in",
+    "PROGRESS.md. The provider actually in use must be added here with its",
+    "own published rates before a live cost figure means anything."
+  ],
+  "prices": {
+    "claude-opus-5":    { "input_usd_per_mtok": 5.0, "output_usd_per_mtok": 25.0 },
+    "claude-sonnet-5":  { "input_usd_per_mtok": 2.0, "output_usd_per_mtok": 10.0 },
+    "claude-haiku-4-5": { "input_usd_per_mtok": 1.0, "output_usd_per_mtok": 5.0 }
+  },
+  "discounts": {
+    "_comment": "Applied only when a caller declares it used these paths.",
+    "batch_multiplier": 0.5,
+    "cache_read_multiplier": 0.1
+  }
+}

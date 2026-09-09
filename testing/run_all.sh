@@ -5,7 +5,7 @@ cd "$(dirname "$0")/.."
 fail=0
 echo "=== migrations ==="
 python3 scripts/migrate.py || fail=1
-for t in concept_layer knowledge_layer client_layer run_engine case_events knowledge_inbox prompt_contracts; do
+for t in concept_layer knowledge_layer client_layer run_engine case_events knowledge_inbox prompt_contracts measurement; do
   echo
   echo "=== $t ==="
   out=$(python3 "testing/test_$t.py" 2>&1); rc=$?

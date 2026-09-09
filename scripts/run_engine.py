@@ -35,6 +35,8 @@ from typing import Any, Callable
 import psycopg
 from jsonschema import Draft202012Validator
 
+import pricing
+
 REPO = Path(__file__).resolve().parent.parent
 PROMPTS_DIR = REPO / "prompts"
 SCHEMA_PATH = REPO / "schemas" / "orchestration" / "control_contract.v1.json"
@@ -206,7 +208,13 @@ def fixture_provider(system_prompt: str, user_prompt: str, params: dict) -> tupl
         f"(fixture output for {engine})\n\n"
         f"<{CONTROL_TAG}>\n{json.dumps(control, indent=2)}\n</{CONTROL_TAG}>\n"
     )
-    return body, len(system_prompt) // 4, len(body) // 4
+    # Rough character-based estimate covering the WHOLE request. It counted
+    # only the system prompt before, which silently omitted the structured
+    # client payload -- the half that actually varies per case, and the half
+    # the D5 call-size question is about. Still an estimate, and labelled as
+    # one by the measurement report: only a live provider returns real
+    # token counts.
+    return body, (len(system_prompt) + len(user_prompt)) // 4, len(body) // 4
 
 
 def openai_compatible_provider(system_prompt: str, user_prompt: str, params: dict):
@@ -279,6 +287,10 @@ def run_engine(conn: psycopg.Connection, req: EngineRequest) -> EngineResult:
     errors: list[str] = []
     raw = ""
     control: dict[str, Any] | None = None
+    # engine_runs has carried input_tokens / output_tokens / duration_ms
+    # since 004 and nothing ever wrote them. They are the per-run totals
+    # across every attempt, which is what a repair retry actually cost.
+    totals = {"input_tokens": 0, "output_tokens": 0, "duration_ms": 0}
 
     while attempts < MAX_ATTEMPTS:
         attempts += 1
@@ -287,12 +299,15 @@ def run_engine(conn: psycopg.Connection, req: EngineRequest) -> EngineResult:
             raw, in_tok, out_tok = provider(prompt_content, user_prompt, params)
         except Exception as exc:
             errors = [f"provider error: {exc}"]
-            _record_cost(conn, req, model_name, 0, 0,
+            _record_cost(conn, req, model_name, run_id, 0, 0,
                          int((time.time() - started) * 1000), False, type(exc).__name__)
             continue
 
         duration_ms = int((time.time() - started) * 1000)
-        _record_cost(conn, req, model_name, in_tok, out_tok, duration_ms, True, None)
+        _record_cost(conn, req, model_name, run_id, in_tok, out_tok, duration_ms, True, None)
+        totals["input_tokens"] += in_tok
+        totals["output_tokens"] += out_tok
+        totals["duration_ms"] += duration_ms
 
         control = extract_control(raw)
         if control is None:
@@ -314,9 +329,11 @@ def run_engine(conn: psycopg.Connection, req: EngineRequest) -> EngineResult:
         conn.execute(
             """update engine_runs
                   set status='DEAD_LETTER', attempts=%s, completed_at=now(),
+                      input_tokens=%s, output_tokens=%s, duration_ms=%s,
                       error_class='SCHEMA_INVALID', error_detail=%s
                 where run_id=%s""",
-            (attempts, "; ".join(errors)[:2000], run_id),
+            (attempts, totals["input_tokens"], totals["output_tokens"],
+             totals["duration_ms"], "; ".join(errors)[:2000], run_id),
         )
         conn.execute(
             """insert into dead_letter_jobs
@@ -331,8 +348,12 @@ def run_engine(conn: psycopg.Connection, req: EngineRequest) -> EngineResult:
     human_output = raw.split(f"<{CONTROL_TAG}>", 1)[0].strip()
 
     conn.execute(
-        "update engine_runs set status='SUCCEEDED', attempts=%s, completed_at=now() where run_id=%s",
-        (attempts, run_id),
+        """update engine_runs
+              set status='SUCCEEDED', attempts=%s, completed_at=now(),
+                  input_tokens=%s, output_tokens=%s, duration_ms=%s
+            where run_id=%s""",
+        (attempts, totals["input_tokens"], totals["output_tokens"],
+         totals["duration_ms"], run_id),
     )
     conn.execute(
         """insert into engine_outputs (run_id, human_output, structured, control, schema_valid)
@@ -343,20 +364,29 @@ def run_engine(conn: psycopg.Connection, req: EngineRequest) -> EngineResult:
     return EngineResult(run_id, "SUCCEEDED", control, human_output, None, attempts)
 
 
-def _record_cost(conn, req: EngineRequest, model_name: str,
+def _record_cost(conn, req: EngineRequest, model_name: str, run_id: str,
                  in_tok: int, out_tok: int, ms: int, ok: bool, err: str | None) -> None:
     # entity_id is text because it is polymorphic across the system: client
     # ids, domain ids, strategy ids, document ids. Callers must stringify.
     # Passing a raw UUID inserts fine via assignment cast but then fails
     # every "entity_id = $1" comparison with "operator does not exist".
+    #
+    # run_id is separate and additional (migration 008). entity_id stays the
+    # client, because without run_id the two Engine 1 calls in a cycle --
+    # Pass A and Pass B, which share a client, a cycle and a prompt hash --
+    # cannot be told apart in the cost table, and those are precisely the
+    # two calls D5 asks us to measure.
+    cost_usd, price_source = pricing.price_call(model_name, in_tok, out_tok)
     conn.execute(
         """insert into cost_events
-             (operation, model_role, model_name, entity_type, entity_id,
-              workflow, input_tokens, output_tokens, duration_ms, success, error_class)
-           values ('ENGINE_RUN',%s,%s,'client',%s,%s,%s,%s,%s,%s,%s)""",
+             (operation, model_role, model_name, entity_type, entity_id, run_id,
+              workflow, input_tokens, output_tokens, cost_usd, price_source,
+              duration_ms, success, error_class)
+           values ('ENGINE_RUN',%s,%s,'client',%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
         (req.model_role, model_name,
          str(req.client_id) if req.client_id is not None else None,
-         f"RUN_ENGINE_{req.engine}", in_tok, out_tok, ms, ok, err),
+         run_id, f"RUN_ENGINE_{req.engine}", in_tok, out_tok,
+         cost_usd, price_source, ms, ok, err),
     )
 
 
