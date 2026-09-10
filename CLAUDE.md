@@ -226,8 +226,8 @@ run as `phi_runtime` at all (D25). See `PROGRESS.md` *Deployed to the VPS*.
 layer, all seven canonical prompts installed, and build steps **10b and
 11–15**. Step 11 is **frozen**: changes to it are bug fixes only.
 
-17 migrations, 78 tables, 24 views, 51 enums, 211 indexes, 66 check
-constraints, 45 triggers, 30 RLS tables, 60 policies. **Sixteen test
+18 migrations, 78 tables, 24 views, 51 enums, 211 indexes, 66 check
+constraints, 45 triggers, 30 RLS tables, 60 policies. **Seventeen test
 suites**, passing from an empty database, idempotent on a re-run, and
 verified in three capability configurations: full, **no pgvector**, and
 **no optional extension at all**.
@@ -301,10 +301,16 @@ the policies because `DATABASE_URL` connects as a superuser. Every write is
 now inside a transaction that calls `set_client_scope()` first, and the
 workflow mirrors it per Postgres node.
 
-**Next:** step 16, the Knowledge Factory (K02–K11). Until it runs, Engine 7
-retrieves from an empty library and Pass B reasons from an empty retrieval
-set — that is expected, not a bug, and `PROGRESS.md` says so before the
-first full case is run.
+**Next:** step 16, the Knowledge Factory. **K07 and K08 are built** —
+`scripts/knowledge_ingest.py` takes a file from `knowledge/inbox/` to
+heading-located `knowledge_chunks`, deterministically, with no model call.
+K09 claim extraction is the next task, then K10 and K11, then discovery
+K02–K06.
+
+Until K09 and K11 run, Engine 7 retrieves from a library with no claims or
+strategies in it and Pass B reasons from an empty retrieval set — that is
+expected, not a bug, and `PROGRESS.md` says so before the first full case
+is run.
 
 **Before deploying:** `scripts/local_n8n.sh` pins n8n **2.35.7**. The VPS
 runs **2.11.4**, and workflow JSON is version-sensitive. The choice —

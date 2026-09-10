@@ -338,10 +338,54 @@ overwritten; a sparse intake still reaches the queue; the same submission
 cannot initialize a second case; one routing hop is spent, not one per
 engine.
 
-## Step 16 — Knowledge Factory K02–K11
+## Step 16 — Knowledge Factory K02–K11 *(K07 + K08 BUILT 2026-09-10)*
 
 Discovery (PubMed, RSS, web), ingestion, normalizer, claim extraction,
 evidence analysis, strategy synthesis with dedup.
+
+**Build the pipe before the taps.** K07 (inbox) and K08 (normalizer) come
+first because they are the one path into the library that depends on no
+external service, no API key and no scraping — the practitioner hands over
+a file. Discovery (K02–K06) adds more input to the same pipe; it does not
+change its shape, and building it first would mean building the taps over a
+drain that had never been tested.
+
+**K07 + K08 BUILT.** `scripts/knowledge_ingest.py`, and **no model is
+called** — both stages are deterministic, so the whole ingest path is
+testable with no provider, no key and no cost, and a failure in it is a bug
+in that file rather than something a model said.
+
+```
+knowledge/inbox/                     the drop zone
+knowledge/raw/<hh>/<sha256>.<ext>    the untouched original, content-addressed
+knowledge/processed/<name>.receipt.json
+knowledge/failed/<name>.receipt.json
+```
+
+Originals are **moved, never deleted**: into a content-addressed immutable
+store, with an A9 receipt saying what happened — received, hashed,
+duplicate or new, normalized or failed. Duplicate content is DEDUPED
+against its first envelope and nothing is extracted twice (§57). Rights are
+carried through to `excerpt_only` and the item's access note (§52). Chunks
+carry the **heading path**, so a claim extracted later can be pointed back
+at a place in its source (§16, §42).
+
+A `.pdf`, `.docx` or `.epub` is stored, preserved and marked **FAILED with
+the extractor it needs named** — never guessed at. That is what §K05/§K06
+say about transcripts, applied to documents: mark the status rather than
+inventing content.
+
+Routing is registry-driven end to end (D19, §47, hard rule 13): an
+unregistered `source_kind` lands in the protected `OTHER` and the receipt
+says so, and registering it afterwards is a single `INSERT` with no code
+change — proven by a test that does exactly that. Migration `017` moved the
+kind→`source_type` mapping onto `source_kinds` for the same reason: the
+first draft of the normalizer worked it out with a CASE expression, which
+would have made adding a kind an INSERT *and* a code change.
+
+**Next in this step:** K09 claim extraction (Engine 7 in claim-extraction
+mode over the chunks), then K10 evidence analysis and K11 strategy
+synthesis with deterministic dedup before any LLM merge call.
 
 `MODEL_EXTRACTION` on the cheapest capable model — highest volume.
 Use the **Batch API** where the provider offers it: the knowledge clock is

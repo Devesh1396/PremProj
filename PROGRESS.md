@@ -26,8 +26,8 @@ not inspected by eye.**
 
 | | |
 |---|---|
-| Schema | 17 migrations, 78 tables, 24 views, 51 enums, 211 indexes, 45 triggers, 60 policies, 30 RLS tables |
-| Suites | **16**, green from an empty database, each run followed by a re-run, and on the D15 floor with no optional extension available |
+| Schema | 18 migrations, 78 tables, 24 views, 51 enums, 211 indexes, 45 triggers, 60 policies, 30 RLS tables |
+| Suites | **17**, green from an empty database, each run followed by a re-run, and on the D15 floor with no optional extension available |
 | CI | `.github/workflows/tests.yml` — every push on every branch, **with and without pgvector** |
 | Engines | All seven canonical prompts installed; E6 → E1 Pass A → E7 → E1 Pass B proven **live** |
 | Ontology | 26 domains, 269 concepts seeded from the curriculum, hash-verified |
@@ -83,8 +83,18 @@ structurally complete report whose evidence citations are thin or absent.
 Read that as the library being empty, never as Engine 7 or Pass B being
 broken, and do not "fix" it by loosening a floor or a gate.
 
+**Step 16 is under way.** K07 (Knowledge Inbox) and K08 (content
+normalizer) are built and tested: `scripts/knowledge_ingest.py` turns a
+file dropped into `knowledge/inbox/` into a `source_envelope`, an immutable
+content-addressed original, a `source_document` and heading-located
+`knowledge_chunks`, with an A9 receipt. No model is called — both stages
+are deterministic, so the path is testable with no provider and no cost.
+
 **What is NOT done, and should not be assumed:**
-- Steps 16–23. Step 16, the Knowledge Factory (K02–K11), is next.
+- The rest of step 16: **K09** claim extraction, **K10** evidence analysis,
+  **K11** strategy synthesis, and discovery **K02–K06**. The library stays
+  empty of claims and strategies until K09 and K11 run.
+- Steps 17–23.
 - Engine 5 and the release path. `CLIENT_NEW` deliberately stops at the
   review queue; nothing yet turns an approval into client-facing output.
 - `STRIP_IDENTITY_FROM_ENGINE_PAYLOADS` is documented and **not enforced**
