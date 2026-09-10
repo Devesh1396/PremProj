@@ -193,6 +193,13 @@ def main() -> int:
           and sum(1 for r in results if r.decision == "AUTO_CREATE") == 1,
           str(results))
 
+    # Clean up after itself as well as before. Leaving a
+    # CONFUSABLE_DO_NOT_MERGE pair behind is not inert: it is visible to
+    # every other suite that looks at the concept layer.
+    conn.execute("delete from concepts where canonical_key like %s", (PFX + "%",))
+    conn.execute("delete from concept_proposals where raw_phrase like %s", ("%c3test%",))
+    conn.execute("delete from normalization_cache where phrase_norm like %s", ("%c3test%",))
+
     print()
     if FAILS:
         print(f"{len(FAILS)} FAILURE(S): " + "; ".join(FAILS))
