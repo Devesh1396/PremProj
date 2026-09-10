@@ -83,8 +83,10 @@ sections below.
   `CONFUSABLE_DO_NOT_MERGE`, auto-mirrored), `concept_proposals`,
   `normalization_cache`, `normalization_tests`, plus
   `v_active_concepts`, `v_concept_escalation_queue`, `v_confusable_pairs`.
-- `003_knowledge.sql` — the knowledge library: domains with 19 tracked
-  coverage dimensions, source creators / sources / items / documents /
+- `003_knowledge.sql` — the knowledge library: domains with tracked
+  coverage dimensions (**18** since `007` corrected the enum; `003` shipped
+  19, one of which was `KNOWLEDGE_GAPS` and was not a coverage question at
+  all — see below and D17), source creators / sources / items / documents /
   chunks, claims, evidence, strategies, `strategy_concepts` (the retrieval
   spine joining strategies to the 002 ontology), implementation patterns,
   controversies, negative knowledge, foods, seasonality, supplements, gaps,
@@ -795,7 +797,10 @@ with **no published port**. Full procedure in `docs/OPERATIONS.md`.
   `KNOWLEDGE_MAX_CONCURRENCY` at 2-3.
 - Three DB roles: `phi_admin` (migrations), `phi_runtime` (n8n, RLS
   enforced, default deny), `phi_practitioner` (review, read-only).
-- `scripts/backup.sh` written; **restore drill not yet performed**.
+- `scripts/backup.sh` written; **restore drill performed 2026-09-10**
+  and it found the backup contained no roles (bug 36). Still unproven:
+  the script has never run **on the VPS**, under cron, with GPG
+  encryption or an off-site target.
 - Provider: Gemini first via OpenAI-compatible endpoint. Model roles make
   switching an `.env` edit. Claude rates for comparison: Haiku 4.5 $1/$5,
   Sonnet 5 $2/$10, Opus 5 $5/$25 per MTok; batch -50%, cache read 0.1x.

@@ -723,7 +723,11 @@ Minimum: client list, review-required queue, engine results, approve / edit
 **O3 — PostgreSQL hosting.** Self-hosted on the VPS versus managed. Data
 residency under India's DPDP Act is a deliberate decision, not a default.
 Non-negotiable either way: loopback-bound port, nightly encrypted off-site
-`pg_dump`, and **a restore actually tested once**.
+`pg_dump`, and **a restore actually tested once**. The restore drill was
+performed 2026-09-10 against a local PostgreSQL and found that the backup
+contained no roles; that is fixed. It has still never run on a VPS, under
+cron, with GPG or an off-site target, so this clause is satisfied for the
+script and not for the deployment.
 
 **O4 — Deterministic flag rule set.** `case_flags` and the gate work; the
 SQL rules that populate HOLD versus NOTE are unwritten. Start narrow
@@ -739,7 +743,11 @@ invent availability.
 
 **F1** Full engine-output JSON schemas beyond the control contract.
 **F2** Client report formatting, WhatsApp output, practitioner deep view.
-**F3** Engine 1 call-size measurement — pending canonical prompt and API key
-(see D5).
+**F3** ~~Engine 1 call-size measurement~~ — **DONE 2026-09-09, see D5.**
+Measured on a live provider, not estimated: the cycle is
+81,258 in / 86,681 out, $0.386, 306s, and both Engine 1 passes produced
+complete 19-part reports on one prompt hash. Re-run
+`python3 scripts/measure_engine1.py` (~$0.39) after a model change, not to
+re-confirm a settled result.
 **F4** Multi-tenant anything, mobile app, billing, client portal. Explicitly
 out of scope: this is internal single-practitioner software.
