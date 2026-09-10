@@ -524,16 +524,135 @@ derived kind a schema change to the provenance table.
 
 ---
 
+## D22 — Core Intake V1 is defined by what it does NOT ask
+**SETTLED**
+
+The exclusions were written before any field, and the fields were derived
+from them. That order matters: a questionnaire designed by adding fields
+until it feels complete becomes an interrogation, and every field added
+"while we are asking anyway" is permanent client burden paid on every
+single client, forever, in exchange for a marginal signal one engine might
+use once.
+
+The governing sentence: **do not ask clients for information merely because
+an engine knows how to analyse it.**
+
+### What Core Intake V1 deliberately does not ask, and why
+
+**1. Anything the Real Health Test owns.** Sleep quality, pattern and
+regularity; stress; recovery; fatigue and body signals; work and lifestyle
+load; detailed sedentary/activity distribution; proprietary health and
+body-load signals.
+
+*Rejected:* "ask a few sleep questions anyway, they are cheap." They are not
+cheap. RHT is a separate paid assessment; duplicating its questions dilutes
+what the client is paying for, trains them to answer the same thing twice,
+and — the real damage — creates two sources of truth for one signal with no
+rule saying which wins when they disagree. Core Intake collects only the
+minimal basics case reasoning cannot proceed without, and records
+`RHT_STATUS` so the gap is visible rather than guessed.
+
+**2. Calorie and macronutrient self-quantification.** The 3-day food log is
+descriptive: what was eaten, roughly how much, when.
+
+*Rejected:* asking clients to estimate grams or calories. Self-reported
+quantification is unreliable in a way that looks precise, which is worse
+than an honest description, and Engine 3 derives what it needs from the
+description plus food composition data.
+
+**3. Exhaustive disease-screening checklists.** Symptoms are collected where
+relevant to nutritional, metabolic and functional reasoning.
+
+*Rejected:* a 100-symptom checklist on the grounds that Engine 1 can reason
+about many symptoms. High burden, low signal, and a long checklist actively
+manufactures false positives: a client ticking 40 boxes has told you less
+than one describing three things that actually bother them.
+
+**4. Deep behavioural and psychometric profiling.** Previous attempts and
+obvious adherence barriers only — lightweight.
+
+*Rejected:* a behavioural battery at intake. Engine 2 does this reasoning
+properly, and it does it far better against real response data from the
+first four-week cycle than against a client's pre-programme self-assessment.
+
+**5. Client-authored diagnostic hypotheses.** Clients are asked what they
+want and what they experience, never what they think is causing it.
+
+*Rejected:* "what do you think your root cause is?" It anchors the engines
+on a lay hypothesis, and D1 already places conversion and framing outside
+the reasoning path for the same reason.
+
+**6. Family history beyond what changes reasoning.** First-degree relatives
+and conditions in the metabolic, cardiovascular, endocrine and autoimmune
+families.
+
+*Rejected:* a full genealogy. Third-degree relatives do not change a
+four-week intervention.
+
+**7. Financial and household detail beyond a coarse constraint.** Budget is
+a band; cooking access, who cooks, and equipment are captured because
+Engine 3 cannot design an executable plan without them.
+
+*Rejected:* itemised household income and spending. Engine 3 needs to know
+whether a suggestion is affordable and cookable, not what the client earns.
+
+**8. Fields no engine currently consumes.** If nothing reads it, it is not
+collected.
+
+*Rejected:* "collect it now in case we need it later." That is PHI acquired
+without purpose, and it inverts the premise of the whole system: the
+practitioner's and client's time is the scarce resource. When an engine
+repeatedly reports a gap, `v_missing_data_recurrence` surfaces it and the
+field is added **deliberately**, with a classification — never
+automatically, per §57 and the policy in D8.
+
+**9. Connected-device and wearable streams.** `event_source` already carries
+`CONNECTED_SOURCE` so this can arrive later without a retrofit; V1 ingests
+none of it.
+
+**10. Exhaustive manual lab transcription.** Key values are entered
+structurally; the report itself is referenced with its provenance.
+
+*Rejected:* requiring every value on a panel to be typed by hand. It is the
+single most reliable way to make a client abandon intake halfway, and it
+introduces transcription error into the data the engines trust most.
+
+### What follows from the exclusions
+
+- **Absence is never normality.** A field not asked, or asked and not
+  answered, is `UNKNOWN` / `NOT_ASSESSED`. It is never defaulted to a
+  normal value, and `RHT_STATUS = NOT_ASSESSED` never means "RHT was fine".
+  Asserted by test.
+- **Intake never blocks a case.** Validation records gaps; it does not
+  refuse. An incomplete intake still initializes a runnable Engine 6
+  canonical state v1 and populates the high-priority missing-data set, which
+  Engine 5 turns into follow-up questions. Asserted by test.
+- **Conditional sections are data, not code.** `intake_field_catalog` holds
+  the field registry with its classification and its condition, so adding or
+  reclassifying a field in V2 is an `INSERT` or an `UPDATE` — the same
+  principle as `source_kinds` in D19.
+- **V1 is deliberately not final.** Real engine runs teach us what V2 needs.
+
+*Rejected outright:* building intake to cover everything Engine 1 §15–§37
+can reason about. Engine 1 reasons about far more than any client should be
+asked to type, and the gap between the two is exactly what Engine 7's
+library and the practitioner's consultation are for.
+
+---
+
 ## OPEN
 
-**O1 — Intake form.** The largest unstarted piece on the case track, and it
-gates everything. Must capture what Engine 1 and Engine 3 need — identity,
-history, measurements, labs, medications, supplements, food log, sleep,
-movement, pain and function, behaviour history, location, region, budget,
-cooking access, family structure, culture, festivals, travel — and emit
-structured JSON, not prose. Policy on incomplete intake: **run anyway**,
-populate `HIGH_PRIORITY_MISSING_DATA`, and have Engine 5 generate the
-follow-up question list. Do not block.
+**O1 — Intake form. `RESOLVED FOR V1` — see D22.** Core Intake V1 is built:
+scope and exclusions in D22, schema in migration `009_intake.sql`. It emits
+structured JSON, never prose; an incomplete intake runs anyway, populates
+the high-priority missing-data set, and lets Engine 5 generate the follow-up
+questions.
+
+What remains open is **V2**, and deliberately so: which fields to add is a
+question for `v_missing_data_recurrence` once real cases have run, not for a
+design session. Also still open: the practitioner-facing capture surface —
+V1 accepts a structured submission, and how a human fills it in (form, or
+practitioner transcription during consultation) is O2's problem.
 
 **O2 — Practitioner review surface.** `v_review_queue` exists; no UI.
 Minimum: client list, review-required queue, engine results, approve / edit

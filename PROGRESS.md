@@ -12,8 +12,8 @@ before 2026-09-09; all of it has now.
 
 | | |
 |---|---|
-| Schema | 9 migrations, 70 tables, 16 views, 49 enums, 52 policies, 26 RLS tables |
-| Suites | **8**, green from an empty database three consecutive times, each followed by a re-run against the used database |
+| Schema | 10 migrations, 74 tables, 17 views, 58 policies, 29 RLS tables |
+| Suites | **9**, green from an empty database, each run followed by a re-run against the used database |
 | CI | `.github/workflows/tests.yml` — every PR and every push to `main`, **with and without pgvector** |
 | Engines | All seven canonical prompts installed; E6 → E1 Pass A → E7 → E1 Pass B proven **live** |
 | Backup | Restore drill performed 2026-09-10; roles gap found and fixed |
@@ -173,6 +173,38 @@ control block parsed                on every call
 report says so on every run.** Latency, attempt counts, retries and parse
 success are real. D5 asked for a measurement of the Engine 1 call; only a
 live provider can supply one.
+
+### Step 14 — Core Intake V1 `BUILT 2026-09-10`
+The exclusions were written **first** (`DECISIONS.md` D22) and the fields
+derived from them, not the other way round. What Core Intake deliberately
+does not ask — everything RHT owns, calorie self-quantification, symptom
+checklists, behavioural batteries, client-authored diagnoses, fields no
+engine consumes — is the design; the 52 askable fields are what survived it.
+
+- `009_intake.sql` — `intake_submissions`, `intake_sections`,
+  `intake_field_catalog` (the registry: conditional logic and classification
+  as **data**, so V2 is an `INSERT`), `client_report_files`,
+  `v_intake_completeness`. RLS enabled and FORCED on all three
+  client-scoped tables from the first migration, not retrofitted.
+- **No new store for clinical facts.** Intake extracts into the existing
+  004 tables — labs, medications, supplements, conditions, symptoms,
+  measurements, food logs — so every view, engine and policy already built
+  on them works on intake-sourced data unchanged.
+- `scripts/intake.py` — validation that records gaps and never refuses,
+  conditional applicability, extraction, RHT linkage, and conversion to the
+  E6 canonical-state v1 input.
+- Gaps go to the **existing** `missing_data_reports` machinery with
+  `engine` NULL and `submission_id` set; `ck_gap_has_a_source` makes an
+  intake gap impossible to launder into an engine attribution.
+
+Proven by `test_intake.py`: a sparse intake missing labs, food log, food
+environment and most of the profile still produces a runnable E6 v1 with
+`HIGH_PRIORITY_MISSING_DATA` populated; an unasked section reads `UNKNOWN`
+rather than an empty object; an unknown medication dose stays `UNKNOWN`;
+RHT `NOT_ASSESSED` carries "absence is not evidence of normality" and no
+scores; a `COMPLETED` claim with nothing linked is downgraded to
+`NOT_ASSESSED`; a male client is not asked the reproductive questions while
+a female client with no answers is.
 
 ### Verification
 Ran against live PostgreSQL 16, not inspected by eye.
@@ -576,11 +608,11 @@ failed attempt's tokens included in the run total.
 `python3 scripts/measure_engine1.py` costs ~$0.39; do it to re-measure after
 a model change, not to re-confirm a settled result.)*
 
-**Step 14 — intake form V1 is the bottleneck.** It gates the entire case
-track: no real client can enter the system without it, and steps 15 and 21
-build directly on it. Keep it practical, emit structured JSON rather than
-prose, and do not recreate RHT. Incomplete intake runs anyway and populates
-`HIGH_PRIORITY_MISSING_DATA` — it never blocks.
+**Step 14 is BUILT** (Core Intake V1, see above). What remains on the case
+track is **step 15, `CLIENT_NEW`**: wiring intake → E6 v1 → E1 Pass A →
+normalization → E7 → E1 Pass B → E2 → E3 → review → E5 as one workflow.
+`scripts/intake.py` already produces the E6 input, so step 15 is
+orchestration rather than new reasoning.
 
 **Unblocked and parallel to it:** step 11 (n8n `RUN_ENGINE` subworkflow,
 now well-specified because live provider behaviour is known), step 12 (K1
