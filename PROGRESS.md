@@ -266,6 +266,43 @@ clinically distinct state an alias.
 alias separation, the confusable mirrors, seed **quality**, and — per D13 —
 that the seed is explicitly **not complete**.
 
+### Step 11 — n8n `RUN_ENGINE`: feasibility settled, port not yet written
+`DETERMINED 2026-09-10`
+
+The brief's first question was whether step 11 can be developed and
+validated from workflow JSON, a local n8n and the existing fixtures alone.
+**It can. No n8n credentials, no VPS access and no secrets from the
+practitioner are required, now or to finish the port.**
+
+Determined by doing it, not by reading documentation:
+
+| | |
+|---|---|
+| Container registries | `docker.n8n.io` **403** at the egress proxy, Docker Hub's blob CDN blocked. The documented Docker route is unavailable here. |
+| npm registry | reachable. `npm install n8n` → **n8n 2.35.7**, ~2.5 GB, 3 minutes |
+| Headless execution | works, with a caveat: n8n 2.x **dropped `execute --file`**. A workflow must be `import:workflow`-ed and then run by id, so workflow JSON in this repo carries a stable id |
+| Postgres node | connected as **`phi_runtime`** through a credential seeded from `.env.local`, and read the D23 prompt registry: seven rows, hashes identical to what `load_prompts.py` reported |
+| Credentials | seeded by `scripts/local_n8n.sh seed-credentials` from `.env.local`. Nothing is pasted anywhere, and nothing touches the VPS |
+
+`scripts/local_n8n.sh` is that harness. It installs from **npm rather than
+Docker** deliberately — it is the one route that has worked in every
+environment this repo has been built in — into a directory outside the
+working tree, and it does not touch `docker-compose.yml`.
+
+Two things it papers over, both n8n's: `--rawOutput` promises "only JSON
+data, with no other text" and prints node-loading warnings before the
+payload, so the harness trims to the first brace; and the telemetry client
+retries against a proxy that answers 405 until diagnostics are disabled.
+
+**What the port still needs, and what it already has.** D23 landed the
+first blocker: the prompts are rows, so n8n can read a specification
+without a copy of this repository. Remaining: the control contract needs
+the same treatment (one stored schema document, validated by `jsonschema`
+in Python and by n8n's bundled `ajv` — two implementations of one
+standard, over one document, with a parity suite asserting identical
+verdicts), then the workflow itself — prompt read, run insert, the repair
+loop, transport retry with backoff, cost per attempt, dead-letter.
+
 ### Verification
 Ran against live PostgreSQL 16, not inspected by eye.
 `bash testing/run_all.sh` rebuilds and verifies everything.
