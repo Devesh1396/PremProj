@@ -340,7 +340,7 @@ layer, all seven canonical prompts installed, and build steps **10b and
 constraints, 54 triggers, 31 RLS tables, 62 policies — measured
 2026-09-10, with the counting queries recorded in `PROGRESS.md`; earlier
 figures used a different method and do not reconcile, so re-measure rather
-than adjust. **Twenty-eight test suites**, passing from an empty database,
+than adjust. **Twenty-seven test suites**, passing from an empty database,
 idempotent on a re-run, and verified in four configurations: full, **no
 pgvector**, **no optional extension at all**, and **`MODEL_EMBEDDING`
 unset with pgvector present** — the last is what the VPS actually runs,

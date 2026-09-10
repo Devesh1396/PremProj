@@ -27,7 +27,7 @@ not inspected by eye.**
 | | |
 |---|---|
 | Schema | 30 migrations, 97 tables, 40 views, 55 enums, 252 indexes, 101 check constraints, 54 triggers, 62 policies, 31 RLS tables |
-| Suites | **28**, green from an empty database, each run followed by a re-run, and in three configurations: full, no optional extension, and **`MODEL_EMBEDDING` unset with pgvector present** |
+| Suites | **27** (`ls testing/test_*.py | wc -l`, and the same 27 names in `run_all.sh`'s loop), green from an empty database, each run followed by a re-run, and in three configurations: full, no optional extension, and **`MODEL_EMBEDDING` unset with pgvector present** |
 | CI | `.github/workflows/tests.yml` — every push on every branch, **with and without pgvector** |
 | Engines | All seven canonical prompts installed; E6 → E1 Pass A → E7 → E1 Pass B proven **live** |
 | Ontology | 26 domains, 269 concepts seeded from the curriculum, hash-verified |
@@ -476,7 +476,12 @@ suite on the no-extension floor, not by reading the branch.
 - **No real source has run the loop yet** — only fixtures and synthetic
   documents. Do not begin mass ingestion; one real source first, then the
   20-video pilot.
-- Step 23.
+- **Practice aggregates exist as a mechanism, not as data.** Step 23 is
+  built and `practice_strategy_outcomes` is still empty in production
+  terms: the minimum cohort is five assessed clients per strategy, and no
+  real client has been through a follow-up. The engines receive an empty
+  `PRACTICE_EXPERIENCE` block today, which is correct and is not the same
+  as the feature working on real data.
 - `STRIP_IDENTITY_FROM_ENGINE_PAYLOADS` is documented and **not enforced**
   in `RUN_ENGINE`.
 - On the VPS specifically: the restore drill has not been run **on that

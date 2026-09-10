@@ -347,7 +347,7 @@ overwritten; a sparse intake still reaches the queue; the same submission
 cannot initialize a second case; one routing hop is spent, not one per
 engine.
 
-## Step 16 — Knowledge Factory K02–K11 *(K07 + K08 BUILT 2026-09-10)*
+## Step 16 — Knowledge Factory K02–K11 *(ALL BUILT 2026-09-10)*
 
 Discovery (PubMed, RSS, web), ingestion, normalizer, claim extraction,
 evidence analysis, strategy synthesis with dedup.
@@ -721,17 +721,29 @@ GPG encryption and an off-site target configured.
                                          <- BOTH BUILT 2026-09-10
 14    Core Intake V1                     <- BUILT (009, 011, D22)
 15    CLIENT_NEW workflow                <- BUILT 2026-09-10
-16    Knowledge Factory K02–K11
-17    K14 embedding and hybrid retrieval
-18    evaluation layers A–E
+16    Knowledge Factory K02–K11          <- BUILT 2026-09-10 (021, D35–D37)
+                                         K07/K08 the pipe, then K09/K10/K11,
+                                         then discovery K02–K06
+17    K14 embedding and hybrid retrieval <- BUILT 2026-09-10 (023, D39)
+18    evaluation layers A–E              <- BUILT 2026-09-10 (024, D40)
 19    K12/K13 controversy, negative knowledge, gaps
-20    E2, E3, review queue, E5
-21    CLIENT_FOLLOWUP and E4
-22    Wave-1 foundation build
-23    practice intelligence
+                                         <- BUILT 2026-09-10 (025, D41)
+20    E2, E3, review queue, E5           <- BUILT 2026-09-10 (026, D42)
+21    CLIENT_FOLLOWUP and E4             <- BUILT 2026-09-10 (027, D43)
+22    Wave-1 foundation build            <- BUILT 2026-09-10 (028, D44)
+                                         K00 controller only. The WAVE 1
+                                         RUN ITSELF IS NOT STARTED.
+23    practice intelligence              <- BUILT 2026-09-10 (029, D45)
 24    backup restore drill               <- DONE 2026-09-10 (roles gap found)
 ```
 
-`bash testing/run_all.sh` must pass before every commit. Sixteen suites.
+**Built is not run.** Steps 16–23 are built and their suites pass; the
+knowledge library is still nearly empty. No real source has been through
+the loop, no adapter has reached its real API, and no corpus has been
+embedded. Do not read the ticks above as a library.
+
+`bash testing/run_all.sh` must pass before every commit. **Twenty-seven
+suites**, and `testing/run_bare.sh` must pass too — extensions are its
+floor, `test_optional_deps.py` covers the environment variables (V3).
 
 **This layer is frozen.** Do not reopen D16–D21 without instruction.
