@@ -639,10 +639,51 @@ unset means unbounded rather than a default nobody chose.
 Resumable because the cursor is a row (`foundation_progress`). A domain
 that keeps failing is paused with its reason. `IDLE` is not `COMPLETE`.
 
-## Step 23 — Practice intelligence
+## Step 23 — Practice intelligence *(built 2026-09-10)*
 
 De-identified aggregation into `practice_strategy_outcomes`. Minimum cohort
 5. Never merged with evidence.
+
+Built as migration `029`, `scripts/practice_intelligence.py` and
+`testing/test_practice.py`. See D45.
+
+`practice_strategy_outcomes` has carried `ck_min_cohort` since migration
+`003` and **had never held a row**, so the constraint had been passing
+every insert it never saw — the fifth control in this build that existed as
+a name over a table nothing populated. Step 21 is what changed: started
+interventions with recorded outcomes, and `intervention_outcome_history`
+holding what each replaced.
+
+What the aggregation refuses:
+
+- **The cohort counts people, once each.** `n_clients` is distinct clients
+  with a recorded outcome, taking each client's latest. Five rows from two
+  clients is a cohort of two; one client's three attempts is one
+  observation. `ck_practice_outcomes_account_for_cohort` refuses a
+  distribution that does not sum to it.
+- **A proposal nobody started is not experience** (`started_on IS NOT
+  NULL`).
+- **The denominator travels with the numerator.**
+  `ck_practice_generated_complete` refuses a generated aggregate that
+  cannot say out of how many, over what window, with what distribution.
+  `v_practice_cohort_candidates` separates "nobody ran the aggregator"
+  from "the cohort is three" from "eleven started it and nobody has
+  assessed one".
+- **Counts, never copied client text.** No stop reason, adherence note or
+  outcome evidence leaves the client layer.
+  `trg_practice_deidentified` is the backstop — a UUID, an email, a display
+  name or an external ref is refused — and it is `SECURITY DEFINER` so RLS
+  cannot hide the client it is checking for.
+- **The runtime reads aggregates and cannot create one.** Aggregation is a
+  cross-client read; `phi_runtime` is single-client-scoped, so `029`
+  revokes its DML and keeps SELECT.
+- **Adherence never folds into outcome** (D43), at cohort scale too. Where
+  adherence is unrecorded for the majority the summary says a neutral
+  result there is *untested, not ineffective*.
+
+The block reaches E7 and E1 Pass B as a **top-level key**, and E4 on the
+follow-up path, with `basis` and `evidence_status` as fields on every
+entry rather than a caption around the block.
 
 ## Step 24 — Backup drill *(drill performed 2026-09-10)*
 

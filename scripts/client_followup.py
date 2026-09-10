@@ -59,6 +59,7 @@ import psycopg
 
 import client_new as CN
 import normalize as NZ
+import practice_intelligence as PI
 import run_engine as RE
 
 PipelineStopped = CN.PipelineStopped
@@ -151,6 +152,21 @@ def live_interventions(conn, client_id: str) -> list[dict]:
              "started_on": str(r[5]) if r[5] else None,
              "proposed_on": str(r[6]) if r[6] else None,
              "never_assessed": r[7]} for r in rows]
+
+
+def live_strategy_ids(conn, client_id: str) -> list[str]:
+    """Strategies behind this client's live interventions.
+
+    An intervention may have no strategy_id (E2/E3 propose by name), so
+    this is a subset of the plan, not a restatement of it.
+    """
+    return [r[0] for r in conn.execute(
+        """select distinct i.strategy_id::text
+             from client_interventions i
+            where i.client_id = %s::uuid
+              and i.strategy_id is not null
+              and i.status in ('PROPOSED','APPROVED','STARTED','ONGOING','MODIFIED')""",
+        (client_id,)).fetchall()]
 
 
 def record_outcomes(conn, client_id: str, followup_id: str, result,
@@ -286,6 +302,15 @@ def run_followup(conn: psycopg.Connection, followup_id: str,
             "FOLLOWUP_STRUCTURED": structured or {},
             "CURRENT_STATE": state,
             "LIVE_INTERVENTIONS": interventions,
+            # Practice experience, as its own labelled block (D9, D45,
+            # hard rule 6). Engine 4 asks for it by name: how the
+            # strategies this client is on have gone across the practice
+            # is the context that separates "this one is not working" from
+            # "this one rarely works". Filtered to the client's own live
+            # strategies, and de-identified before it ever left the
+            # aggregation.
+            "PRACTICE_EXPERIENCE": PI.practice_block(
+                conn, strategy_ids=live_strategy_ids(conn, client_id)),
         }
 
         # E6 UPDATE. §A1's normal path: a delta describing what changed.

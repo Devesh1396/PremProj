@@ -58,6 +58,7 @@ import psycopg
 
 import intake as IN
 import normalize as NZ
+import practice_intelligence as PI
 import run_engine as RE
 
 # Engines that are internal reasoning, in the order phase 4 specifies.
@@ -406,6 +407,25 @@ def run_new_client(conn: psycopg.Connection, submission_id: str,
                      detail=f"{len(resolved)} of {len(phrases)} phrases resolved")
 
         # ------------------------------------------------------------------
+        # Practice experience, as its OWN block (D9, D45, hard rule 6).
+        #
+        # A top-level key, never folded into E7_HANDOFF and never merged
+        # with anything evidential. Engine 1's Pass B section and Engine 7
+        # A4 both already say how to weigh it; until step 23 nothing
+        # produced it, so both engines were reasoning without the one
+        # source of knowledge that is entirely our own.
+        #
+        # Passed to E7 and to Pass B independently. Relaying it only
+        # through E7's prose handoff would make its arrival depend on an
+        # engine having repeated it.
+        case_concepts = sorted({c for r in resolved for c in r.concept_ids})
+        practice = PI.practice_block(conn, concept_ids=case_concepts)
+        outcome.step("PRACTICE_EXPERIENCE", "OK",
+                     detail=(f"{len(practice)} de-identified aggregate(s), "
+                             f"minimum cohort 5" if practice else
+                             "none: no strategy has an assessed cohort of 5 yet"))
+
+        # ------------------------------------------------------------------
         # E7 in CASE mode. CASE_VERSION is the real version here, not 0:
         # 0 is reserved for knowledge-clock runs (D18), and this run is
         # about one client's case.
@@ -426,6 +446,7 @@ def run_new_client(conn: psycopg.Connection, submission_id: str,
                           {"phrase": r.phrase, "concept_ids": r.concept_ids,
                            "method": r.method}
                           for r in resolved],
+                      "PRACTICE_EXPERIENCE": practice,
                   })
 
         # ------------------------------------------------------------------
@@ -440,6 +461,7 @@ def run_new_client(conn: psycopg.Connection, submission_id: str,
                           **case_input,
                           "E7_HANDOFF": e7.structured,
                           "E1_PASS_A_HANDOFF": pass_a.structured,
+                          "PRACTICE_EXPERIENCE": practice,
                       })
 
         # ------------------------------------------------------------------

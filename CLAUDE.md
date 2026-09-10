@@ -336,11 +336,11 @@ run as `phi_runtime` at all (D25). See `PROGRESS.md` *Deployed to the VPS*.
 layer, all seven canonical prompts installed, and build steps **10b and
 11–15**. Step 11 is **frozen**: changes to it are bug fixes only.
 
-29 migrations, 97 tables, 38 views, 55 enums, 251 indexes, 96 check
-constraints, 53 triggers, 31 RLS tables, 62 policies — measured
+30 migrations, 97 tables, 40 views, 55 enums, 252 indexes, 101 check
+constraints, 54 triggers, 31 RLS tables, 62 policies — measured
 2026-09-10, with the counting queries recorded in `PROGRESS.md`; earlier
 figures used a different method and do not reconcile, so re-measure rather
-than adjust. **Twenty-seven test suites**, passing from an empty database,
+than adjust. **Twenty-eight test suites**, passing from an empty database,
 idempotent on a re-run, and verified in four configurations: full, **no
 pgvector**, **no optional extension at all**, and **`MODEL_EMBEDDING`
 unset with pgvector present** — the last is what the VPS actually runs,
@@ -695,6 +695,46 @@ reason** rather than retried until the budget is gone.
 **`WAVE1_FOUNDATION_READY` is a VIEW, never stored**: a saved READY
 outlives the library it described. `foundation_stage` has no `COMPLETE`
 (§70) and `IDLE` stays in the queue.
+
+**Step 23: practice intelligence — the FIFTH name with nothing behind it
+(D45).** `practice_strategy_outcomes` has carried `ck_min_cohort` since
+`003` and **had never held a row**, so the constraint was passing every
+insert it never saw. Step 21 is what changed: started interventions with
+recorded outcomes, and `intervention_outcome_history` holding what each
+replaced.
+
+**The cohort counts PEOPLE, once each.** `n_clients` is distinct clients
+with a recorded outcome, taking each client's latest — five intervention
+rows from two clients is a cohort of two, and one client's three attempts
+is one observation.
+`ck_practice_outcomes_account_for_cohort` refuses a distribution that does
+not sum to it, so the rule is a database property and not a convention in
+the runner. **A proposal nobody started is not experience.**
+
+**The denominator travels with the numerator.** Five of five assessed,
+where thirty started and twenty-five were never looked at, is a selection
+effect with a number in front of it. `ck_practice_generated_complete`
+refuses a generated aggregate that cannot say out of how many, over what
+window, with what distribution; `v_practice_cohort_candidates` separates
+"nobody ran the aggregator" from "the cohort is three" from "eleven
+started it and NOBODY HAS ASSESSED ONE".
+
+**Counts, never copied client text.** No stop reason, adherence note or
+outcome evidence leaves the client layer — at a cohort of five one verbatim
+sentence is quasi-identifying. `trg_practice_deidentified` is the
+**backstop**, not the plan: it refuses a UUID, an email, a display name or
+an external ref, and it is `SECURITY DEFINER` because `clients` is
+RLS-forced and a check running with the caller's visibility would compare
+against the one client in scope and pass. **The runtime reads aggregates
+and cannot create one** — aggregation is a cross-client read and
+`phi_runtime` is single-client-scoped, so `029` revokes its DML.
+
+**Adherence never folds into outcome, at cohort scale too (D43).** Where
+adherence is unrecorded for the majority the summary says a neutral result
+there is *untested, not ineffective*. **The label is a column, not a
+caption**: `basis` and `evidence_status` are fields on every row, and the
+block reaches E7 and E1 Pass B as a TOP-LEVEL key — never inside
+`E7_HANDOFF` — and E4 on the follow-up path.
 
 **FULL-TEXT SEARCH ORS ITS TERMS. Never `websearch_to_tsquery`,
 `plainto_tsquery` or `phraseto_tsquery` here — they AND (bug 63).** A

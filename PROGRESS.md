@@ -26,14 +26,14 @@ not inspected by eye.**
 
 | | |
 |---|---|
-| Schema | 29 migrations, 97 tables, 38 views, 55 enums, 251 indexes, 96 check constraints, 53 triggers, 62 policies, 31 RLS tables |
-| Suites | **27**, green from an empty database, each run followed by a re-run, and in three configurations: full, no optional extension, and **`MODEL_EMBEDDING` unset with pgvector present** |
+| Schema | 30 migrations, 97 tables, 40 views, 55 enums, 252 indexes, 101 check constraints, 54 triggers, 62 policies, 31 RLS tables |
+| Suites | **28**, green from an empty database, each run followed by a re-run, and in three configurations: full, no optional extension, and **`MODEL_EMBEDDING` unset with pgvector present** |
 | CI | `.github/workflows/tests.yml` — every push on every branch, **with and without pgvector** |
 | Engines | All seven canonical prompts installed; E6 → E1 Pass A → E7 → E1 Pass B proven **live** |
 | Ontology | 26 domains, 269 concepts seeded from the curriculum, hash-verified |
 | Registries | **Four**: prompts (`010`), contract (`012`), handoffs (`013`), prices (`016`) |
 | Backup | Restore drill performed 2026-09-10; roles gap found and fixed |
-| Bugs | 65 found and fixed, each with a regression test |
+| Bugs | 66 found and fixed, each with a regression test |
 
 *Counts measured 2026-09-10 against the local full-capability database, not
 carried forward: `pg_tables`, `pg_views`, `pg_type typtype='e'`,
@@ -128,6 +128,80 @@ single thing `gemini-embedding-001` did not do.
 Two calls in total, both incidental to a CLI smoke test. This is a
 one-call verification of the wire format and **not** evidence about
 throughput, rate limits or cost at corpus scale.
+
+**Step 23: practice intelligence — the fifth name with nothing behind it.**
+
+`practice_strategy_outcomes` has carried `ck_min_cohort CHECK (n_clients >=
+5)` since migration `003` and **had never held a row**. The constraint had
+been passing every insert it never saw, exactly like
+`client_interventions` (D42), `client_interventions.outcome` (D43),
+`client_followups` (D43) and `KNOWLEDGE_DAILY_TOKEN_BUDGET` (D44) before
+it. Step 21 is what changed: started interventions with recorded outcomes,
+and `intervention_outcome_history` holding what each one replaced.
+
+| | |
+|---|---|
+| `029` | four coherence constraints, `jsonb_counts_total()`, `adherence_band()`, `trg_practice_deidentified`, `uq_practice_generated`, `v_practice_cohort_candidates`, `v_practice_experience` |
+| `practice_intelligence.py` | the aggregation, the labelled block, `--plan` by default |
+| `test_practice.py` | 49 checks |
+
+**The cohort counts PEOPLE, once each.** `n_clients` is distinct clients
+with a recorded outcome, taking each client's latest — so five intervention
+rows from two clients is a cohort of two, and one client's three attempts
+is one observation. The database agrees rather than trusting the runner:
+`ck_practice_outcomes_account_for_cohort` refuses a distribution that does
+not sum to `n_clients`, and `jsonb_counts_total()` is `IMMUTABLE` so a
+per-row `CHECK` can call it.
+
+**The denominator travels with the numerator.** Five improved out of five
+assessed, where thirty started it and twenty-five were never looked at, is
+a selection effect with a number in front of it — and the two are the same
+row unless the exposed count is stored beside the cohort.
+`ck_practice_generated_complete` refuses a generated aggregate that cannot
+say out of how many, over what window, with what distribution.
+
+**Three states that all look like an absent row.**
+`v_practice_cohort_candidates` separates "nobody ran the aggregator" from
+"the cohort is three" from "eleven clients started it and **nobody has
+assessed one**". Only the last is a standing failure to look, and it is the
+one an absent row hides.
+
+**A proposal nobody started is not experience** (`started_on IS NOT NULL`).
+Counting proposals inflates every cohort with things that never happened.
+
+**Counts, never copied client text.** No stop reason, adherence note or
+outcome evidence leaves the client layer: at a cohort of five one verbatim
+sentence is quasi-identifying. `trg_practice_deidentified` is the backstop
+— a UUID, an email, a display name or an external ref is refused — and it
+is `SECURITY DEFINER` because `clients` is RLS-forced and a check running
+with the caller's visibility would compare against the one client in scope
+and pass. The suite writes a distinctive token into a client's
+`stop_reason` and asserts it reaches no column of the aggregate.
+
+**The runtime reads aggregates and cannot create one.** `005` granted
+`phi_runtime` DML on every global table before anything wrote to this one,
+but aggregation is a cross-client read and `phi_runtime` is
+single-client-scoped: the cohort would always be one person or zero. `029`
+revokes INSERT/UPDATE/DELETE and keeps SELECT.
+
+**Adherence never folds into outcome** (D43), at cohort scale too. Where
+adherence is unrecorded for the majority the summary says a neutral result
+there is *untested, not ineffective*. The suite asserts both directions —
+a measured cohort carries no such caveat, so it is not boilerplate.
+
+**The label is a column, not a caption.** `basis` and `evidence_status` are
+fields on every row and on every block entry. The block reaches E7 and E1
+Pass B as a **top-level key**, never nested inside `E7_HANDOFF`, and E4 on
+the follow-up path; the suite drives the real CLIENT_NEW pipeline and
+asserts both. Engine 1's Pass B section, Engine 7 §A4 and Engine 4 all
+already said how to weigh practice experience — nothing had ever produced
+it.
+
+**Bug 66: `count(*)` over a LEFT JOIN counts the outer row.**
+`v_practice_cohort_candidates` reported **one intervention for every
+strategy nobody had ever started**. Caught by the fixture that gives six
+clients a proposal none of them started and asserts the cohort is zero —
+`count(e.intervention_id)` is the fix.
 
 **Step 22: K00_FOUNDATION_CONTROLLER — and the budget that was a name.**
 

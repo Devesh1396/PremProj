@@ -2518,3 +2518,125 @@ no row. The suite asserts no base table carries a contradicting column.
 `foundation_stage` has no `COMPLETE` value (§70). A domain with nothing
 queued is `IDLE` and **stays in the queue** — the next source to arrive puts
 it back to work.
+
+---
+
+## D45 — Practice experience is aggregated from counts, and the cohort counts people
+**SETTLED 2026-09-10** — BUILD_GUIDE step 23; migration `029`; D9, D43, hard rule 6
+
+D9 settled the *architecture* of practice experience in migration `003`:
+no foreign key to `evidence_records`, no view joining them, minimum cohort
+five, always returned to engines in its own labelled block. What it could
+not settle was whether any of that was doing anything, because
+**`practice_strategy_outcomes` had never held a row.** `ck_min_cohort` had
+been passing every insert it never saw.
+
+That is the fifth control in this build that existed as a name over a table
+nothing populated — after `client_interventions` (D42),
+`client_interventions.outcome` (D43), `client_followups` (D43) and
+`KNOWLEDGE_DAILY_TOKEN_BUDGET` (D44). Step 21 is what changed: started
+interventions with recorded outcomes, and `intervention_outcome_history`
+holding what each outcome replaced. There is finally something to
+aggregate.
+
+### The cohort counts PEOPLE, and counts each of them once
+
+`n_clients` means **distinct clients with a recorded outcome**, taking each
+client's latest one. Five intervention rows from two clients is one
+person's record with a count on it, and a client who tried the same
+strategy three times is one observation, not three. The minimum of five
+only means something if the number it guards counts people.
+
+The database agrees rather than trusting the runner:
+`ck_practice_outcomes_account_for_cohort` refuses a distribution that does
+not sum to `n_clients`, and `ck_practice_adherence_accounts_for_cohort`
+does the same for adherence. A per-row `CHECK` cannot run a subquery, so
+`jsonb_counts_total()` is `IMMUTABLE` and the constraint calls it.
+
+### The denominator travels with the numerator
+
+Five improved out of five assessed is a finding. Five out of five assessed
+where **thirty started it and twenty-five were never looked at** is a
+selection effect with a number in front of it, and the two are the same row
+unless the exposed count is stored beside the cohort.
+`ck_practice_generated_complete` refuses a generated aggregate that cannot
+say out of how many, over what window, with what distribution.
+
+`v_practice_cohort_candidates` separates the three states that all look
+like an absent row: nobody has run the aggregator, the cohort is genuinely
+three, and eleven clients started it and **nobody has assessed one**. Only
+the last is a standing failure to look, and it is the one an absent row
+hides — the same reasoning as `domain_gap_assessments` and
+`domain_controversy_assessments` (D41).
+
+### A proposal nobody started is not experience
+
+`started_on IS NOT NULL`. A plan that was never carried out says nothing
+about the strategy, and counting proposals inflates every cohort with
+things that never happened.
+
+### Counts, never copied client text
+
+Every summary is composed from counts. No `stop_reason`, no adherence note,
+no outcome evidence string is copied out of the client layer. At a cohort
+of five one verbatim sentence is quasi-identifying, and a
+"de-identified" aggregate that depends on nobody having written anything
+distinctive is not de-identified. The count of stops travels; the reasons
+stay in the client record. Surfacing reason text is a later decision with
+its own de-identification step, not something to slip in here.
+
+`trg_practice_deidentified` is the **backstop**, not the plan: it refuses a
+UUID, an email address, a client display name or an external reference in
+any free-text column. It is `SECURITY DEFINER` on purpose — `clients` is
+RLS-forced, and a check running with the caller's visibility would compare
+against the one client in scope, find no match, and pass. A check that
+passes because it could not see what it was checking for is worse than no
+check.
+
+This is the one place in the schema where client-identifying material could
+cross from the RLS-protected client layer into the **global, un-scoped**
+knowledge layer, so it is checked at that boundary rather than trusted
+upstream.
+
+### The runtime reads aggregates; it never creates one
+
+Migration `005` granted `phi_runtime` full DML on every global table, this
+one included, before anything wrote to it. But aggregation is a
+**cross-client read** and `phi_runtime`'s scope is transaction-local and
+single-client (hard rule 8): as `phi_runtime` the cohort is always one
+person or zero. `029` revokes INSERT, UPDATE and DELETE and keeps SELECT —
+a path that can only ever produce a wrong answer should not exist.
+
+### Adherence sits beside the outcome, at cohort scale too
+
+D43 kept them apart per intervention; the same rule has to survive
+aggregation. `adherence_counts` is its own distribution, and where adherence
+is unrecorded for the majority the summary **says so in those words**: a
+neutral or poor outcome in that cohort is *untested*, not ineffective.
+Folding adherence into the outcome is how a workable strategy gets
+abandoned on the evidence of nobody having done it.
+
+### The label is a column, not a caption
+
+D9 requires the block to be separately labelled. `v_practice_experience`
+carries `basis` and `evidence_status` as **fields on every row**, and the
+payload block repeats them per entry, because a caption around a block is
+what gets dropped when a payload is reformatted.
+
+It reaches E7 and E1 Pass B as a **top-level key**, never nested inside
+`E7_HANDOFF` — relaying it only through E7's prose handoff would make its
+arrival depend on an engine having repeated it. Engine 1's Pass B section,
+Engine 7 §A4 and Engine 4 all already say how to weigh practice
+experience; until step 23 nothing produced it, so all three were reasoning
+without the one body of knowledge that is entirely the practitioner's own.
+
+### `--plan` by default
+
+`--execute` is an explicit act, as with K00 (D44). This writes to a global
+table from cross-client reads, and a runner whose safe mode is the one you
+have to remember to ask for is not safe. Re-running is a no-op:
+`uq_practice_generated` is a partial unique index so the aggregator
+replaces its own row and never collides with a practitioner-recorded
+observation, and an unchanged aggregate is not rewritten at all — the same
+reason `embedding_source_hash` exists (`023`), so `generated_at` does not
+move on a row nothing changed.

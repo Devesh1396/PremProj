@@ -71,7 +71,12 @@ def main() -> int:
     names = [s.name for s in outcome.steps]
     check("it runs the phase 4 sequence in order",
           names == ["INTAKE_EXTRACT", "CYCLE_OPEN", "E6_INIT", "CASE_VERSION_1",
-                    "E1_PASS_A", "NORMALIZE", "E7", "E1_PASS_B", "E2", "E3",
+                    "E1_PASS_A", "NORMALIZE",
+                    # Step 23. After normalization because the block is
+                    # filtered by the case's resolved concepts, and before
+                    # E7 because both E7 and Pass B receive it (D45).
+                    "PRACTICE_EXPERIENCE",
+                    "E7", "E1_PASS_B", "E2", "E3",
                     # Step 20. The plan becomes rows, and only then do the
                     # deterministic rules run -- a rule that matches on an
                     # intervention name has nothing to match against until
