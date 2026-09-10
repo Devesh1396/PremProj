@@ -19,6 +19,7 @@ sys.path.insert(0, str(REPO / "scripts"))
 
 import psycopg
 import seed_ontology as K1
+import trigram
 
 FAILS: list[str] = []
 
@@ -128,6 +129,47 @@ def main() -> int:
                                        and r2.from_concept = r1.to_concept
                                        and r2.to_concept = r1.from_concept)"""
           ).fetchone()[0] == 0)
+
+    # D15: pg_trgm is genuinely optional, and K1 must seed the SAME pairs
+    # with or without it. scripts/trigram.py reproduces pg_trgm's
+    # similarity() rather than approximating it, and this is the check that
+    # keeps that true -- without it, trigram.py would be a second
+    # implementation nobody ever compares.
+    #
+    # Skipped, not silently passed, when the extension is absent: there is
+    # nothing to compare against, and a check that cannot run must say so.
+    trgm_available = conn.execute(
+        "select enabled from system_capabilities where capability='pg_trgm'"
+    ).fetchone()
+    if trgm_available and trgm_available[0]:
+        # Compare on the SAME normalized text the seeder scores. Feeding
+        # raw canonical_name to one side and norm_phrase() to the other
+        # would be measuring norm_phrase, not the trigram score.
+        rows = conn.execute(
+            """select norm_phrase(a.canonical_name), norm_phrase(b.canonical_name),
+                      similarity(norm_phrase(a.canonical_name),
+                                 norm_phrase(b.canonical_name))
+                 from concepts a join concepts b on a.concept_id < b.concept_id
+                where a.origin_method='SEED' and b.origin_method='SEED'
+                limit 5000""").fetchall()
+        # similarity() returns `real`, not `double precision`, so its answer
+        # is already rounded to about seven significant digits before it
+        # reaches Python: 1/29 comes back as 0.03448276, not
+        # 0.034482758620689655. A tolerance tighter than float4's own
+        # resolution measures the cast, not the algorithm.
+        drift = [(x, y, pg) for x, y, pg in rows
+                 if abs(trigram.similarity(x, y) - float(pg)) > 1e-6]
+        check("the Python trigram score matches pg_trgm to float4 resolution",
+              not drift, f"{len(drift)} of {len(rows)} disagree: {drift[:3]}")
+        # The pairs the seeder actually acts on are the ones in the band.
+        in_band = sum(1 for x, y, pg in rows if 0.45 <= float(pg) <= 0.85)
+        py_band = sum(1 for x, y, _ in rows if 0.45 <= trigram.similarity(x, y) <= 0.85)
+        check("...so the same pairs fall inside the confusable band",
+              in_band == py_band, f"pg_trgm {in_band} vs python {py_band}")
+    else:
+        print("  SKIP  pg_trgm absent: nothing to compare the Python score against")
+        check("the seed still generated confusable pairs without pg_trgm",
+              generated > 0, str(generated))
 
     print("\nseed QUALITY: types are right and prose did not become concepts")
     # The parser bug that made this suite worth writing: a domain lists its

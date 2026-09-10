@@ -111,16 +111,49 @@ def main() -> int:
     if borrowed:
         conn.execute("delete from concepts where concept_id=%s", (hba1c_real,))
 
-    print("\ntier 3: trigram catches near-neighbours")
-    r = NZ.resolve(conn, "c3test insulin sensitivty", llm=boom, use_cache=False)  # typo
-    check("a misspelling still resolves without an LLM",
-          r.decision in ("RESOLVED", "ESCALATED", "LOGGED") and r.method == "trigram", repr(r))
-    if r.decision == "RESOLVED":
-        check("...and the confirmed spelling is learned as an alias",
+    print("\ntier 3: trigram catches near-neighbours -- when pg_trgm is there")
+    # D15: pg_trgm is genuinely optional, and this assertion was written as
+    # though it were not. Without the extension the resolver correctly skips
+    # the trigram tier and the phrase falls through to the LLM -- which is
+    # exactly what migration 000 says its absence means -- and `boom` fired.
+    # The behaviour was right; the test was wrong. So assert the tier when
+    # the capability is recorded, and assert the DEGRADED behaviour when it
+    # is not. Neither branch is a skip: both have something to prove.
+    typo = "c3test insulin sensitivty"
+    if NZ._capability(conn, "pg_trgm"):
+        r = NZ.resolve(conn, typo, llm=boom, use_cache=False)
+        check("a misspelling still resolves without an LLM",
+              r.decision in ("RESOLVED", "ESCALATED", "LOGGED") and r.method == "trigram",
+              repr(r))
+        if r.decision == "RESOLVED":
+            check("...and the confirmed spelling is learned as an alias",
+                  conn.execute(
+                      """select count(*) from concept_aliases
+                          where concept_id=%s and alias_text=%s""",
+                      (insulin, typo)).fetchone()[0] == 1)
+    else:
+        # Degraded, and it must degrade in the safe direction: more work
+        # for the LLM, never a wrong answer from a tier that cannot run.
+        called: list[str] = []
+
+        def watched_llm(phrase, _candidates):
+            called.append(phrase)
+            return None
+
+        r = NZ.resolve(conn, typo, llm=watched_llm, use_cache=False)
+        check("without pg_trgm the misspelling falls through to the LLM",
+              called == [typo], f"{called} {r!r}")
+        check("...and the trigram tier never claims to have answered",
+              r.method != "trigram", r.method)
+        check("...and an unresolved misspelling is proposed, never made canonical",
+              r.decision == "AUTO_CREATE" and not r.concept_ids, repr(r))
+        check("...and no alias is invented for a spelling nothing confirmed",
               conn.execute(
                   """select count(*) from concept_aliases
-                      where concept_id=%s and alias_text='c3test insulin sensitivty'""",
-                  (insulin,)).fetchone()[0] == 1)
+                      where concept_id=%s and alias_text=%s""",
+                  (insulin, typo)).fetchone()[0] == 0)
+        conn.execute("delete from concepts where canonical_name=%s", (typo,))
+        conn.execute("delete from concept_proposals where raw_phrase=%s", (typo,))
 
     # ------------------------------------------------------------------
     print("\nthe cache means a phrase never costs a second call (D2)")

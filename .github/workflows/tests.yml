@@ -5,17 +5,30 @@
 # there is no useful way to run them without one. A service container is
 # the whole point of this workflow.
 #
-# Two jobs, because "it works" and "it works without the optional
-# extensions" are different claims and D15 makes the second one a promise:
+# Three jobs, because "it works", "it works without pgvector" and "it works
+# with no optional extension at all" are three different claims, and D15
+# makes all of them promises:
 #
 #   suites    pgvector/pgvector:pg16 -- the deployment image, full capability
-#   degraded  postgres:16            -- no pgvector at all
+#   degraded  postgres:16            -- no pgvector
+#   bare      postgres:16, contrib extension files DELETED before migrating
+#             -- no pgvector, no pg_trgm, no btree_gin. Nothing optional.
 #
-# The degraded job is not a nice-to-have. Every extension is attempted at
-# migration time and recorded in system_capabilities, and later migrations
-# branch on has_capability(). If that branching ever breaks, this is what
-# catches it, and it catches it here rather than on a VPS where pgvector
-# failed to build.
+# These are not nice-to-haves. Every extension is attempted at migration
+# time and recorded in system_capabilities, and later migrations and
+# scripts branch on has_capability(). If that branching ever breaks, this
+# is what catches it, and it catches it here rather than on a VPS where
+# pgvector failed to build.
+#
+# The `bare` job exists because two jobs were not enough and the gap was
+# real, not theoretical. pg_trgm and btree_gin are CONTRIB: they ship in
+# BOTH the pgvector image and the plain postgres image, so no amount of
+# image-swapping can test their absence. Steps 12 and 13 duly shipped an
+# ungated similarity() call that killed the K1 seeder outright on a
+# database without pg_trgm, and a test that asserted a trigram tier had
+# answered when it could not have. Step 10b had proved that path worked.
+# Nothing noticed for two build steps. The only way to test the absence of
+# a contrib extension is to remove it, so this job removes it.
 
 name: tests
 
@@ -193,4 +206,91 @@ jobs:
         run: python3 scripts/set_role_passwords.py
 
       - name: Full suite
+        run: bash testing/run_all.sh
+
+  bare:
+    name: suites (no optional extensions)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: phi_admin
+          POSTGRES_PASSWORD: ci_admin_pw
+          POSTGRES_DB: phi
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U phi_admin -d phi"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install --quiet 'psycopg[binary]' jsonschema
+
+      - name: Remove the contrib extensions from the server
+        # There is no PostgreSQL image without pg_trgm and btree_gin -- they
+        # are contrib and ship everywhere -- so the only way to test their
+        # absence is to take them away. Deleting the control files makes
+        # CREATE EXTENSION fail exactly as it would on a server that never
+        # had them, which is what try_enable_extension() is written to
+        # survive.
+        #
+        # Deliberately loud on failure. A step that quietly did nothing
+        # would leave this job an expensive duplicate of `degraded`, and the
+        # capability assertion below would be the only thing standing
+        # between that and a false green.
+        run: |
+          set -euo pipefail
+          cid=$(docker ps --filter "ancestor=postgres:16" --format '{{.ID}}' | head -1)
+          if [ -z "$cid" ]; then
+            echo "could not find the postgres service container; refusing to " \
+                 "run a job that would silently duplicate 'degraded'" >&2
+            docker ps
+            exit 1
+          fi
+          docker exec "$cid" bash -lc '
+            set -e
+            cd /usr/share/postgresql/16/extension
+            rm -f pg_trgm* btree_gin*
+            ls pg_trgm.control btree_gin.control 2>/dev/null && exit 1
+            echo "contrib extension files removed"
+          '
+
+      - name: Apply migrations with nothing optional available
+        run: python3 scripts/migrate.py
+
+      - name: Assert every optional extension is absent and recorded as absent
+        # The point of the job, and the guard against the removal step
+        # having quietly failed.
+        run: |
+          python3 - <<'PY'
+          import os, psycopg
+          conn = psycopg.connect(os.environ["DATABASE_URL"])
+          rows = dict(conn.execute(
+              "select capability, enabled from system_capabilities").fetchall())
+          print(rows)
+          present = [c for c in ("vector", "pg_trgm", "btree_gin") if rows.get(c)]
+          if present:
+              raise SystemExit(
+                  f"{present} still available -- this job is not testing the "
+                  "D15 floor it claims to test")
+          PY
+
+      - name: Set role passwords and verify role constraints
+        run: python3 scripts/set_role_passwords.py
+
+      - name: Full suite
+        run: bash testing/run_all.sh
+
+      - name: Re-run against the used database
         run: bash testing/run_all.sh
