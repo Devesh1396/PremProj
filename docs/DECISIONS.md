@@ -1238,11 +1238,16 @@ in three separate ways, none of them documented:
    parameters. One comma in an error message shifts every parameter after
    it.
 
-The **array form** — a single `{{ [a, b, c] }}` — takes a different branch
-that has none of these behaviours: values pass through whole, `null` stays
-`null`, objects are stringified. Every node uses it, and `undefined` is
-never allowed into the array, because that branch skips undefined elements
-and would shift the numbering.
+**SUPERSEDED BY D32 ON THE FIX, NOT ON THE FINDING.** The three
+behaviours above are real and still hold. The fix recorded here was the
+**array form** — a single `{{ [a, b, c] }}`, which on 2.35.7 takes a
+branch that has none of them. That branch **does not exist on 2.11.4**,
+the version this system runs, where an array is stringified and bound as
+one value. See D32 for the form actually in use: one resolvable per
+parameter, each a JSON literal, unwrapped with `($n::jsonb #>> '{}')`.
+
+Recorded rather than rewritten, because the lesson is the point: this fix
+was verified thoroughly against the wrong version.
 
 `testing/n8n_bind_params.js` is a faithful port of that algorithm, and
 `test_n8n_sql.py` binds the workflow's **real** expressions through it and
@@ -1394,6 +1399,116 @@ itself. A bug in this node must be loud, not slow.
 `node:vm` reproduces the property under test — host globals absent — and
 adding an n8n internal as a test dependency is how a suite starts testing
 n8n instead of this build.
+
+---
+
+## D34 — Embeddings are 1536-dimensional, from `gemini-embedding-2`, and the database enforces both
+**SETTLED 2026-09-10**
+
+Every input to this was **measured**, not recalled — web search was
+unavailable and Google's documentation was blocked by the egress proxy, so
+the provider questions were answered by calling the API. Full evidence in
+`docs/evidence/embedding_dimension_probe.md`.
+
+| measured | |
+|---|---|
+| `gemini-embedding-001` truncated to 1536 | L2 norm **0.702** — not normalised |
+| `gemini-embedding-2` at 3072 / 1536 / 768 | **1.000000** at every one |
+| pgvector 0.6.0, `vector(3072)` + HNSW | `ERROR: column cannot have more than 2000 dimensions for hnsw index` |
+| a genuine unit vector at 1536 dims | round-trips through float4 with error **1.49e-06** |
+| already embedded, anywhere | **nothing** — 5 columns, 4 HNSW indexes, 0 rows |
+
+### Why 1536 and not 3072
+
+pgvector **refuses to index** above 2000 dimensions. 3072 stores and
+computes, so the failure is not an error — it is every similarity query
+silently becoming a sequential scan. Indexing 3072 needs pgvector ≥ 0.7 and
+`halfvec`; the image here is 0.6.0 and the VPS's version has never been
+checked. Against that, a probe comparing 3072 and 1536 rankings found the
+top two identical and ranks 3/4 swapped between two documents 0.004 apart —
+noise at a tie boundary. One probe is not a benchmark, and it is enough to
+say the quality difference does not pay for the index it would cost.
+
+Nothing was embedded when this was decided, so the answer cost no re-embed.
+That was the cheap moment and it was used.
+
+### Why `gemini-embedding-2`
+
+Because it removes the hazard rather than managing it. With `-001`,
+truncation to 1536 requires the caller to re-normalise, and a
+re-normalisation step that is silently skippable will eventually be
+skipped. `-2` returns unit vectors at every supported dimensionality, so
+there is no step to skip.
+
+### A correction to the premise, because it changes what to guard
+
+`<=>` — cosine distance, which **all four HNSW indexes here use** — is
+norm-invariant: measured 1.8e-08 between a vector and the same direction
+scaled to 0.7. Cosine *ranking* therefore survives unnormalised vectors.
+The hazard is real for `<->` and `<#>`, and for any column holding a mix of
+normalised and unnormalised rows where magnitudes are compared — but it is
+narrower than "cosine is quietly wrong", and worth stating precisely so the
+guard is built for the actual failure.
+
+### What the database now enforces (migration 018)
+
+1. **Every vector carries its provenance.** `embedding_model` and
+   `embedding_dim` on all five tables, required whenever `embedding` is not
+   null. A vector cannot say what produced it.
+2. **A non-unit-norm vector is refused on write**, with the norm it
+   actually had in the message. Tolerance **1e-3**, chosen from the
+   measurements above: ~670× the float4 noise floor, ~200× smaller than the
+   failure it catches.
+3. **A second model or dimensionality into one column is refused.**
+   `embedding_provenance` pins each table on its first write. Changing it
+   means clearing the column and calling
+   `reset_embedding_provenance()`, which itself refuses while any vector
+   remains — the friction is the point, because that clearing *is* the
+   re-embed.
+
+The norm is computed as `sqrt(-(v <#> v))`. `<#>` is the negative inner
+product, so that is the dot product with itself — no helper function, so it
+works on pgvector 0.6.0 where `l2_normalize` does not exist.
+
+### The dimension had three copies and no check
+
+`EMBEDDING_DIM` in `.env.example` (**read by no code at all**), plus a
+`dim int := 1536` literal in `002_concepts.sql` and again in
+`003_knowledge.sql`, each commented "must match" the other two.
+
+The fix is not a fourth copy. pgvector stores a column's dimension in
+`atttypmod`, so `embedding_dim()` reads it from the **catalog** and
+everything derives from that. `018` additionally asserts all five columns
+agree, and `test_embeddings.py` asserts `.env.example` agrees with the
+database. There is nothing left to keep in sync.
+
+`MODEL_EMBEDDING` is **named** in `.env.example` while the other four
+roles are blank, and that is deliberate: the others are a per-deployment
+choice, this one is a schema-level commitment wearing an env var.
+
+### The rate is missing, and deliberately so
+
+`config/model_prices.json` has no rate for `gemini-embedding-2`. It was not
+guessed: search is unavailable here and the provider's pricing pages are
+blocked, and **a fabricated rate is worse than none** — UNPRICED is
+visibly missing, a wrong number silently corrupts every total built on it,
+which is the whole point of D30.
+
+So the gap is made loud instead. `load_prices.py` names every configured
+model role with no rate on every run, and `v_unpriced_spend` (migration
+019) counts calls already made without one — the embedding probe's own 14
+calls are the first entry it would have shown. Adding the number is a
+one-line edit and a loader run.
+
+*Rejected:* 3072 with no index. Correct results, sequential scans, and the
+first slow query would be blamed on the corpus rather than the schema.
+
+*Rejected:* `-001` with normalisation in application code. It works, and it
+is one skippable step away from the exact silent degradation this decision
+exists to prevent.
+
+*Rejected:* a `system_settings` row for the dimension. That is a fourth
+copy with extra steps. The columns already know.
 
 ---
 

@@ -112,6 +112,37 @@ def main() -> int:
         if not rows:
             print("  none — every call will record UNPRICED with a NULL cost.")
 
+        # The gap, named. UNPRICED is the honest answer when no rate is
+        # configured (D30) and it is also invisible: the call still costs
+        # money and appears in no total. A configured ROLE with no rate is
+        # the case worth saying out loud, because it means the next run of
+        # that engine spends money nobody can account for.
+        gaps = []
+        for role in ("MODEL_ANALYSIS", "MODEL_EXTRACTION", "MODEL_RESEARCH",
+                     "MODEL_EMBEDDING", "MODEL_FAST"):
+            name = os.environ.get(role, "").strip()
+            if not name:
+                continue
+            cost, source = pricing.price_call(name, 1000, 1000)
+            if source == pricing.UNPRICED:
+                gaps.append((role, name))
+        if gaps:
+            print()
+            print(f"NO RATE CONFIGURED for {len(gaps)} model role(s) in use:")
+            for role, name in gaps:
+                print(f"  {role:18s} {name}")
+            print("  Calls by these roles record UNPRICED with a NULL cost — "
+                  "honest, and\n  invisible in every cost total. Add the rate to "
+                  f"{pricing.price_file().name}.")
+
+        spent = conn.execute(
+            "select model_name, calls from v_unpriced_spend limit 5").fetchall()
+        if spent:
+            print()
+            print("ALREADY SPENT WITHOUT A RATE (v_unpriced_spend):")
+            for name, calls in spent:
+                print(f"  {name:32s} {calls} call(s)")
+
     changed = [(m, a) for m, a in actions
                if a not in ("unchanged", "skipped-malformed")]
     if check_only and changed:

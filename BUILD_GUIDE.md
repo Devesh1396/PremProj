@@ -392,6 +392,12 @@ kind→`source_type` mapping onto `source_kinds` for the same reason: the
 first draft of the normalizer worked it out with a CASE expression, which
 would have made adding a kind an INSERT *and* a code change.
 
+**Embeddings settled before anything embeddable was written (D34).** 1536
+from `gemini-embedding-2`, enforced by migration `018`: provenance columns
+on all five vector tables, a unit-norm check on write, and one model pinned
+per column. `EMBEDDING_DIM`'s three unchecked copies are gone —
+`embedding_dim()` reads the catalog.
+
 **Next in this step:** K09 claim extraction (Engine 7 in claim-extraction
 mode over the chunks), then K10 evidence analysis and K11 strategy
 synthesis with deterministic dedup before any LLM merge call.

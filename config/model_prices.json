@@ -15,7 +15,18 @@
     "",
     "The Claude entries are the comparison rates already recorded in",
     "PROGRESS.md. The provider actually in use must be added here with its",
-    "own published rates before a live cost figure means anything."
+    "own published rates before a live cost figure means anything.",
+    "",
+    "MISSING RATE \u2014 gemini-embedding-2 (MODEL_EMBEDDING, D34).",
+    "It is deliberately ABSENT rather than guessed. Web search is",
+    "unavailable in the build environment and Google's pricing pages are",
+    "blocked by the egress proxy, and a fabricated rate is worse than no",
+    "rate: UNPRICED is visibly missing, whereas a wrong number silently",
+    "corrupts every total built on it. Add `input_usd_per_mtok` (embeddings",
+    "have no output tokens, so `output_usd_per_mtok` is 0) from the",
+    "provider's published rates and re-run scripts/load_prices.py.",
+    "Until then `load_prices.py` names the gap on every run and",
+    "v_unpriced_spend counts what has been spent without a rate."
   ],
   "prices": {
     "claude-opus-5": {

@@ -26,7 +26,7 @@ finished it must keep working on n8n + PostgreSQL + an LLM API alone.
 
 | File | When |
 |---|---|
-| `docs/DECISIONS.md` | **Before proposing any structural change.** 33 settled decisions with rationale and rejected alternatives. |
+| `docs/DECISIONS.md` | **Before proposing any structural change.** 34 settled decisions with rationale and rejected alternatives. |
 | `docs/MASTER_SPEC.md` | The 40-phase build specification plus amendments. |
 | `BUILD_PLAN.md` | Milestones, dependencies, acceptance criteria. |
 | `PROGRESS.md` | What actually works, tests passed, bugs fixed, next exact task. |
@@ -226,8 +226,8 @@ run as `phi_runtime` at all (D25). See `PROGRESS.md` *Deployed to the VPS*.
 layer, all seven canonical prompts installed, and build steps **10b and
 11–15**. Step 11 is **frozen**: changes to it are bug fixes only.
 
-18 migrations, 78 tables, 24 views, 51 enums, 211 indexes, 66 check
-constraints, 45 triggers, 30 RLS tables, 60 policies. **Seventeen test
+20 migrations, 79 tables, 27 views, 51 enums, 211 indexes, 66 check
+constraints, 45 triggers, 30 RLS tables, 60 policies. **Nineteen test
 suites**, passing from an empty database, idempotent on a re-run, and
 verified in three capability configurations: full, **no pgvector**, and
 **no optional extension at all**.
@@ -290,16 +290,33 @@ The JavaScript under test is extracted from the workflow at run time, so a
 copy cannot drift from it. **Its SQL is executed too (D31)** —
 `test_n8n_sql.py` binds the workflow's real expressions through a faithful
 port of n8n's own parameter algorithm and runs the result against the
-database as `phi_runtime`. Every `queryReplacement` uses the **array
-form**; the string form discards literal text outside `{{ }}`, turns
-`null` into the string `'null'`, and comma-splits any resolved value that
-is not JSON. Do not "simplify" one back.
+database as `phi_runtime`. Every `queryReplacement` is **one resolvable
+per parameter, each a JSON literal** (`{{ JSON.stringify(x ?? null) }}`),
+unwrapped in SQL with `($n::jsonb #>> '{}')`. Do not "simplify" one back:
+a bare expression discards literal text outside `{{ }}`, turns `null` into
+the string `'null'`, comma-splits any resolved value that is not JSON, and
+drops an empty string entirely — and the array form that avoids all four
+**does not exist on 2.11.4** (D32).
 
 **Engine runs set transaction-local client scope (D25).** `RUN_ENGINE`
 could not run as `phi_runtime` at all before this — every run went around
 the policies because `DATABASE_URL` connects as a superuser. Every write is
 now inside a transaction that calls `set_client_scope()` first, and the
 workflow mirrors it per Postgres node.
+
+**Embeddings are settled and enforced (D34).** 1536 dimensions from
+`gemini-embedding-2`, and the database refuses anything else: every vector
+carries `embedding_model` and `embedding_dim`, a **non-unit-norm vector is
+rejected on write**, and a second model into one column is refused
+outright. `gemini-embedding-001` truncated to 1536 returns a norm of 0.702
+and would otherwise have degraded retrieval silently. The dimension has one
+source — `embedding_dim()` reads it from the catalog; do not add a second.
+Not 3072: pgvector refuses an HNSW index above 2000 dimensions.
+
+**`gemini-embedding-2` has no rate configured** and it was not guessed —
+a fabricated price corrupts every total built on it. `load_prices.py` names
+the gap on every run and `v_unpriced_spend` counts what has been spent
+without one.
 
 **Next:** step 16, the Knowledge Factory. **K07 and K08 are built** —
 `scripts/knowledge_ingest.py` takes a file from `knowledge/inbox/` to
