@@ -214,11 +214,11 @@ Database is in India; model inference is not. Engine payloads carry
 
 ## State as of 2026-09-10
 
-**Complete and verified** — M0 foundations, M1 schema (11 migrations), M2
+**Complete and verified** — M0 foundations, M1 schema (12 migrations), M2
 engine execution layer, all seven canonical prompts installed, and build
 steps **10b, 12, 13 and 14**.
 
-75 tables, 18 views, 51 enums, 201 indexes, 55 check constraints,
+75 tables, 19 views, 51 enums, 202 indexes, 56 check constraints,
 42 triggers, 29 RLS tables, 58 policies. **Eleven test suites**, passing
 from an empty database three consecutive times, idempotent, and verified in
 three capability configurations: full, **no pgvector**, and **no optional

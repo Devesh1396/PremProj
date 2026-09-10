@@ -254,6 +254,19 @@ client-scoped tables from that first migration.
 The requirements below are the original brief, all of them now met, and
 they stay here because step 15 has to keep meeting them.
 
+Migration `011` adds the second half of validation: `009` proved
+**completeness**, `011` proves **usability**. A supplied answer that cannot
+be read becomes an issue in `intake_submissions.validation_issues` and is
+treated as unknown or dropped — never guessed at, never accepted as given,
+and never a reason to refuse the submission.
+
+**Acceptance:** `test_intake.py` — a submission full of malformed values is
+accepted, extraction survives every one of them, only the usable lab values
+and named medications are stored, an unrecognised RHT status becomes
+`NOT_ASSESSED` with a `DISCREPANCY` note rather than reaching an engine,
+and a field whose only answer was unusable reads as **missing** so Engine 5
+asks again.
+
 Keep it **practical**. Do not recreate RHT — that is a separate paid
 assessment and duplicating it dilutes it. Emit structured JSON, not prose.
 

@@ -239,6 +239,157 @@ def main() -> int:
     check("...and counts it as an intake report",
           rec is not None and rec[2] >= 1, str(rec))
 
+    # ------------------------------------------------------------------
+    print("\nmalformed values: never accepted, never fatal (011)")
+    malformed_id = SI.load_client(conn, SI.EXTERNAL_REF_MALFORMED)
+    malformed_sub = IN.submit(conn, malformed_id, SI.MALFORMED_INTAKE)
+
+    issues = conn.execute(
+        "select validation_issues from intake_submissions where submission_id=%s",
+        (malformed_sub,)).fetchone()[0]
+    by_path = {i["field_path"]: i for i in issues}
+
+    check("a submission full of malformed values is still accepted",
+          conn.execute(
+              "select status::text from intake_submissions where submission_id=%s",
+              (malformed_sub,)).fetchone()[0] == "SUBMITTED")
+
+    # The one the whole layer exists for. "probably fine" used to arrive at
+    # Engine 6 as RHT_STATUS "PROBABLY FINE" -- a value that is neither a
+    # known state nor an admission of not knowing, in the field D22 makes
+    # load-bearing.
+    check("an invalid RHT status is recorded as an issue",
+          "RHT_LINKAGE.rht_status" in by_path,
+          str(sorted(by_path)))
+    rht = IN.rht_state(conn, malformed_id, SI.MALFORMED_INTAKE)
+    check("...and never reaches an engine as a status",
+          rht["RHT_STATUS"] == "NOT_ASSESSED", rht["RHT_STATUS"])
+    check("...and says so rather than defaulting silently",
+          "DISCREPANCY" in rht and "probably fine" in rht["DISCREPANCY"],
+          str(rht.get("DISCREPANCY")))
+    check("...and no score or layer is invented for it",
+          "LAYERS" not in rht and "ASSESSMENT_ID" not in rht, str(sorted(rht)))
+
+    # The allowed set is the database's, not a list in intake.py.
+    allowed = IN.allowed_rht_statuses(conn)
+    check("the allowed statuses come from assessment_status, not from Python",
+          "NOT_ASSESSED" in allowed and "COMPLETED" in allowed and len(allowed) >= 5,
+          str(sorted(allowed)))
+    for good in sorted(allowed):
+        state = IN.rht_state(conn, malformed_id,
+                             {"sections": {"RHT_LINKAGE": {"rht_status": good}}})
+        if good == "COMPLETED":
+            # Nothing is linked, so COMPLETED is downgraded -- that is the
+            # 009 behaviour and it must survive this change.
+            ok = state["RHT_STATUS"] == "NOT_ASSESSED" and "DISCREPANCY" in state
+        else:
+            ok = state["RHT_STATUS"] == good and "DISCREPANCY" not in state
+        if not ok:
+            check(f"a valid status {good} is not treated as an issue", False, str(state))
+    check("every valid status passes untouched", True)
+
+    check("a non-numeric measurement is an issue, not a stored number",
+          by_path.get("BASIC_PROFILE.height_cm", {}).get("action")
+          == IN.TREATED_AS_UNKNOWN, str(by_path.get("BASIC_PROFILE.height_cm")))
+    check("a number in the wrong unit is caught by the plausible range",
+          "BASIC_PROFILE.waist_cm" in by_path, str(sorted(by_path)))
+    check("a number supplied as a string is VALID and not an issue",
+          "BASIC_PROFILE.weight_kg" not in by_path, str(by_path.get("BASIC_PROFILE.weight_kg")))
+    check("an unreadable measurement date is an issue",
+          "measured_on" in by_path, str(sorted(by_path)))
+    check("an ambiguous date format is never guessed at",
+          "LABS_REPORTS.lab_values[2].date" in by_path,
+          str([p for p in by_path if "lab_values" in p]))
+    check("a lab value that is not a number is an issue",
+          "LABS_REPORTS.lab_values[0].value" in by_path, str(sorted(by_path)))
+    check("a lab value with no marker is an issue",
+          "LABS_REPORTS.lab_values[1].marker" in by_path, str(sorted(by_path)))
+    check("a medication with a dose and no name is an issue",
+          "MEDICATIONS.medications[0].name" in by_path, str(sorted(by_path)))
+    check("a non-numeric symptom severity is an issue",
+          "SYMPTOMS.current_symptoms[0].severity" in by_path, str(sorted(by_path)))
+    check("a food log day that is not a day is an issue",
+          "FOOD_LOG.food_log_days[0]" in by_path, str(sorted(by_path)))
+    check("an unknown section key is an issue and not a crash",
+          "sections.NOT_A_SECTION" in by_path, str(sorted(by_path)))
+
+    # THE regression. Every one of these used to be an exception raised
+    # hundreds of lines from where intake accepted the value.
+    try:
+        counts = IN.extract(conn, malformed_sub)
+        check("extraction survives every malformed value", True)
+    except Exception as exc:                      # noqa: BLE001 - that is the point
+        counts = {}
+        check("extraction survives every malformed value", False,
+              f"{type(exc).__name__}: {exc}")
+
+    check("only the usable lab values were stored",
+          sorted(r[0] for r in conn.execute(
+              "select marker from client_labs where client_id=%s", (malformed_id,)).fetchall())
+          == ["LDL", "TSH"], str(counts))
+    check("a lab dated only by its panel still lands",
+          conn.execute(
+              """select count(*) from client_labs
+                  where client_id=%s and marker='TSH' and measured_on='2026-08-14'""",
+              (malformed_id,)).fetchone()[0] == 1)
+    check("only the named medication was stored",
+          [r[0] for r in conn.execute(
+              "select name from client_medications where client_id=%s",
+              (malformed_id,)).fetchall()] == ["metformin"])
+    check("the implausible measurement was not stored",
+          conn.execute(
+              """select count(*) from client_measurements
+                  where client_id=%s and measure in ('height_cm','waist_cm')""",
+              (malformed_id,)).fetchone()[0] == 0)
+    check("...while the valid one beside it was",
+          conn.execute(
+              """select value from client_measurements
+                  where client_id=%s and measure='weight_kg'""",
+              (malformed_id,)).fetchone()[0] == 78.5)
+    check("only the dated food log day was stored",
+          conn.execute(
+              "select count(*) from client_food_logs where client_id=%s",
+              (malformed_id,)).fetchone()[0] == 1)
+
+    # A value nobody could read is not an answer, so the field is a GAP and
+    # Engine 5 asks the question again. That is the difference between this
+    # and silently accepting it.
+    gap_fields = {r[0] for r in conn.execute(
+        """select missing_field from missing_data_reports
+            where submission_id=%s""", (malformed_sub,)).fetchall()}
+    check("a field whose only answer was unusable reads as missing",
+          "height_cm" in gap_fields, str(sorted(gap_fields))[:200])
+    check("...while the field beside it that WAS usable does not",
+          "weight_kg" not in gap_fields, str(sorted(gap_fields))[:200])
+
+    e6 = IN.to_e6_input(conn, malformed_sub)
+    check("a malformed intake still produces a runnable E6 input",
+          e6["CASE_VERSION"] == 1 and e6["CLIENT_ID"] == str(malformed_id))
+    check("the engine is told which answers were unusable",
+          len(e6["UNUSABLE_ANSWERS"]) == len(issues) and len(issues) > 8,
+          f"{len(e6['UNUSABLE_ANSWERS'])} of {len(issues)}")
+    check("...separately from what was never answered",
+          "UNUSABLE_ANSWERS" in e6 and "HIGH_PRIORITY_MISSING_DATA" in e6)
+    check("no unreadable value reaches the engine as a fact",
+          "height_cm" not in e6["BASIC_PROFILE"] and e6["BASIC_PROFILE"]["weight_kg"] == 78.5,
+          str(e6["BASIC_PROFILE"]))
+    check("the raw submission is preserved exactly as it arrived",
+          conn.execute(
+              "select raw_payload from intake_submissions where submission_id=%s",
+              (malformed_sub,)).fetchone()[0]["sections"]["BASIC_PROFILE"]["height_cm"]
+          == "about 170")
+
+    # Sanitizing must not be creative. Nothing may appear that nobody typed.
+    clean = IN.sanitize(conn, SI.MALFORMED_INTAKE)
+    check("sanitizing removes and never invents",
+          clean["measured_on"] is None
+          and "height_cm" not in clean["sections"]["BASIC_PROFILE"]
+          and len(clean["sections"]["LABS_REPORTS"]["lab_values"]) == 2,
+          str(clean["sections"]["BASIC_PROFILE"]))
+    check("a well-formed intake is unchanged by sanitizing",
+          IN.check_values(conn, SI.COMPLETE_INTAKE) == [],
+          str(IN.check_values(conn, SI.COMPLETE_INTAKE))[:300])
+
     print("\nintake data is CASE data, never knowledge")
     leaked = conn.execute(
         """select count(*) from source_envelopes
