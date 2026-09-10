@@ -13,7 +13,7 @@ $fail = 0
 python scripts/migrate.py; if ($LASTEXITCODE -ne 0) { $fail = 1 }
 foreach ($t in @('concept_layer','knowledge_layer','client_layer','run_engine',
                  'case_events','knowledge_inbox','prompt_contracts','measurement',
-                 'intake','normalization')) {
+                 'intake','normalization','ontology_seed')) {
     Write-Host ""
     Write-Host "=== $t ==="
     python "testing/test_$t.py"
