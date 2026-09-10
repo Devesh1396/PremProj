@@ -180,17 +180,74 @@ type, source role and access level.
 EXPLORE → PLAN → IMPLEMENT → TEST → FIX → DOCUMENT
 ```
 
-- Run `bash testing/run_all.sh` before every commit. All suites must pass.
+- Run `bash testing/run_all.sh` before every commit. All suites must pass —
+  and **read the exit code**, which is not the same thing. See **V1**.
 - Commit after each working milestone. Update `PROGRESS.md` with what
   genuinely works, tests passed, bugs fixed, and the next exact task.
 - **Never declare completion because files exist.** Verify execution.
 - Tests assert behaviour, not table existence. A test that only checks a
-  table exists is not a test.
+  table exists is not a test — and neither is one that compares two things
+  you wrote yourself. See **V2**.
 - Tests must be idempotent — clear their own fixtures and re-run cleanly
   against a used database.
 - Where something is ambiguous but a reasonable default exists, choose the
   simplest low-cost internal implementation and document the assumption
   rather than stopping.
+
+### V1. READ THE EXIT CODE. Never chain verification behind another command
+
+**Twice now.** Both times the suites ran, both times the result was not
+read, and both times a commit landed on a red tree.
+
+```bash
+# WRONG -- grep's exit code is what `&&` sees, and grep succeeded
+bash testing/run_all.sh 2>&1 | grep -E "ALL SUITES|FAILURES" && git commit ...
+
+# WRONG -- the pipe discards run_all.sh's status entirely
+bash testing/run_all.sh | tail -3 && git commit ...
+
+# RIGHT -- capture, check the status explicitly, then commit
+out=$(bash testing/run_all.sh 2>&1) || { echo "$out" | tail -40; exit 1; }
+echo "$out" | grep -q "ALL SUITES PASSED" || { echo "RED"; exit 1; }
+git commit ...
+```
+
+A pipeline's exit status is its LAST command's. `| tail`, `| grep`,
+`| head` all succeed cheerfully on the output of a failing suite. Running
+the suites and not reading the result is the same failure as not running
+them, with an extra step and more confidence.
+
+### V2. A test must not construct both halves of a comparison
+
+**Four times now** — bugs 49, 57, 59, 61. Every instance had the same
+shape: **the harness differed from production, so it proved nothing about
+production.**
+
+| | what was compared | what it proved |
+|---|---|---|
+| 49 | a path that meant one thing locally and another in CI | nothing, until CI went red |
+| 57 | a suite that could not see the condition it existed to catch | nothing, and it crashed instead of skipping |
+| 59 | the workflow's own code run in plain Node, where `fetch` is global | nothing — the node could never have run in `vm2` |
+| 61 | a hand-written "n8n row" against a hand-written "reference row" | nothing — both halves were invented, so they agreed |
+
+The rules that follow from it:
+
+- **The reference side comes from calling the real implementation.** Never
+  from a second hand-written copy of what you believe it does. If the
+  comparison is against `run_engine.py`, *call* `run_engine()`.
+- **Run the code the way production runs it.** Inside n8n's sandbox
+  restrictions, as the role the runtime connects as, at the version the VPS
+  installs. `testing/n8n_retry.js` uses `node:vm` with only the globals
+  `vm2` provides for exactly this reason.
+- **When you port an algorithm, drive the real module** and diff the output
+  over a corpus. Porting `n8n`'s parameter binder and never running the
+  original is how the array-branch bug survived a full review (D32).
+- **Use the inputs a real caller produces.** `MODE: "PASS_A"` is not a mode
+  and no caller emits it; inventing it let the suite construct a matching
+  reference and report parity that did not exist.
+- **A check that cannot run must SKIP loudly**, never pass quietly. A green
+  suite that silently skipped its only real assertion is worse than a red
+  one.
 
 ---
 

@@ -1162,6 +1162,17 @@ chain did not gate on its exit code. The rule in `CLAUDE.md` is to run the
 suites before every commit; running them and not reading the result is the
 same failure with an extra step.
 
+**It happened a second time**, at commit `2f5448d`, in a slightly different
+disguise: the verification was chained behind a `grep`, which succeeded on
+the output of a failing suite, so `&&` saw success. Both instances are now
+**rule V1 in `CLAUDE.md`**, with the wrong and right shell forms written
+out, because twice is a pattern and a `PROGRESS` entry is not where a
+session looks first.
+
+The companion rule, **V2**, is the four-instance one: a test must not
+construct both halves of a comparison, and the reference side must come
+from calling the real implementation (bugs 49, 57, 59, 61).
+
 ## The E1 two-pass rule is enforced, not documented
 `trg_enforce_two_pass` rejects an insert where Pass A and Pass B in the
 same cycle carry different prompt hashes:
