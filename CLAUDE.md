@@ -249,10 +249,16 @@ engine emits both, and they are never interchangeable. `<CONTROL_BLOCK>`
 is ~17 typed fields for routing and gating; `<..._HANDOFF>` is what the
 next engine thinks with. A run missing its required handoff repairs and
 then dead-letters — a valid control block is not evidence that an engine
-did its work. **E6 and E7 have no default mode**: E6 emits a full state on
-`INIT`/`REBUILD` and a delta on `UPDATE`, E7 a CASE or FOUNDATION handoff,
-and `mode=` must be passed. **A delta is never stored as
-`canonical_state`.**
+did its work. **A delta is never stored as `canonical_state`.**
+
+**Mode is passed, never hand-written (D24a).** `RUN_ENGINE` injects a
+`<RUNTIME_INVOCATION>` envelope — engine, mode, pass, expected handoff
+blocks — ahead of the payload, once, for every engine. **Never put a
+`"MODE"` key in `structured_input`**; a test walks `scripts/` and fails if
+anything outside `run_engine.py` does. **E6 and E7 have no default mode**
+and `mode=` must be passed: E6 `INIT`/`REBUILD` emit a full state and
+`UPDATE` a delta; E7 has four modes — `FOUNDATION` and `UPDATE` share the
+foundation handoff, `CASE` and `INBOX` have their own.
 
 **The case track runs end to end.** `scripts/client_new.py` takes a
 submitted intake to the practitioner's review queue: E6 → E1 Pass A →

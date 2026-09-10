@@ -18,7 +18,7 @@ before 2026-09-09; all of it has now.
 | Engines | All seven canonical prompts installed; E6 → E1 Pass A → E7 → E1 Pass B proven **live** |
 | Ontology | 26 domains, 269 concepts seeded from the curriculum, hash-verified |
 | Backup | Restore drill performed 2026-09-10; roles gap found and fixed |
-| Bugs | 50 found and fixed, each with a regression test |
+| Bugs | 53 found and fixed, each with a regression test |
 
 **D5 is ANSWERED and Engine 1 is not to be staged.** Measured on a live
 provider 2026-09-09 (see *D5 ANSWERED* below):
@@ -833,6 +833,35 @@ does not.
     is its claim; the row is the fact. The general form of the lesson —
     typed values come from typed places, the handoff is prose-shaped and is
     reasoning — is in D24 and matters for the n8n port too.
+
+51. **The selected mode was resolved and never transmitted.** It went into
+    provider `params`; the fixture read it and
+    `openai_compatible_provider` ignores `params` entirely, so `INIT`
+    versus `REBUILD` — Engine 6 emitting a full state versus a delta —
+    reached the wire as nothing. E1 looked fine only because
+    `client_new.py` hand-wrote `"MODE": "PASS_A"`, which is the accident
+    rather than the fix. `RUN_ENGINE` now injects a
+    `<RUNTIME_INVOCATION>` envelope for every engine and no call site
+    writes a mode. **The fixture could not have caught this** — it reads
+    the param the live path discards — so the test intercepts `urlopen`
+    and asserts against the bytes the live provider would have sent.
+52. **Two of Engine 7's four modes were unregistered, and one of them had
+    no output contract at all.** `ENGINE7_MODE` is
+    `FOUNDATION | UPDATE | CASE | INBOX` (§3262); only CASE and FOUNDATION
+    existed. UPDATE shares the foundation contract. **INBOX had no
+    substantive handoff block anywhere in the specification** — §55
+    describes the information gain in prose — so an INBOX run could only
+    ever have produced a control block, and reusing that as the handoff
+    would have been D24 again. §R10 was added (build-owned, D16).
+53. **`<RESEARCH_PRACTICE_FOUNDATION_HANDOFF>` and
+    `<RESEARCH_PRACTICE_CASE_HANDOFF>` had no standalone opening tag in
+    their field templates.** A model following either literally would emit
+    a block the runtime cannot find. The case tag passed the first check
+    only because it appears standalone in the §R3 *example*. Both are
+    build-owned (D16, Parts II/III), so the prompt was corrected rather
+    than the verifier taught to accept a formatting accident — and the
+    verifier now requires the standalone **opening** line, keeping the
+    closing-tag check as a second assertion.
 
 
 **Also, and recorded rather than amended away:** commit `c99ebf4` was made
