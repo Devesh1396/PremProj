@@ -214,12 +214,12 @@ Database is in India; model inference is not. Engine payloads carry
 
 ## State as of 2026-09-10
 
-**Complete and verified** — M0 foundations, M1 schema (14 migrations), M2
+**Complete and verified** — M0 foundations, M1 schema (15 migrations), M2
 engine execution layer, all seven canonical prompts installed, and build
 steps **10b, 12, 13, 14, 15** and step 11's registry half.
 
-77 tables, 22 views, 51 enums, 202 indexes, 64 check constraints,
-44 triggers, 29 RLS tables, 58 policies. **Fifteen test suites**, passing
+77 tables, 23 views, 51 enums, 202 indexes, 64 check constraints,
+44 triggers, 29 RLS tables, 58 policies. **Sixteen test suites**, passing
 from an empty database three consecutive times, idempotent, and verified in
 three capability configurations: full, **no pgvector**, and **no optional
 extension at all**.
@@ -266,11 +266,26 @@ normalization → E7 → E1 Pass B → E2 → E3 → E6, on one prompt hash. It
 stops at the queue by design — Engine 5 is gated on a practitioner
 decision, and an open HOLD never stops the analysis (hard rule 9).
 
-**Next:** author `workflows/run_engine.json`, the n8n `RUN_ENGINE`
-subworkflow. Both registries it needs exist, and `jsonschema` and `ajv`
-are proven to agree on the stored contract. **No n8n credentials are
-required** — `scripts/local_n8n.sh` installs n8n from npm and runs a
-workflow headlessly. See `BUILD_GUIDE.md`.
+**`workflows/run_engine.json` is built and proven byte-identical to the
+Python reference (D26).** One golden corpus, two implementations: 15
+requests identical to the byte, 15 responses identical field for field.
+The JavaScript under test is extracted from the workflow at run time, so a
+copy cannot drift from it.
+
+**Engine runs set transaction-local client scope (D25).** `RUN_ENGINE`
+could not run as `phi_runtime` at all before this — every run went around
+the policies because `DATABASE_URL` connects as a superuser. Every write is
+now inside a transaction that calls `set_client_scope()` first, and the
+workflow mirrors it per Postgres node.
+
+**Next:** step 16, the Knowledge Factory (K02–K11). Until it runs, Engine 7
+retrieves from an empty library and Pass B reasons from an empty retrieval
+set — that is expected, not a bug, and `PROGRESS.md` says so before the
+first full case is run.
+
+**Before deploying:** `scripts/local_n8n.sh` pins n8n **2.35.7**. What the
+VPS runs is **unknown and unrecorded**, and workflow JSON is
+version-sensitive. See `docs/OPERATIONS.md` "n8n version".
 
 ## Do NOT build
 

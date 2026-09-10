@@ -210,10 +210,16 @@ to agree on the stored document over 26 control blocks, verdict **and**
 blamed field, in `test_contract_registry.py`, and CI installs `ajv@8` so
 it is a real gate.
 
+**BUILT.** `workflows/run_engine.json`, 13 nodes. Parity is **byte-identical**
+(D26): 15 requests identical to the byte and 15 responses identical field
+for field, against one golden corpus, with the JavaScript extracted from
+the workflow at run time so a copy cannot drift from it.
+
 **No n8n credentials are required.** `scripts/local_n8n.sh` installs n8n
-from npm (the container registries are blocked in some environments),
-seeds a `phi_runtime` credential from `.env.local`, imports a workflow and
-runs it headlessly.
+from npm at a **pinned** version (the container registries are blocked in
+some environments), seeds a `phi_runtime` credential from `.env.local`,
+imports a workflow and runs it headlessly. What the VPS runs is unknown —
+`docs/OPERATIONS.md` "n8n version".
 
 **The port must mirror the reference on all three outputs, not two.** D24:
 a run produces human output, a substantive handoff, and a control block.
@@ -417,8 +423,8 @@ GPG encryption and an off-site target configured.
 10    done: seven canonical prompts + foundation domain seed
 10b   DONE: measured live. 19/19 parts both passes, no degradation,
       $0.386/cycle. D5 stands — do not stage Engine 1.
-11    n8n RUN_ENGINE subworkflow         <- registries BUILT (012, 013);
-                                         workflow JSON is the next task
+11    n8n RUN_ENGINE subworkflow         <- BUILT 2026-09-10, byte-identical
+                                         parity proven (D26)
 12/13 K1 ontology seed  ||  C3 normalization layer
                                          <- BOTH BUILT 2026-09-10
 14    Core Intake V1                     <- BUILT (009, 011, D22)
@@ -434,6 +440,6 @@ GPG encryption and an off-site target configured.
 24    backup restore drill               <- DONE 2026-09-10 (roles gap found)
 ```
 
-`bash testing/run_all.sh` must pass before every commit. Fifteen suites.
+`bash testing/run_all.sh` must pass before every commit. Sixteen suites.
 
 **This layer is frozen.** Do not reopen D16–D21 without instruction.

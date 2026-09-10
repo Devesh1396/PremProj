@@ -12,13 +12,13 @@ before 2026-09-09; all of it has now.
 
 | | |
 |---|---|
-| Schema | 14 migrations, 77 tables, 22 views, 51 enums, 202 indexes, 44 triggers, 58 policies, 29 RLS tables |
-| Suites | **15**, green from an empty database, each run followed by a re-run, and on the D15 floor with no optional extension available |
+| Schema | 15 migrations, 77 tables, 23 views, 51 enums, 202 indexes, 44 triggers, 58 policies, 29 RLS tables |
+| Suites | **16**, green from an empty database, each run followed by a re-run, and on the D15 floor with no optional extension available |
 | CI | `.github/workflows/tests.yml` — every push on every branch, **with and without pgvector** |
 | Engines | All seven canonical prompts installed; E6 → E1 Pass A → E7 → E1 Pass B proven **live** |
 | Ontology | 26 domains, 269 concepts seeded from the curriculum, hash-verified |
 | Backup | Restore drill performed 2026-09-10; roles gap found and fixed |
-| Bugs | 53 found and fixed, each with a regression test |
+| Bugs | 56 found and fixed, each with a regression test |
 
 **D5 is ANSWERED and Engine 1 is not to be staged.** Measured on a live
 provider 2026-09-09 (see *D5 ANSWERED* below):
@@ -286,6 +286,33 @@ have been. The sequence executed perfectly and the thinking did not move.
   asserted to reach specific downstream **inputs**, captured from what was
   actually transmitted. Plus the negative: a perfect control block with no
   handoff must dead-letter.
+
+### Step 11 — n8n `RUN_ENGINE` `BUILT 2026-09-10`
+`workflows/run_engine.json`, 13 nodes, mirroring `scripts/run_engine.py`
+rather than reinterpreting it: three registries read as rows, the runtime
+envelope, three separate outputs, the repair and dead-letter branch, cost
+accounting, and transaction-local client scope on every write.
+
+**Parity is byte-identical, not behavioural** (D26). One golden corpus,
+two implementations — the third use of the pattern the contract registry
+established, and the third time it caught something:
+
+- **15 requests, identical to the byte** — envelope, key order,
+  indentation, escaping. Covers every engine, every E6 and E7 mode, both
+  E1 passes, non-ASCII, integral floats, empty containers, every JSON
+  escape, deep nesting and large integers.
+- **15 responses, identical field for field** — valid execution, an
+  invalid control block three ways, a missing handoff, an empty handoff
+  block, the wrong block for the mode, a fenced control block, a handoff
+  whose value lines look like keys, an empty response, and token
+  accounting including reasoning tokens.
+- The JavaScript under test is **extracted from the workflow at run time**,
+  so a copy cannot drift from the thing it claims to test.
+
+No paid live calls were made to prove any of it.
+
+**Pinned to n8n 2.35.7**, and what the VPS runs is unknown — see
+`docs/OPERATIONS.md` "n8n version" before deploying.
 
 ### Step 15 — `CLIENT_NEW` `BUILT 2026-09-10`
 `scripts/client_new.py`. A submitted intake to the practitioner's queue in
@@ -908,6 +935,34 @@ being thin is the expected state of the system today.
     than the verifier taught to accept a formatting accident — and the
     verifier now requires the standalone **opening** line, keeping the
     closing-tag check as a second assertion.
+
+54. **`RUN_ENGINE` could not run as `phi_runtime` at all.** Connecting as
+    the role n8n uses and calling `run_engine()` failed on its FIRST
+    statement, both for a client run and for a knowledge-clock run:
+    `InsufficientPrivilege: new row violates row-level security policy for
+    table "engine_runs"`. Two causes. Nothing ever called
+    `set_client_scope()` — it appears only in `test_case_events.py`. And
+    the policy `client_id = current_client_scope()` can never match a
+    knowledge-clock run, which has no client (D18). **The Python reference
+    has only ever worked because `DATABASE_URL` connects as `phi_admin`,
+    which is SUPERUSER and bypasses RLS** — every engine run this system
+    has made went around the policies rather than through them. D25 and
+    migration `014`.
+55. **Python and JavaScript serialized the request differently, in two
+    measurable ways.** Python escaped non-ASCII to `\uXXXX` by default and
+    wrote integral floats as `78.0` where JavaScript wrote `78`. Either
+    would have produced a different model request from the same inputs
+    with nothing to notice, because the prompt hash plus the request IS
+    the call. `canonical_json()` fixes both (D26).
+56. **The two validators phrased the same violation differently, and that
+    string is not cosmetic.** `jsonschema` says `'CASE_VERSION' is a
+    required property`; `ajv` says `must have required property
+    'CASE_VERSION'`. It is persisted to `engine_runs.error_detail` and it
+    is what the repair prompt sends the model on attempt two — so n8n
+    would have asked the model to fix something in different words than
+    the reference does, on the one retry that matters.
+    `format_violation()` defines the wording and both sides build it from
+    their own library's structured error data.
 
 
 **Also, and recorded rather than amended away:** commit `c99ebf4` was made
