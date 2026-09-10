@@ -12,12 +12,13 @@ before 2026-09-09; all of it has now.
 
 | | |
 |---|---|
-| Schema | 10 migrations, 74 tables, 17 views, 58 policies, 29 RLS tables |
-| Suites | **9**, green from an empty database, each run followed by a re-run against the used database |
-| CI | `.github/workflows/tests.yml` — every PR and every push to `main`, **with and without pgvector** |
+| Schema | 10 migrations, 74 tables, 17 views, 51 enums, 197 indexes, 40 triggers, 58 policies, 29 RLS tables |
+| Suites | **11**, green from an empty database three consecutive times, each run followed by a re-run against the used database |
+| CI | `.github/workflows/tests.yml` — every push on every branch, **with and without pgvector** |
 | Engines | All seven canonical prompts installed; E6 → E1 Pass A → E7 → E1 Pass B proven **live** |
+| Ontology | 26 domains, 269 concepts seeded from the curriculum, hash-verified |
 | Backup | Restore drill performed 2026-09-10; roles gap found and fixed |
-| Bugs | 37 found and fixed, each with a regression test |
+| Bugs | 42 found and fixed, each with a regression test |
 
 **D5 is ANSWERED and Engine 1 is not to be staged.** Measured on a live
 provider 2026-09-09 (see *D5 ANSWERED* below):
@@ -41,9 +42,14 @@ so a full 8-call new-client cycle lands near **$0.75–0.80** on
 `gemini-3.8-flash`. The free tier (20 requests/day/model) is not viable for
 this system — billing is a prerequisite, not an optimisation.
 
+**Steps 12, 13 and 14 are now BUILT** — K1 ontology seed, C3 normalization
+layer, and Core Intake V1 (exclusions first, `DECISIONS.md` D22). See their
+sections below.
+
 **What is NOT done, and should not be assumed:**
-- Steps 11–23. Step 14 (intake form V1) gates the entire case track and is
-  the largest unstarted piece; 11, 12 and 13 are unblocked and parallel.
+- Step 11 (n8n `RUN_ENGINE` subworkflow) and steps 15–23.
+- Step 15 `CLIENT_NEW` is now the gating piece on the case track: intake →
+  E6 v1 already produces its input, so what remains is orchestration.
 - `scripts/backup.sh` has never run **on the VPS**, under cron, with GPG
   encryption or an off-site target. The drill could not exercise those paths.
 - `STRIP_IDENTITY_FROM_ENGINE_PAYLOADS` is documented and **not enforced**
@@ -205,6 +211,60 @@ RHT `NOT_ASSESSED` carries "absence is not evidence of normality" and no
 scores; a `COMPLETED` claim with nothing linked is downgraded to
 `NOT_ASSESSED`; a male client is not asked the reproductive questions while
 a female client with no answers is.
+
+### Step 13 — C3 normalization layer `BUILT 2026-09-10`
+`scripts/normalize.py`. Resolves a Pass A `NORMALIZATION_PHRASES` entry
+through the cheapest tier that can answer it and stops there:
+
+```
+cache -> exact alias -> structured identifier (LOINC/RxNorm/ICD/SNOMED)
+      -> trigram -> semantic embedding -> LLM
+```
+
+The LLM is the last tier, not the first, and `test_normalization.py`
+proves it by installing an LLM callable that raises if it is reached: the
+deterministic tiers must answer without it.
+
+- **Extraction proposes; it never creates canonical.** An unresolved
+  phrase becomes a concept with `status='PROPOSED'` and is deliberately
+  **not** cached, so a proposal cannot harden into a fact by being reused.
+- **Confusable pairs are checked before any answer is returned**,
+  including the LLM's. A resolution that would merge a
+  `CONFUSABLE_DO_NOT_MERGE` pair is refused at the exit, not filtered at
+  one tier (D3).
+- Confirmed mappings are written back as aliases, so a phrase costs a
+  model call at most once.
+- Escalation is **impact-ranked and capped** per week (D8), not
+  uncertainty-ranked: a low-impact unknown is logged, not queued.
+
+### Step 12 — K1 ontology seed `BUILT 2026-09-10`
+`scripts/seed_ontology.py`. Seeds **26 domains and 269 concepts** from
+`knowledge/seed/foundation_domains.md`, hash-verified against the same
+body hash `test_prompt_contracts.py` asserts, so the seed cannot drift
+from the curriculum without the seeder refusing to run.
+
+Deterministic — no LLM. The A-Z structure maps to
+`(concept_type, domain_type, is_core, priority)`; S and T-Z are scaffold
+sections and correctly seed nothing.
+
+- Every concept carries provenance back to its domain letter.
+- 21 existing concepts reused rather than duplicated; `canonical_key`
+  unique and shaped `^[A-Z][A-Z0-9_]{2,79}$`.
+- 12 aliases attached as **aliases**, never as second canonicals.
+- 6 `CONFUSABLE_DO_NOT_MERGE` pairs generated **from structure** —
+  siblings whose trigram similarity lands in 0.45-0.85 — with notes and
+  mirrors, so C3 refuses them.
+- Re-seeding is idempotent.
+
+Seeding and then reading the result is what found the parser bugs: domains
+cross-reference other domains' concept types after their pivot line, which
+had "lipids" and "BP" landing as `EXERCISE` concepts; imperative fragments
+were becoming concepts; and `menopause / perimenopause` was making a
+clinically distinct state an alias.
+
+`test_ontology_seed.py` asserts the hash guard, idempotency, provenance,
+alias separation, the confusable mirrors, seed **quality**, and — per D13 —
+that the seed is explicitly **not complete**.
 
 ### Verification
 Ran against live PostgreSQL 16, not inspected by eye.
@@ -499,6 +559,44 @@ does not.
     `NO — FORK DETECTED` sends the reader hunting an architectural
     violation that is not there. Now `INCOMPLETE`, still a non-zero exit.
 
+38. **`missing_data_reports.engine` was `NOT NULL` over E1–E7, so an
+    intake gap had no honest home.** Intake is not an engine; the choices
+    were to invent a fake attribution, duplicate the whole gap machinery
+    for intake, or make the column tell the truth. `engine` is now
+    nullable, `submission_id` was added, and
+    `ck_gap_has_a_source CHECK (num_nonnulls(engine, submission_id) = 1)`
+    makes an intake gap impossible to launder into an engine attribution
+    and an engine gap impossible to file as intake.
+39. **Making `engine` nullable silently broke `v_missing_data_recurrence`.**
+    Its `array_agg` started returning `{NULL}` for intake-sourced gaps —
+    the view still ran, so nothing failed; it just reported nonsense. The
+    view was rebuilt in the same migration. (`CREATE OR REPLACE VIEW`
+    cannot insert a column mid-list, so it is a drop and recreate.)
+40. **`record_gaps` auto-wrote `classification`.** Migration 005's
+    invariant is that `classification` stays NULL until a human triages
+    the gap; writing it from code turns triage into a rubber stamp.
+    **Caught by an existing test, not by me** — which is the argument for
+    tests that assert an invariant rather than a table. Severity is still
+    written, because severity follows from the field catalogue and is not
+    a judgment.
+41. **The resolver wrote lowercase tier names into `resolution_method`.**
+    Every method column is that enum. Fixed at a single mapping point
+    (`DB_METHOD`) rather than at each call site, so a new tier cannot be
+    added without deciding what it is called in the database.
+42. **A test passed on run 1 and failed on run 2.**
+    `test_normalization.py` left a confusable pair behind and
+    `test_concept_layer.py` asserted a **global** confusable-pair count, so
+    the pairs K1 now seeds by design broke it. Both halves were wrong: the
+    test now cleans up after itself, and the assertion is scoped to its own
+    fixtures. A global count assertion cannot survive a seeder whose job is
+    to add rows.
+
+**Also, and recorded rather than amended away:** commit `c99ebf4` was made
+on a red suite. `run_all.sh` printed `FAILURES PRESENT` and the command
+chain did not gate on its exit code. The rule in `CLAUDE.md` is to run the
+suites before every commit; running them and not reading the result is the
+same failure with an extra step.
+
 ## The E1 two-pass rule is enforced, not documented
 `trg_enforce_two_pass` rejects an insert where Pass A and Pass B in the
 same cycle carry different prompt hashes:
@@ -608,15 +706,19 @@ failed attempt's tokens included in the run total.
 `python3 scripts/measure_engine1.py` costs ~$0.39; do it to re-measure after
 a model change, not to re-confirm a settled result.)*
 
-**Step 14 is BUILT** (Core Intake V1, see above). What remains on the case
-track is **step 15, `CLIENT_NEW`**: wiring intake → E6 v1 → E1 Pass A →
+**Steps 12, 13 and 14 are BUILT** (K1 ontology seed, C3 normalization
+layer, Core Intake V1 — see above). What remains on the case track is
+**step 15, `CLIENT_NEW`**: wiring intake → E6 v1 → E1 Pass A →
 normalization → E7 → E1 Pass B → E2 → E3 → review → E5 as one workflow.
-`scripts/intake.py` already produces the E6 input, so step 15 is
-orchestration rather than new reasoning.
+`scripts/intake.py` produces the E6 input and `scripts/normalize.py`
+resolves Pass A's phrases, so step 15 is orchestration rather than new
+reasoning.
 
-**Unblocked and parallel to it:** step 11 (n8n `RUN_ENGINE` subworkflow,
-now well-specified because live provider behaviour is known), step 12 (K1
-ontology seed) and step 13 (C3 normalization layer).
+**Step 11 (n8n `RUN_ENGINE` subworkflow) is the one remaining parallel
+track**, and it is now well-specified because live provider behaviour is
+known. It needs **no n8n credentials**: the workflow is authored as JSON
+and validated against a local n8n instance and the existing fixtures. See
+*Step 11 — feasibility* below.
 
 **Cheap now, awkward later:** enforce
 `STRIP_IDENTITY_FROM_ENGINE_PAYLOADS` in `RUN_ENGINE` before real client

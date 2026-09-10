@@ -202,7 +202,7 @@ with `SELECT set_client_scope($client_id)` inside the transaction.
 
 **Acceptance:** identical results to the Python reference on the same fixtures; malformed output dead-letters; cost recorded.
 
-## Step 12 — K1 ontology seed *(parallel with 13)*
+## Step 12 — K1 ontology seed *(BUILT 2026-09-10)*
 
 Seed the concept dictionary **before** large-scale extraction. Expand the
 core Wave-1 areas one level into physiology, drivers, biomarkers and
@@ -211,7 +211,13 @@ do not enumerate by hand.
 
 **Acceptance:** seeded concepts across all core domains; auto-generated normalization tests with roughly half negative pairs; `v_confusable_pairs` populated.
 
-## Step 13 — C3 normalization layer *(parallel with 12)*
+**Built.** `scripts/seed_ontology.py`: 26 domains, 269 concepts, 12
+aliases, 6 structure-derived confusable pairs, from a hash-verified
+curriculum. Idempotent. `test_ontology_seed.py` also asserts the seed is
+**not complete** (D13) — a seeded ontology is a starting position, not a
+finished dictionary.
+
+## Step 13 — C3 normalization layer *(BUILT 2026-09-10)*
 
 `NORMALIZATION_PHRASES` from E1 Pass A → canonical concepts.
 
@@ -225,6 +231,13 @@ confidence, log low-impact uncertainty, escalate only high-impact
 ambiguity, capped weekly.
 
 **Acceptance:** "large post-meal glucose excursions … low muscle stimulus" resolves to the expected concept family; cache hit avoids a second LLM call; normalization tests pass including negative pairs.
+
+**Built.** `scripts/normalize.py`. The suite installs an LLM callable that
+**raises if it is reached**, so "cheapest tier first" is proven rather than
+asserted. Proposals are written `status='PROPOSED'` and deliberately not
+cached, so a guess cannot harden into a fact by reuse. The
+`CONFUSABLE_DO_NOT_MERGE` check runs at the exit, on every tier's answer
+including the LLM's.
 
 ## Step 14 — Intake form V1 *(Core Intake V1 built 2026-09-10)*
 
@@ -343,8 +356,9 @@ GPG encryption and an off-site target configured.
 10    done: seven canonical prompts + foundation domain seed
 10b   DONE: measured live. 19/19 parts both passes, no degradation,
       $0.386/cycle. D5 stands — do not stage Engine 1.
-11    n8n RUN_ENGINE subworkflow
+11    n8n RUN_ENGINE subworkflow         <- the one remaining parallel track
 12/13 K1 ontology seed  ||  C3 normalization layer
+                                         <- BOTH BUILT 2026-09-10
 14    Core Intake V1                     <- BUILT (009, D22)
 15    CLIENT_NEW workflow
 16    Knowledge Factory K02–K11
@@ -358,6 +372,6 @@ GPG encryption and an off-site target configured.
 24    backup restore drill               <- DONE 2026-09-10 (roles gap found)
 ```
 
-`bash testing/run_all.sh` must pass before every commit. Nine suites.
+`bash testing/run_all.sh` must pass before every commit. Eleven suites.
 
 **This layer is frozen.** Do not reopen D16–D21 without instruction.
