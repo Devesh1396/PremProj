@@ -8,8 +8,8 @@
 >   summarised or reworded; heading levels adjusted only so the parts nest correctly.
 > - **Part II, §R1–§R3** — operating detail retained verbatim from the earlier master
 >   specification because the runtime depends on it and Part I does not restate it.
-> - **Part III, §R4–§R9 and §88** — the required output contract: self-audits, human-readable
->   formats, the two machine-readable handoff blocks, and the orchestration control block.
+> - **Part III, §R4–§R10 and §88** — the required output contract: self-audits, human-readable
+>   formats, the three machine-readable handoff blocks, and the orchestration control block.
 > - **Appendix D** — the foundation domain curriculum, retained verbatim. Reference data for
 >   foundation building and the ontology seed, not a per-call instruction.
 >
@@ -3162,6 +3162,10 @@ HANDOFF TO REQUESTING ENGINE.
 
 ## R8. MACHINE-READABLE FOUNDATION HANDOFF <RESEARCH_PRACTICE_FOUNDATION_HANDOFF>
 
+Emitted in **FOUNDATION** and **UPDATE** mode. Both build the library; an
+UPDATE is a smaller foundation pass, not a different output contract.
+
+<RESEARCH_PRACTICE_FOUNDATION_HANDOFF>
 MODE:
 DOMAIN:
 SUBDOMAINS:
@@ -3195,6 +3199,9 @@ LAST_UPDATED:
 
 ## R9. MACHINE-READABLE CASE HANDOFF <RESEARCH_PRACTICE_CASE_HANDOFF>
 
+Emitted in **CASE** mode.
+
+<RESEARCH_PRACTICE_CASE_HANDOFF>
 MODE:
 CASE_RESEARCH_QUESTION:
 CLIENT_RELEVANT_CONTEXT:
@@ -3232,6 +3239,52 @@ ENGINE2_HANDOFF:
 ENGINE3_HANDOFF:
 ENGINE4_HANDOFF:
 </RESEARCH_PRACTICE_CASE_HANDOFF>
+
+## R10. MACHINE-READABLE INBOX HANDOFF <RESEARCH_PRACTICE_INBOX_HANDOFF>
+
+*Added by the build. §55 defines what Engine 7 must be able to report after
+processing a manually added source — "the practitioner should be able to see
+the information gain from the source" — and describes it in prose. No machine
+block carried it, so an INBOX run had no substantive output contract at all
+and the runtime had nothing to record but a control block.*
+
+Emitted in **INBOX** mode. The fields are §55's information-gain list and
+nothing more: what was extracted, how much of it was already known, what
+genuinely extended the library, and what needs a human. §56 versioning
+fields are included because reprocessing the same source must be
+distinguishable from processing it the first time.
+
+<RESEARCH_PRACTICE_INBOX_HANDOFF>
+MODE:
+SOURCE_REFERENCE:
+SOURCE_KIND:
+CREATOR_PROFILE_UPDATED:
+CONCEPTS_EXTRACTED:
+IMPLEMENTATION_PATTERNS_FOUND:
+ALREADY_KNOWN:
+EXTENDED_EXISTING:
+GENUINELY_NEW:
+CLAIMS_IDENTIFIED:
+CLAIMS_ALREADY_SUPPORTED:
+CLAIMS_REQUIRING_RESEARCH:
+SAFETY_ISSUES_IDENTIFIED:
+STRATEGIES_UPDATED:
+CANDIDATE_STRATEGIES_CREATED:
+CONTROVERSIES_TOUCHED:
+NEGATIVE_KNOWLEDGE_ADDED:
+INFORMATION_GAIN_SUMMARY:
+KNOWLEDGE_GAPS:
+NEXT_RESEARCH_QUESTIONS:
+SOURCE_VERSION:
+PROCESSING_VERSION:
+REPROCESSING_OF:
+</RESEARCH_PRACTICE_INBOX_HANDOFF>
+
+**A candidate strategy is still a candidate.** Nothing in this block
+promotes anything: `CANDIDATE_STRATEGIES_CREATED` names strategies at
+`AI_DISCOVERED_CANDIDATE`, and provenance rules apply unchanged.
+
+---
 
 ## 88. ORCHESTRATION CONTROL BLOCK — REQUIRED
 

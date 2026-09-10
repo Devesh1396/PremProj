@@ -93,7 +93,7 @@ def run_primary_path(conn) -> dict:
     # questions. Same prompt file, same hash -- the difference is context
     # and stopping point, not capability (D4).
     pass_a = RE.run_engine(conn, RE.EngineRequest(
-        engine="E1", structured_input={**intake, "MODE": "PASS_A", "E7_HANDOFF": None},
+        engine="E1", structured_input={**intake, "E7_HANDOFF": None},
         client_id=client_id, case_version_id=case_version_id,
         cycle_id=cycle_id, pass_label="A"))
     if pass_a.status != "SUCCEEDED":
@@ -114,7 +114,7 @@ def run_primary_path(conn) -> dict:
     # Pass B: the same specification with the Engine 7 slot populated.
     pass_b = RE.run_engine(conn, RE.EngineRequest(
         engine="E1",
-        structured_input={**intake, "MODE": "PASS_B",
+        structured_input={**intake,
                           "E7_HANDOFF": {"strategies": [], "source": "E7 run "
                                          f"{e7.run_id}"}},
         client_id=client_id, case_version_id=case_version_id,

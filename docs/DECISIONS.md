@@ -827,6 +827,70 @@ line-oriented format, they are authoritative (hard rule 1), and changing
 seven master specifications to suit a parser is the wrong direction. The
 parser was made lossless instead.
 
+### D24a — the requested mode is transmitted, not merely resolved
+
+`RUN_ENGINE` resolved `handoff_mode` and then never told the model. The
+mode went into provider `params`, the fixture read it, and
+`openai_compatible_provider` ignores `params` entirely — so `INIT` versus
+`REBUILD`, the difference between Engine 6 emitting a full state and
+emitting a delta, reached the wire as **nothing at all**.
+
+E1 looked fine only because `client_new.py` hand-wrote `"MODE": "PASS_A"`
+into its structured input. That is the accident, not the fix: a key a
+caller must remember is a key a caller will forget, and E6 and E7 duly
+did.
+
+`RUN_ENGINE` now injects a `<RUNTIME_INVOCATION>` envelope ahead of the
+payload — engine, mode, pass, the expected and required handoff blocks —
+**once, generically, for every engine**. The hand-written `MODE` keys are
+gone from `client_new.py`, `measure_engine1.py` and the suites, and a test
+asserts no script outside `run_engine.py` writes one. The repair retry
+rebuilds the same envelope, so attempt two is not a differently-shaped
+request.
+
+The envelope is runtime metadata, not engine specification: it says which
+mode was requested, and the **prompt** says what that mode means. n8n
+builds the identical string from the identical registry rows.
+
+*Rejected:* a fixture-level test. The fixture reads the param the live
+path throws away, which is exactly why this survived. The test intercepts
+`urlopen` and asserts against the bytes
+`openai_compatible_provider` would have sent.
+
+### D24b — §R8/§R9 corrected, §R10 added
+
+`RESEARCH_PRACTICE_FOUNDATION_HANDOFF`'s opening tag appeared only inside
+its §R8 heading, and `RESEARCH_PRACTICE_CASE_HANDOFF`'s only in the §R3
+example. A model following either field template literally would emit a
+block the runtime cannot find.
+
+**D16 draws the line and it falls on our side.** Part I §1–§87 is the
+client's text, verbatim and untouchable; Parts II/III §R1–§R9 are
+build-owned. So both were fixed to carry a standalone opening tag rather
+than teaching the verifier to accept a formatting accident. The verifier
+now requires a standalone **opening** line and keeps the closing-tag check
+as a second assertion.
+
+`ENGINE7_MODE` is `FOUNDATION | UPDATE | CASE | INBOX` (§3262) and only two
+were registered. **UPDATE** shares the foundation contract — an update is a
+smaller foundation pass, not a different output. **INBOX had no substantive
+output contract at all**: §55 defines what Engine 7 must report from a
+manually added source and describes it in prose, so an INBOX run could only
+ever have produced a control block. Reusing that as the handoff would be
+D24 again, so §R10 adds
+`<RESEARCH_PRACTICE_INBOX_HANDOFF>` carrying §55's information-gain fields
+verbatim plus §56's versioning, and states that a candidate strategy stays
+a candidate.
+
+Adding §R10 moved the composition header, the R-range assertions and the
+prompt hash together — those assertions exist because a merge accident
+once mis-stated the ranges, so they were updated, never relaxed.
+`MANIFEST.json`'s E7 entry was already stale before this change; only
+`sha256`, `chars` and `words` were refreshed. `sections_expected` is a
+hand-declared invariant with a different counting rule and was left alone
+rather than overwritten with a recount that would have changed all seven
+entries.
+
 ---
 
 ## OPEN

@@ -286,7 +286,7 @@ def main() -> int:
            values (%s,2,'NEW_CLIENT') returning cycle_id""",
         (context["client_id"],)).fetchone()[0]
     RE.run_engine(conn, RE.EngineRequest(
-        engine="E1", structured_input={"CASE_VERSION": 1, "MODE": "PASS_A"},
+        engine="E1", structured_input={"CASE_VERSION": 1},
         client_id=context["client_id"], cycle_id=lone_cycle, pass_label="A"))
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):

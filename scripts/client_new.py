@@ -315,8 +315,12 @@ def run_new_client(conn: psycopg.Connection, submission_id: str,
         # E1 Pass A. Same specification as Pass B, different context and
         # stopping point (D4) -- the two runs must record one prompt hash,
         # and trg_enforce_two_pass rejects the insert if they do not.
+        # No hand-written "MODE" key. RUN_ENGINE injects the resolved mode
+        # into the runtime envelope for every engine, so a caller cannot
+        # forget it -- which is exactly what happened to E6 and E7 while E1
+        # looked fine because this line existed.
         pass_a = _run(conn, outcome, "E1_PASS_A", engine="E1", pass_label="A",
-                      structured_input={**case_input, "MODE": "PASS_A"})
+                      mode="SINGLE", structured_input=case_input)
 
         # ------------------------------------------------------------------
         # C3. Pass A emits clinical phrases; Engine 7 should retrieve on
@@ -358,8 +362,9 @@ def run_new_client(conn: psycopg.Connection, submission_id: str,
         # eight routing booleans instead of strategies, evidence, expected
         # effects, applicability and implementation notes.
         pass_b = _run(conn, outcome, "E1_PASS_B", engine="E1", pass_label="B",
+                      mode="SINGLE",
                       structured_input={
-                          **case_input, "MODE": "PASS_B",
+                          **case_input,
                           "E7_HANDOFF": e7.structured,
                           "E1_PASS_A_HANDOFF": pass_a.structured,
                       })

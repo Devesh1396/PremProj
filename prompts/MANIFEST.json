@@ -79,8 +79,8 @@
   },
   {
     "file": "engine7_research_practice.md",
-    "words": 6618,
-    "chars": 51842,
+    "words": 11683,
+    "chars": 85040,
     "sections_present": 70,
     "sections_expected": 70,
     "has_control_tag": true,
@@ -88,6 +88,6 @@
     "has_addendum": true,
     "has_handoff": true,
     "control_chars": 0,
-    "sha256": "cb4104a957583c9f869f6a51d20bf29f1cfde4c2efeffa13160e6f5ff9d91aef"
+    "sha256": "c76428d6a4a4c234305ca9032871ae59668badda03a2ce2263541f367718a134"
   }
 ]

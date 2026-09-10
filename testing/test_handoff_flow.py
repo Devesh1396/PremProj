@@ -111,6 +111,23 @@ def main() -> int:
           and rebuild["CASE_MEMORY_DELTA"] is False, str(rebuild))
     check("E7 CASE and FOUNDATION are different blocks",
           LH.expected(conn, "E7", "CASE") != LH.expected(conn, "E7", "FOUNDATION"))
+    # §3262: ENGINE7_MODE is FOUNDATION | UPDATE | CASE | INBOX. All four,
+    # or RUN_ENGINE is not generic -- it just fails later for two of them.
+    check("all four E7 modes are registered",
+          {m for (e, m) in LH.HANDOFFS if e == "E7"}
+          == {"FOUNDATION", "UPDATE", "CASE", "INBOX"},
+          str(sorted(m for (e, m) in LH.HANDOFFS if e == "E7")))
+    check("UPDATE shares the foundation contract: it builds the library",
+          LH.expected(conn, "E7", "UPDATE")
+          == LH.expected(conn, "E7", "FOUNDATION"))
+    check("INBOX has its own block, not the control block reused (D24)",
+          LH.expected(conn, "E7", "INBOX")
+          == [("RESEARCH_PRACTICE_INBOX_HANDOFF", True)],
+          str(LH.expected(conn, "E7", "INBOX")))
+    check("...carrying the §55 information gain",
+          all(f in (REPO / "prompts" / "engine7_research_practice.md").read_text()
+              for f in ("CONCEPTS_EXTRACTED:", "ALREADY_KNOWN:", "GENUINELY_NEW:",
+                        "INFORMATION_GAIN_SUMMARY:", "SAFETY_ISSUES_IDENTIFIED:")))
     try:
         LH.expected(conn, "E1", "NO_SUCH_MODE")
         check("an unregistered mode fails loudly", False, "returned expectations")
@@ -345,6 +362,143 @@ def main() -> int:
               "select count(*) from client_case_versions where client_id=%s",
               (stop_client,)).fetchone()[0] == 0,
           str([s.name for s in stopped.steps]))
+
+    # ------------------------------------------------------------------
+    print("\nthe requested MODE reaches the wire (not just the fixture)")
+    # PROVIDER-LEVEL, deliberately. RUN_ENGINE resolved the mode and passed
+    # it to the provider as a param; the fixture read that param and a live
+    # provider ignores params entirely, so INIT versus REBUILD reached the
+    # actual request as nothing at all. A fixture-level assertion cannot
+    # catch that -- it is reading the thing the live path throws away --
+    # which is precisely why the bug survived.
+    #
+    # So intercept urlopen and read the bytes openai_compatible_provider
+    # would have sent.
+    import urllib.request
+
+    captured: list[dict] = []
+    wire_by_mode: dict[str, str] = {}
+
+    class FakeResponse:
+        def __init__(self, payload: dict) -> None:
+            self._body = json.dumps(payload).encode()
+
+        def read(self) -> bytes:
+            return self._body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc) -> bool:
+            return False
+
+    def fake_urlopen(request, timeout=None):
+        body = json.loads(request.data.decode())
+        captured.append(body)
+        engine = "E6"
+        for msg in body["messages"]:
+            if msg["role"] == "user":
+                engine = json.loads(
+                    msg["content"].split("</RUNTIME_INVOCATION>")[0]
+                    .replace("<RUNTIME_INVOCATION>", "").strip())["ENGINE"]
+        mode = json.loads(
+            body["messages"][-1]["content"].split("</RUNTIME_INVOCATION>")[0]
+            .replace("<RUNTIME_INVOCATION>", "").strip())["MODE"]
+        blocks = RE.fixture_handoffs(engine, mode, {"case_version": 1})
+        text = ("report\n"
+                + "".join(f"<{t}>\n{b}\n</{t}>\n" for t, b in blocks.items())
+                + f'<{RE.CONTROL_TAG}>\n'
+                  '{"CASE_VERSION":1,"ENGINE_RUN_STATUS":"SUCCEEDED"}\n'
+                  f'</{RE.CONTROL_TAG}>')
+        return FakeResponse({
+            "choices": [{"message": {"content": text}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 10,
+                      "total_tokens": 20},
+        })
+
+    saved_env = {k: os.environ.get(k) for k in
+                 ("LLM_API_KEY", "LLM_BASE_URL", "MODEL_ANALYSIS", "MODEL_RESEARCH")}
+    saved_urlopen = urllib.request.urlopen
+    os.environ["LLM_API_KEY"] = "test-key-not-a-real-one"
+    os.environ["LLM_BASE_URL"] = "https://example.invalid/v1"
+    os.environ["MODEL_ANALYSIS"] = "test-model"
+    os.environ["MODEL_RESEARCH"] = "test-model"
+    urllib.request.urlopen = fake_urlopen
+    try:
+        provider, provider_mode = RE.select_provider()
+        check("the LIVE provider is the one under test",
+              provider is RE.openai_compatible_provider and provider_mode == "live")
+        for engine, mode, role in (("E6", "INIT", "MODEL_ANALYSIS"),
+                                   ("E6", "REBUILD", "MODEL_ANALYSIS"),
+                                   ("E7", "CASE", "MODEL_RESEARCH"),
+                                   ("E7", "UPDATE", "MODEL_RESEARCH"),
+                                   ("E7", "INBOX", "MODEL_RESEARCH"),
+                                   ("E1", None, "MODEL_ANALYSIS")):
+            captured.clear()
+            result = RE.run_engine(conn, RE.EngineRequest(
+                engine=engine, mode=mode, model_role=role, client_id=client,
+                structured_input={"CASE_VERSION": 1}))
+            expected_mode = mode or "SINGLE"
+            check(f"{engine}/{expected_mode}: the request reached the provider",
+                  bool(captured) and result.status == "SUCCEEDED",
+                  f"{result.status}: {result.error}")
+            if not captured:
+                continue
+            # The user message IS the wire content, decoded one JSON level.
+            # Asserting against json.dumps() of the whole body would be
+            # asserting against escaping, not against what the model reads.
+            sent = captured[0]["messages"][-1]["content"]
+            wire_by_mode[expected_mode] = sent
+            check(f"{engine}/{expected_mode}: the mode is IN THE REQUEST BODY",
+                  f'"MODE": "{expected_mode}"' in sent, sent[:200])
+            check(f"{engine}/{expected_mode}: and the engine it was asked of",
+                  f'"ENGINE": "{engine}"' in sent)
+            check(f"{engine}/{expected_mode}: so is the block it must produce",
+                  all(t in sent for t, _r in LH.expected(conn, engine, expected_mode)))
+            check(f"{engine}/{expected_mode}: the envelope precedes the payload",
+                  sent.index(f"<{RE.ENVELOPE_TAG}>") == 0
+                  and sent.index("CASE_VERSION") > sent.index(f"</{RE.ENVELOPE_TAG}>"))
+    finally:
+        urllib.request.urlopen = saved_urlopen
+        for key, value in saved_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    check("the suite is back on the fixture provider",
+          RE.select_provider()[1] == "fixture")
+
+    # INIT and REBUILD must be DISTINGUISHABLE on the wire, or Engine 6
+    # cannot know whether to emit a full state or a delta. Compared as
+    # actual captured requests rather than as two string literals, which
+    # would assert nothing.
+    check("INIT and REBUILD produce different request bodies",
+          wire_by_mode.get("INIT") and wire_by_mode.get("REBUILD")
+          and wire_by_mode["INIT"] != wire_by_mode["REBUILD"],
+          str(sorted(wire_by_mode))[:120])
+    check("...differing in the MODE the model is told",
+          '"MODE": "INIT"' in wire_by_mode.get("INIT", "")
+          and '"MODE": "REBUILD"' in wire_by_mode.get("REBUILD", ""))
+
+    # ------------------------------------------------------------------
+    print("\nno call site sets the mode by hand")
+    # E1 transmitted its mode only because client_new.py hand-wrote
+    # "MODE": "PASS_A" into the structured input. That is the accident, not
+    # the fix: a key a caller must remember is a key a caller will forget,
+    # and E6 and E7 duly did. There is one source now, and this keeps it
+    # that way.
+    offenders = []
+    for path in sorted((REPO / "scripts").glob("*.py")):
+        if path.name == "run_engine.py":
+            continue   # the one place that is allowed to set it
+        for number, line in enumerate(path.read_text().splitlines(), 1):
+            if '"MODE"' in line and not line.lstrip().startswith("#"):
+                offenders.append(f"{path.name}:{number}")
+    check("no script hand-writes a MODE key into an engine payload",
+          not offenders, str(offenders))
+    check("RUN_ENGINE injects it instead",
+          '"MODE": handoff_mode' in (REPO / "scripts" / "run_engine.py").read_text())
 
     SI.clear(conn)
     conn.execute("delete from concepts where origin_detail like 'C3_NORMALIZATION%'")

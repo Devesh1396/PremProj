@@ -63,6 +63,10 @@ TRANSPORT_BACKOFF_CAP = 60.0    # never sleep longer than this between tries
 RETRYABLE_HTTP_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
 
 CONTROL_TAG = "CONTROL_BLOCK"
+# What the runtime is asking for on THIS call. Not part of any
+# engine specification: the prompts say what a mode means, this says
+# which one was requested.
+ENVELOPE_TAG = "RUNTIME_INVOCATION"
 
 # The engine -> specification map and the PromptMissing class live in
 # load_prompts.py, which owns the registry. Keeping a second copy here
@@ -281,6 +285,21 @@ def validate_control(conn: psycopg.Connection, control: dict[str, Any]) -> list[
     )
 
 
+def build_user_prompt(envelope: dict[str, Any], structured_input: dict[str, Any]) -> str:
+    """The model request: what was asked for, then the case payload.
+
+    One function so the request text has one definition. The n8n port
+    builds the identical string from the identical registry rows, and the
+    repair retry rebuilds it rather than dropping the envelope on attempt
+    two -- which is how a retry would silently become a differently-shaped
+    request.
+    """
+    return (f"<{ENVELOPE_TAG}>\n"
+            f"{json.dumps(envelope, indent=2)}\n"
+            f"</{ENVELOPE_TAG}>\n\n"
+            f"{json.dumps(structured_input, indent=2)}")
+
+
 def repair_instruction(errors: list[str]) -> str:
     listed = "\n".join(f"  - {e}" for e in errors[:12])
     return (
@@ -351,6 +370,26 @@ def fixture_handoffs(engine: str, mode: str, params: dict) -> dict[str, str]:
         )}
 
     if engine == "E7":
+        if mode == "INBOX":
+            # §R10, added by the build because §55 described the information
+            # gain in prose and no machine block carried it.
+            return {"RESEARCH_PRACTICE_INBOX_HANDOFF": (
+                f"MODE: {mode}\n"
+                f"SOURCE_REFERENCE: {s('SOURCE')}\n"
+                "SOURCE_KIND: OTHER\n"
+                f"CONCEPTS_EXTRACTED: {s('CONCEPT')}\n"
+                f"ALREADY_KNOWN: {s('ALREADY-KNOWN')}\n"
+                f"GENUINELY_NEW: {s('GENUINELY-NEW')}\n"
+                f"CLAIMS_IDENTIFIED: {s('CLAIM')}\n"
+                f"SAFETY_ISSUES_IDENTIFIED: {s('SAFETY-ISSUE')}\n"
+                f"CANDIDATE_STRATEGIES_CREATED: {s('CANDIDATE')}\n"
+                f"INFORMATION_GAIN_SUMMARY: {s('INFORMATION-GAIN')}\n"
+                "SOURCE_VERSION: 1\n"
+                "PROCESSING_VERSION: 1\n"
+                "REPROCESSING_OF:"
+            )}
+        # FOUNDATION and UPDATE share the foundation contract (§R8): an
+        # UPDATE is a smaller foundation pass, not a different output.
         tag = ("RESEARCH_PRACTICE_CASE_HANDOFF" if mode == "CASE"
                else "RESEARCH_PRACTICE_FOUNDATION_HANDOFF")
         if mode == "CASE":
@@ -682,7 +721,32 @@ def run_engine(conn: psycopg.Connection, req: EngineRequest) -> EngineResult:
          json.dumps(req.run_context)),
     )
 
-    user_prompt = json.dumps(req.structured_input, indent=2)
+    # THE RUNTIME ENVELOPE.
+    #
+    # RUN_ENGINE resolved the mode and then never told the model. The
+    # fixture provider got it as a param and a live provider ignored
+    # params entirely, so `mode="INIT"` versus `mode="REBUILD"` -- the
+    # difference between Engine 6 emitting a full state and emitting a
+    # delta -- reached the wire as nothing at all. The fixture could not
+    # catch it: it was reading the param the live path throws away.
+    #
+    # Injected here, once, for every engine. E1 already transmitted its
+    # mode because client_new.py hand-wrote "MODE": "PASS_A" into the
+    # structured input, and that is the accident this replaces: a key a
+    # caller has to remember is a key a caller will forget, and E6 and E7
+    # duly did. Callers now pass `mode=` and nothing else.
+    #
+    # Generic on purpose -- no engine-specific branches. The envelope says
+    # what was requested; the PROMPT says what each mode means.
+    envelope = {
+        "ENGINE": req.engine,
+        "MODE": handoff_mode,
+        "PASS": req.pass_label,
+        "EXPECTED_HANDOFF_BLOCKS": [tag for tag, _r in expected_handoffs],
+        "REQUIRED_HANDOFF_BLOCKS": [tag for tag, r in expected_handoffs if r],
+        "CONTROL_BLOCK_REQUIRED": True,
+    }
+    user_prompt = build_user_prompt(envelope, req.structured_input)
     params = {
         "engine": req.engine,
         "pass_label": req.pass_label,
@@ -761,7 +825,8 @@ def run_engine(conn: psycopg.Connection, req: EngineRequest) -> EngineResult:
             "update engine_runs set status='REPAIR_RETRY', attempts=%s where run_id=%s",
             (attempts, run_id),
         )
-        user_prompt = json.dumps(req.structured_input, indent=2) + "\n\n" + repair_instruction(errors)
+        user_prompt = (build_user_prompt(envelope, req.structured_input)
+                       + "\n\n" + repair_instruction(errors))
 
     if errors or control is None:
         # Malformed output is never inserted into the knowledge or case

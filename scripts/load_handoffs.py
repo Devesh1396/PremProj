@@ -84,6 +84,22 @@ HANDOFFS: dict[tuple[str, str], list[tuple[str, bool, str, str]]] = {
     ("E7", "FOUNDATION"): [(
         "RESEARCH_PRACTICE_FOUNDATION_HANDOFF", True, "engine7 §R8",
         "Knowledge-clock output. CASE_VERSION 0 (D18).")],
+    # §3262: ENGINE7_MODE is FOUNDATION | UPDATE | CASE | INBOX. All four are
+    # registered, because "RUN_ENGINE is generic" and "two of the four modes
+    # fail at the mode lookup" cannot both be true.
+    ("E7", "UPDATE"): [(
+        "RESEARCH_PRACTICE_FOUNDATION_HANDOFF", True, "engine7 §R8",
+        "An UPDATE is a smaller foundation pass and shares the foundation "
+        "contract -- it builds the library, so it reports on the library. "
+        "Knowledge clock, CASE_VERSION 0 (D18).")],
+    ("E7", "INBOX"): [(
+        "RESEARCH_PRACTICE_INBOX_HANDOFF", True, "engine7 §R10",
+        "The §55 information gain from one manually added source, as a "
+        "machine block. Added by the build: §55 defined what Engine 7 must "
+        "report and described it in prose, so an INBOX run had no "
+        "substantive output contract and the runtime had nothing but a "
+        "control block to record. Reusing the control block would be D24 "
+        "all over again.")],
 }
 
 # Which mode an engine runs in when the caller does not say. Five engines
