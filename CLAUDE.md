@@ -26,7 +26,7 @@ finished it must keep working on n8n + PostgreSQL + an LLM API alone.
 
 | File | When |
 |---|---|
-| `docs/DECISIONS.md` | **Before proposing any structural change.** 41 settled decisions with rationale and rejected alternatives. |
+| `docs/DECISIONS.md` | **Before proposing any structural change.** 42 settled decisions with rationale and rejected alternatives. |
 | `docs/MASTER_SPEC.md` | The 40-phase build specification plus amendments. |
 | `BUILD_PLAN.md` | Milestones, dependencies, acceptance criteria. |
 | `PROGRESS.md` | What actually works, tests passed, bugs fixed, next exact task. |
@@ -336,11 +336,11 @@ run as `phi_runtime` at all (D25). See `PROGRESS.md` *Deployed to the VPS*.
 layer, all seven canonical prompts installed, and build steps **10b and
 11–15**. Step 11 is **frozen**: changes to it are bug fixes only.
 
-26 migrations, 91 tables, 33 views, 54 enums, 239 indexes, 90 check
-constraints, 52 triggers, 30 RLS tables, 60 policies — measured
+27 migrations, 94 tables, 34 views, 54 enums, 244 indexes, 94 check
+constraints, 53 triggers, 30 RLS tables, 60 policies — measured
 2026-09-10, with the counting queries recorded in `PROGRESS.md`; earlier
 figures used a different method and do not reconcile, so re-measure rather
-than adjust. **Twenty-four test suites**, passing from an empty database,
+than adjust. **Twenty-five test suites**, passing from an empty database,
 idempotent on a re-run, and verified in four configurations: full, **no
 pgvector**, **no optional extension at all**, and **`MODEL_EMBEDDING`
 unset with pgvector present** — the last is what the VPS actually runs,
@@ -598,6 +598,44 @@ pass to re-research something already refuted.
 capped and ranks by impact (hard rule 3); wiring a gap into a live E7 run
 is step 21, because a gap question is not a claim and
 `knowledge_research.py` researches claims.
+
+**Step 20: the safety gate finally has something to gate (D42).**
+`trg_block_unapproved_communication` and `case_flags` existed since `004`
+and **nothing ever evaluated a rule**, so no HOLD could open. Six
+deterministic rules now do, in SQL over labs, medications, conditions and
+interventions.
+
+**The acceptance case is a NEGATIVE and `test_safety.py` asserts it
+first**: metformin + statin + ACE inhibitor + thyroid + amlodipine, with
+abnormal-but-not-critical labs and a carbohydrate reduction proposed,
+produces **zero flags**. A gate that fires constantly is a rubber stamp
+(D6), so the thing worth testing is that it stays shut up. Two rules need
+**both halves** — insulin *and* a glucose-lowering intervention, warfarin
+*and* an interacting one — and either alone is an ordinary client.
+`WORSENING_MARKER` is a **NOTE**, never a HOLD (hard rule 9).
+
+**A PLAN THAT LEAVES NO ROW CANNOT BE CHECKED.** Every rule that matters
+matches on an intervention's NAME, and `client_interventions` had existed
+since `004` with nothing writing to it — so the rules would have passed
+every client clean **having inspected nothing**. E2 and E3 emit
+`<BEHAVIOUR_PLAN_ITEMS>` (§60B) and `<NUTRITION_PLAN_ITEMS>` (§70B), the
+seventh and eighth build-added output contracts. Everything they write is
+`PROPOSED`; Engine 4 reads the same rows later.
+
+**Drug names, intervention names and lab thresholds are ROWS** —
+`safety_rules`, `critical_lab_thresholds`, `safety_match_patterns`. Adding
+a sulfonylurea is an INSERT (hard rule 13), and the suite proves the
+difference. `trg_flag_rule_registered` refuses a deterministic flag whose
+rule_key is not in the catalogue. Evaluating and writing are separate,
+`apply_safety_rules` is idempotent, and **a rule that stops firing is never
+auto-closed** — clearing a deterministic flag is a practitioner act.
+
+**Release is three conditions and none substitutes for another.** Approval,
+drafting, release. **Drafting is never gated** (hard rule 9): the
+practitioner may need to see what would be said before deciding whether the
+HOLD matters. The approval check lives in `client_release.py` and the HOLD
+check in a trigger, deliberately — a workflow can be edited or bypassed, a
+trigger cannot be forgotten.
 
 **FULL-TEXT SEARCH ORS ITS TERMS. Never `websearch_to_tsquery`,
 `plainto_tsquery` or `phraseto_tsquery` here — they AND (bug 63).** A

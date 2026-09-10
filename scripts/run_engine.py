@@ -658,20 +658,49 @@ def fixture_handoffs(engine: str, mode: str, params: dict) -> dict[str, str]:
         )}
 
     if engine == "E2":
-        return {tag: (
-            f"BEHAVIOUR_PLAN: {s('BEHAVIOUR-PLAN')}\n"
-            f"IMPLEMENTATION_STEPS: {s('IMPLEMENTATION-STEP')}\n"
-            f"ADHERENCE_RISKS: {s('ADHERENCE-RISK')}\n"
-            f"CLIENT_CAPACITY_NOTES: {s('CAPACITY')}"
-        )}
+        # §60B. The plan as data as well as prose. A fixture that emitted
+        # only the handoff would leave client_interventions empty, and the
+        # deterministic safety rules would pass every fixture client clean
+        # having inspected nothing (D6) -- a green suite proving the
+        # opposite of what it claims.
+        items = json.dumps([{
+            "name": s("BEHAVIOUR-SYSTEM"),
+            "purpose": s("BEHAVIOUR-PURPOSE"),
+            "tier": "PRIMARY",
+            "minimum_version": s("BEHAVIOUR-MINIMUM"),
+        }], indent=2)
+        return {
+            tag: (
+                f"BEHAVIOUR_PLAN: {s('BEHAVIOUR-PLAN')}\n"
+                f"IMPLEMENTATION_STEPS: {s('IMPLEMENTATION-STEP')}\n"
+                f"ADHERENCE_RISKS: {s('ADHERENCE-RISK')}\n"
+                f"CLIENT_CAPACITY_NOTES: {s('CAPACITY')}"
+            ),
+            "BEHAVIOUR_PLAN_ITEMS": f"ITEMS_JSON:\n{items}",
+        }
 
     if engine == "E3":
-        return {tag: (
-            f"MEAL_STRUCTURE: {s('MEAL-STRUCTURE')}\n"
-            f"PROTEIN_PLAN: {s('PROTEIN-PLAN')}\n"
-            f"FOOD_SUBSTITUTIONS: {s('SUBSTITUTION')}\n"
-            f"SHOPPING_IMPLICATIONS: {s('SHOPPING')}"
-        )}
+        # §70B. The fixture proposes a deliberately BLAND item: a sentinel
+        # name matches no safety pattern, so a fixture client flags nothing
+        # unless the suite arranges for it to. A fixture that proposed
+        # "carbohydrate reduction" would make every run a HOLD and the
+        # narrowness of D6 impossible to test.
+        items = json.dumps([{
+            "name": s("NUTRITION-INTERVENTION"),
+            "purpose": s("NUTRITION-PURPOSE"),
+            "tier": "PRIMARY",
+            "kind": "PATTERN",
+            "minimum_version": s("NUTRITION-MINIMUM"),
+        }], indent=2)
+        return {
+            tag: (
+                f"MEAL_STRUCTURE: {s('MEAL-STRUCTURE')}\n"
+                f"PROTEIN_PLAN: {s('PROTEIN-PLAN')}\n"
+                f"FOOD_SUBSTITUTIONS: {s('SUBSTITUTION')}\n"
+                f"SHOPPING_IMPLICATIONS: {s('SHOPPING')}"
+            ),
+            "NUTRITION_PLAN_ITEMS": f"ITEMS_JSON:\n{items}",
+        }
 
     if engine == "E4":
         return {tag: (

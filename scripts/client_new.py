@@ -107,6 +107,68 @@ class PipelineStopped(RuntimeError):
     """
 
 
+PLAN_TIERS = {"PRIMARY", "SUPPORTIVE", "OPTIONAL"}
+
+
+def record_plan_items(conn: psycopg.Connection, client_id: str, engine: str,
+                      result, tag: str) -> tuple[int, int]:
+    """Write E2/E3's proposed interventions as ROWS. Returns (written, refused).
+
+    §60B / §70B. The handoff names the plan in prose for the next engine to
+    reason with; this is the same plan as data, and the two are not
+    interchangeable (D24).
+
+    **Nothing downstream can work without it.** The deterministic safety
+    rules match on an intervention's NAME (D6), so a plan that leaves no
+    row passes the gate clean for the worst possible reason -- there was
+    nothing to look at. Engine 4 tracks response per intervention, and
+    `WORSENING_MARKER` reads `client_interventions.outcome`.
+
+    Everything lands `PROPOSED`. Nothing here starts an intervention or
+    reaches a client: the practitioner review and Engine 5 are in between.
+    """
+    body = (result.secondary_handoffs or {}).get(tag)
+    if not body:
+        raise PipelineStopped(
+            f"{engine} produced no <{tag}> block, so its plan exists only as "
+            "prose. The safety rules match on an intervention name and would "
+            "pass this client clean having inspected nothing (D6).")
+
+    raw = body.get("ITEMS_JSON")
+    if raw is None:
+        raise PipelineStopped(f"<{tag}> carried no ITEMS_JSON.")
+    try:
+        items = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise PipelineStopped(f"{tag} ITEMS_JSON is not valid JSON: {exc}") from exc
+    if not isinstance(items, list):
+        raise PipelineStopped(f"{tag} ITEMS_JSON must be a JSON array.")
+
+    written = refused = 0
+    for item in items:
+        if not isinstance(item, dict):
+            refused += 1
+            continue
+        name = (item.get("name") or "").strip()
+        if not name:
+            # An unnamed intervention cannot be matched by a safety rule,
+            # tracked by Engine 4, or shown to anyone. Dropped, and counted.
+            refused += 1
+            continue
+        tier = (item.get("tier") or "").strip().upper()
+        purpose = (item.get("purpose") or "").strip() or None
+        if tier not in PLAN_TIERS:
+            tier = "SUPPORTIVE"
+        note = f"[{tier}] {purpose}" if purpose else f"[{tier}]"
+        conn.execute(
+            """insert into client_interventions
+                 (client_id, name, source_engine, purpose, status, proposed_on)
+               values (%s,%s,%s::engine_id,%s,'PROPOSED',current_date)""",
+            (client_id, name[:200], engine, note))
+        written += 1
+    return written, refused
+
+
 def open_cycle(conn: psycopg.Connection, client_id: str,
                max_loops: int | None = None) -> str:
     """Open the next NEW_CLIENT cycle for this client.
@@ -381,6 +443,23 @@ def run_new_client(conn: psycopg.Connection, submission_id: str,
                                     "E1_HANDOFF": pass_b.structured,
                                     "E2_HANDOFF": e2.structured})
 
+        # The plan as rows. Before the safety rules run, because a rule
+        # that matches on an intervention name has nothing to match
+        # against until this has happened.
+        planned = 0
+        for engine, result, tag in (("E2", e2, "BEHAVIOUR_PLAN_ITEMS"),
+                                    ("E3", e3, "NUTRITION_PLAN_ITEMS")):
+            wrote, refused = record_plan_items(conn, client_id, engine, result, tag)
+            planned += wrote
+            outcome.step(f"{engine}_PLAN_ITEMS", "OK",
+                         detail=f"{wrote} proposed"
+                                + (f", {refused} unusable" if refused else ""))
+        if planned == 0:
+            raise PipelineStopped(
+                "E2 and E3 between them proposed nothing. A plan with no "
+                "interventions is not a plan, and it would reach the review "
+                "queue having been checked against nothing.")
+
         # ------------------------------------------------------------------
         # E6 update. A new version, never an overwrite.
         # REBUILD, not UPDATE.
@@ -416,6 +495,24 @@ def run_new_client(conn: psycopg.Connection, submission_id: str,
             "Rebuilt after E1 Pass B, E2 and E3",
             delta=e6_rebuild.secondary_handoffs.get("CASE_MEMORY_DELTA"))
         outcome.step("CASE_VERSION_2", "OK", detail=outcome.final_case_version_id)
+
+        # ------------------------------------------------------------------
+        # The deterministic safety rules (D6). SQL over labs, medications,
+        # conditions and the interventions just recorded -- never a prompt
+        # instruction, because a missed flag is the case you cannot afford.
+        #
+        # This runs BEFORE the queue so the practitioner sees the flags with
+        # the case, and it is narrow on purpose: a client on metformin, a
+        # statin and an ACE inhibitor passes clean. A gate that fires
+        # constantly is a rubber stamp.
+        opened = conn.execute(
+            "select apply_safety_rules(%s::uuid, %s::uuid, %s::uuid)",
+            (client_id, outcome.cycle_id, pass_b.run_id)).fetchone()[0]
+        holds = conn.execute(
+            "select count(*) from case_flags where client_id=%s "
+            "  and severity='HOLD' and status='OPEN'", (client_id,)).fetchone()[0]
+        outcome.step("SAFETY_RULES", "OK",
+                     detail=f"{opened} flag(s) opened, {holds} HOLD(s) open")
 
         # ------------------------------------------------------------------
         # The queue. This is where CLIENT_NEW ends.

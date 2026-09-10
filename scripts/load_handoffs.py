@@ -38,13 +38,29 @@ HANDOFFS: dict[tuple[str, str], list[tuple[str, bool, str, str]]] = {
         "The finalized clinical picture: drivers, targets, interventions, "
         "nutrition objectives, movement objectives, behaviour required. What "
         "Engines 2 and 3 make executable.")],
-    ("E2", "SINGLE"): [(
-        "BEHAVIOUR_INTELLIGENCE_HANDOFF", True, "engine2",
-        "Behaviour made executable. Engine 3 needs it to know what the "
-        "client can actually carry out.")],
-    ("E3", "SINGLE"): [(
-        "NUTRITION_IMPLEMENTATION_HANDOFF", True, "engine3",
-        "Nutrition made executable.")],
+    ("E2", "SINGLE"): [
+        ("BEHAVIOUR_INTELLIGENCE_HANDOFF", True, "engine2",
+         "Behaviour made executable. Engine 3 needs it to know what the "
+         "client can actually carry out."),
+        # Step 20. The plan as ROWS. The handoff names the selected system
+        # in prose for the next engine; the deterministic safety rules
+        # match on an intervention NAME, and a plan that leaves no row
+        # passes the safety gate clean because there was nothing to look
+        # at (D6, D42).
+        ("BEHAVIOUR_PLAN_ITEMS", True, "engine2 §60B",
+         "The proposed behavioural interventions as data. Without it "
+         "client_interventions stays empty, the safety layer has nothing "
+         "to inspect and Engine 4 has nothing to track a response "
+         "against."),
+    ],
+    ("E3", "SINGLE"): [
+        ("NUTRITION_IMPLEMENTATION_HANDOFF", True, "engine3",
+         "Nutrition made executable."),
+        ("NUTRITION_PLAN_ITEMS", True, "engine3 §70B",
+         "The proposed nutrition interventions and supplement decisions as "
+         "data. Carbohydrate reduction on insulin, or turmeric on warfarin, "
+         "is a HOLD -- and the rule matches on the name."),
+    ],
     ("E4", "SINGLE"): [(
         "PROGRESS_INTELLIGENCE_HANDOFF", True, "engine4",
         "What the response taught us. Drives follow-up routing.")],

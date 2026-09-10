@@ -217,7 +217,7 @@ def main() -> int:
 
     hold = conn.execute(
         """insert into case_flags (client_id, cycle_id, rule_key, severity, source, detail)
-           values (%s,%s,'INSULIN_PLUS_GLUCOSE_LOWERING','HOLD','DETERMINISTIC',
+           values (%s,%s,'HYPOGLYCAEMIA_RISK','HOLD','DETERMINISTIC',
                    'Client on insulin; plan lowers glucose. Hypoglycaemia risk within days.')
            returning flag_id""",
         (client, cycle),

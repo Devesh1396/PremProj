@@ -72,7 +72,15 @@ def main() -> int:
     check("it runs the phase 4 sequence in order",
           names == ["INTAKE_EXTRACT", "CYCLE_OPEN", "E6_INIT", "CASE_VERSION_1",
                     "E1_PASS_A", "NORMALIZE", "E7", "E1_PASS_B", "E2", "E3",
-                    "E6_UPDATE", "CASE_VERSION_2", "REVIEW_QUEUED"],
+                    # Step 20. The plan becomes rows, and only then do the
+                    # deterministic rules run -- a rule that matches on an
+                    # intervention name has nothing to match against until
+                    # the plan exists (D6). SAFETY_RULES before
+                    # REVIEW_QUEUED so the practitioner sees the flags with
+                    # the case rather than after deciding.
+                    "E2_PLAN_ITEMS", "E3_PLAN_ITEMS",
+                    "E6_UPDATE", "CASE_VERSION_2",
+                    "SAFETY_RULES", "REVIEW_QUEUED"],
           str(names))
     check("every engine step succeeded",
           all(s.status in ("OK", "SUCCEEDED") for s in outcome.steps),

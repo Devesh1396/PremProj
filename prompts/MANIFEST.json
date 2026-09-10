@@ -16,23 +16,23 @@
   },
   {
     "file": "engine2_behaviour.md",
-    "words": 5765,
-    "chars": 41115,
-    "sections": 61,
+    "words": 6094,
+    "chars": 43135,
+    "sections": 62,
     "has_control_tag": true,
     "has_handoff_open_tag": true,
     "has_handoff_close_tag": true,
-    "sha256": "44d08f2fbfee9158134ebf6b4f05870ebe6d4c6a44373799e4a134638ab09de5"
+    "sha256": "9fdbc1158bc462db7f2d4008bdc71bed76c2fc289bed6c7b2421bc4ac01333d3"
   },
   {
     "file": "engine3_nutrition.md",
-    "words": 5019,
-    "chars": 36226,
-    "sections": 71,
+    "words": 5365,
+    "chars": 38415,
+    "sections": 72,
     "has_control_tag": true,
     "has_handoff_open_tag": true,
     "has_handoff_close_tag": true,
-    "sha256": "25b1b063e076d4ad7b9de74f7a1535cf9bbe27196f295cb6d867fd2117c5a1a1"
+    "sha256": "65422891518813cc6bb16eb2c77c7c0b86174a9a444b4f6d053c7f0285e287b5"
   },
   {
     "file": "engine4_progress.md",

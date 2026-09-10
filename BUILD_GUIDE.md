@@ -457,7 +457,10 @@ migration `023`, `testing/test_retrieval.py`. See D39.
 **Step 19 is BUILT** — migration `025`, `scripts/knowledge_controversy.py`,
 `scripts/knowledge_gap.py`, `testing/test_controversy_gaps.py`. See D41.
 
-**Next:** step 20, E2, E3, the review queue and E5. **Do not begin mass
+**Step 20 is BUILT** — migration `026`, `scripts/client_release.py`, E2/E3
+§60B and §70B, `testing/test_safety.py`. See D42.
+
+**Next:** step 21, `CLIENT_FOLLOWUP` and E4. **Do not begin mass
 ingestion** until one real source has run the whole loop.
 
 `MODEL_EXTRACTION` on the cheapest capable model — highest volume.
@@ -549,10 +552,31 @@ is not "nothing found".
 escalated gap into a live E7 run is step 21's continuous update: a gap
 question is not a claim, and `knowledge_research.py` researches claims.
 
-## Step 20 — E2, E3, review queue, E5
+## Step 20 — E2, E3, review queue, E5  ✅ BUILT
 
 Then the deterministic flag rule set. **Start narrow** (D6). A client on
 metformin, a statin and an ACE inhibitor must pass clean.
+
+```
+python3 scripts/client_release.py --status            # who is releasable, and why not
+python3 scripts/client_release.py --queue
+python3 scripts/client_release.py --approve REVIEW_ID
+python3 scripts/client_release.py --draft CLIENT_ID   # E5. Never gated.
+python3 scripts/client_release.py --release COMM_ID
+```
+
+**Acceptance met, and asserted first:** metformin + statin + ACE inhibitor
++ thyroid + amlodipine, with abnormal-but-not-critical labs and a
+carbohydrate reduction proposed, produces **zero flags**.
+
+Six rules, two of which need both halves (insulin *and* a glucose-lowering
+intervention; warfarin *and* an interacting one). `WORSENING_MARKER` is a
+NOTE and never blocks. Drug names, intervention names and lab thresholds
+are all rows — adding a sulfonylurea is an INSERT.
+
+**E2 and E3 now emit their plans as data** (§60B, §70B). Without it the
+rules match on an intervention name against an empty table and pass every
+client clean having inspected nothing (D42).
 
 ## Step 21 — `CLIENT_FOLLOWUP` and E4
 

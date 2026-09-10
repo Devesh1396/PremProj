@@ -1249,6 +1249,53 @@ WHAT_WOULD_CONFIRM_CURRENT_BEHAVIOURAL_HYPOTHESIS:
 WHAT_WOULD_CHALLENGE_CURRENT_BEHAVIOURAL_HYPOTHESIS:
 </BEHAVIOUR_INTELLIGENCE_HANDOFF>
 
+---
+
+## 60B. MACHINE-READABLE PLAN ITEMS <BEHAVIOUR_PLAN_ITEMS>
+
+*Added by the build. The handoff above names the selected behavioural
+system in `SELECTED_PRIMARY_BEHAVIOURAL_SYSTEM` and `EXACT_ACTION`, as
+prose for the next engine to reason with. Nothing carried it as DATA, and
+`client_interventions` has existed since migration 004 with nothing able to
+fill it.*
+
+Emitted after the handoff block and before the control block.
+
+<BEHAVIOUR_PLAN_ITEMS>
+ITEMS_JSON:
+</BEHAVIOUR_PLAN_ITEMS>
+
+### Why this exists, and it is not a summary of the handoff
+
+Two things downstream need the plan as rows rather than as prose, and
+neither can parse a paragraph:
+
+* **The deterministic safety rules (D6).** A glucose-lowering intervention
+  proposed for a client on insulin is a HOLD, and the rule matches on the
+  intervention's NAME. A plan that leaves no row is a plan the safety layer
+  cannot inspect — it would pass clean because there was nothing to look at.
+* **Engine 4.** Response is tracked per intervention. An intervention with
+  no row has no outcome, and `WORSENING_MARKER` reads exactly that column.
+
+### `ITEMS_JSON` — a strict JSON array
+
+| field | |
+|---|---|
+| `name` | **Required.** A short name for the thing the client will do. Not a sentence — this is stored, retrieved and shown. |
+| `purpose` | What it is for, clinically or behaviourally. |
+| `tier` | `PRIMARY` \| `SUPPORTIVE` \| `OPTIONAL`. The primary behavioural system is `PRIMARY`; there is normally exactly one. |
+| `minimum_version` | The version that survives a bad day. |
+
+**Everything here is PROPOSED.** Nothing in this block starts an
+intervention, approves one, or tells a client to do anything: the
+practitioner review and Engine 5 are between this and the client. A row
+written here is a proposal the safety layer can see, which is the whole
+purpose.
+
+**Name what you actually selected.** An item invented to fill the array
+becomes a row the practitioner has to disprove, and a real one omitted is
+one the safety rules will never check.
+
 ## 60A. ORCHESTRATION CONTROL BLOCK — REQUIRED
 
 *Added after the original specification. The runtime cannot route without this.*

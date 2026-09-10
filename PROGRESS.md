@@ -26,8 +26,8 @@ not inspected by eye.**
 
 | | |
 |---|---|
-| Schema | 26 migrations, 91 tables, 33 views, 54 enums, 239 indexes, 90 check constraints, 52 triggers, 60 policies, 30 RLS tables |
-| Suites | **24**, green from an empty database, each run followed by a re-run, and in three configurations: full, no optional extension, and **`MODEL_EMBEDDING` unset with pgvector present** |
+| Schema | 27 migrations, 94 tables, 34 views, 54 enums, 244 indexes, 94 check constraints, 53 triggers, 60 policies, 30 RLS tables |
+| Suites | **25**, green from an empty database, each run followed by a re-run, and in three configurations: full, no optional extension, and **`MODEL_EMBEDDING` unset with pgvector present** |
 | CI | `.github/workflows/tests.yml` — every push on every branch, **with and without pgvector** |
 | Engines | All seven canonical prompts installed; E6 → E1 Pass A → E7 → E1 Pass B proven **live** |
 | Ontology | 26 domains, 269 concepts seeded from the curriculum, hash-verified |
@@ -128,6 +128,48 @@ single thing `gemini-embedding-001` did not do.
 Two calls in total, both incidental to a CLI smoke test. This is a
 one-call verification of the wire format and **not** evidence about
 throughput, rate limits or cost at corpus scale.
+
+**Step 20: the safety gate finally has something to gate.**
+
+`trg_block_unapproved_communication` and `case_flags` have existed since
+migration `004` and **nothing ever evaluated a rule**, so no HOLD could
+open and the gate had never blocked anything.
+
+| | |
+|---|---|
+| `026` | `safety_rules`, `critical_lab_thresholds`, `safety_match_patterns`, `evaluate_safety_rules()`, `apply_safety_rules()`, `v_release_readiness` |
+| `client_release.py` | E5 draft, practitioner approval, gated release |
+| §60B / §70B | E2 and E3 emit their plans as strict JSON, not only as prose |
+
+**The acceptance case is a NEGATIVE, and it is asserted first.** A client
+on metformin, a statin, an ACE inhibitor, thyroid replacement and
+amlodipine — with abnormal-but-not-critical labs and a carbohydrate
+reduction proposed — passes **clean**. A gate that fires constantly is a
+rubber stamp (D6), so the thing worth testing is that it stays shut up.
+
+**A plan that leaves no row cannot be checked (D42).** Every rule that
+matters turns on what is being proposed, and matches on the intervention's
+NAME. `client_interventions` had existed since `004` with nothing writing
+to it, so those rules would have passed every client clean **having
+inspected nothing**. E2 and E3 now emit `<BEHAVIOUR_PLAN_ITEMS>` and
+`<NUTRITION_PLAN_ITEMS>` — the seventh and eighth build-added output
+contracts, same pattern as §R10–§R15.
+
+Two rules need **both halves**: insulin *and* a glucose-lowering
+intervention, warfarin *and* an interacting one. Either alone is an
+ordinary client, which is exactly why metformin passes.
+
+**Drug names are rows, not code** (hard rule 13). The suite proves it:
+an unregistered sulfonylurea is honestly not matched, and one INSERT later
+it is. `trg_flag_rule_registered` refuses a deterministic flag whose
+rule_key is not in the catalogue — which is how two existing suites were
+found writing invented keys.
+
+**Release is three conditions and none substitutes.** Drafting is never
+gated (hard rule 9) — the practitioner may need to see what would be said
+before deciding whether the HOLD matters. The approval check is in the
+script and the HOLD check is a trigger, deliberately: a workflow can be
+edited, a trigger cannot be forgotten.
 
 **Step 19: K12 and K13 are built — the two passes nothing else produces.**
 
@@ -274,9 +316,7 @@ suite on the no-extension floor, not by reading the branch.
 - **No real source has run the loop yet** — only fixtures and synthetic
   documents. Do not begin mass ingestion; one real source first, then the
   20-video pilot.
-- Steps 20–23.
-- Engine 5 and the release path. `CLIENT_NEW` deliberately stops at the
-  review queue; nothing yet turns an approval into client-facing output.
+- Steps 21–23.
 - `STRIP_IDENTITY_FROM_ENGINE_PAYLOADS` is documented and **not enforced**
   in `RUN_ENGINE`.
 - On the VPS specifically: the restore drill has not been run **on that

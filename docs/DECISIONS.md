@@ -2215,3 +2215,106 @@ step (BUILD_PLAN K11 / step 21) and is deliberately **not** invented here: a
 gap question is not a claim, and `knowledge_research.py` researches claims.
 Building half a loop that looks finished would be worse than naming the
 boundary.
+
+---
+
+## D42 — A plan that leaves no row cannot be checked
+**SETTLED 2026-09-10** — BUILD_GUIDE step 20; migration `026`; implements D6
+
+The safety gate (`trg_block_unapproved_communication`) and `case_flags`
+have existed since migration `004`. **Nothing ever evaluated a rule**, so
+no HOLD could open and the gate had never had anything to block. Step 20
+is the rule set, and building it surfaced a dependency that had been
+invisible.
+
+### The rules match on a NAME, so the plan has to exist as rows
+
+Every deterministic rule in D6 that matters turns on what is being
+*proposed*: a glucose-lowering intervention for a client on insulin, a
+vitamin-K load for one on warfarin. `client_interventions` has existed
+since `004` and nothing wrote to it, so those rules would have evaluated
+against an empty table and **passed every client clean having inspected
+nothing** — the worst possible way for a safety layer to be green.
+
+E2 and E3 name their plans in the handoff, as prose for the next engine to
+reason with. Prose cannot be turned into clinical rows without parsing it,
+and parsing prose into safety-bearing data is the thing hard rule 5 refuses
+for routing and that is *more* dangerous here. So §60B
+`<BEHAVIOUR_PLAN_ITEMS>` and §70B `<NUTRITION_PLAN_ITEMS>` are build-added
+strict-JSON contracts — the seventh and eighth instances of the same
+pattern as §R10–§R15 (D35, D36): a stage had substance and no block to
+carry it.
+
+Everything they write is `PROPOSED`. Nothing in those blocks starts an
+intervention or reaches a client; the review and Engine 5 are in between.
+Engine 4 needs the same rows later — `WORSENING_MARKER` reads
+`client_interventions.outcome`.
+
+### Narrow is the mechanism, not the aspiration
+
+Six rules. **A client on metformin, a statin, an ACE inhibitor, thyroid
+replacement and amlodipine passes clean**, and `test_safety.py` asserts
+that first, because the failure mode is a rule set that quietly widens
+until the gate is a rubber stamp — which is less protection than no gate,
+plus friction (D6).
+
+Two of the six need **both halves**: insulin *and* a glucose-lowering
+intervention; warfarin *and* an interacting one. Either alone is an
+ordinary client. Metformin is neither insulin nor a sulfonylurea, which is
+exactly why the acceptance case passes.
+
+`WORSENING_MARKER` is a **NOTE**, never a HOLD (hard rule 9). It must be
+seen; blocking every plan for a client whose one marker moved the wrong way
+is the rubber stamp again.
+
+### What is data and what is code
+
+The rule LOGIC is SQL, because D6 says so and because a missed flag is the
+case you cannot afford. Everything else is rows:
+
+| | |
+|---|---|
+| `safety_rules` | which rules exist, at what severity. Disabling one is an UPDATE. |
+| `critical_lab_thresholds` | CRITICAL, not merely out of reference range. |
+| `safety_match_patterns` | every drug and intervention name, by class. |
+
+Adding a sulfonylurea is an INSERT (hard rule 13). A drug list inside a
+function is how the next drug in the class goes unflagged, and the suite
+proves the difference: an unregistered sulfonylurea is honestly **not**
+matched, and one INSERT later it is.
+
+`trg_flag_rule_registered` refuses a deterministic flag whose `rule_key` is
+not in the catalogue. A rule the catalogue does not know cannot be
+explained to the practitioner, disabled, or audited — and two existing
+suites were writing invented keys, which is how that was found.
+
+### Evaluating and writing are separate, and nothing auto-closes
+
+`evaluate_safety_rules()` computes and writes nothing, so a practitioner
+view, a dry run and a test all read the same answer. `apply_safety_rules()`
+opens each firing rule **once**; a rule that stops firing is **never**
+auto-closed. Clearing a deterministic flag is a practitioner act and
+`trg_protect_deterministic_flags` enforces that an engine cannot do it.
+
+The critical-lab rule reads the **latest** value per marker, not the worst
+ever seen: a value corrected two years ago is history, not a reason to hold
+today's plan.
+
+### Release: three conditions, none substituting for another
+
+| | | |
+|---|---|---|
+| **Approval** | a practitioner accepted the analysis | `client_release.py` |
+| **Drafting** | E5 writes the client-facing message | **never gated** |
+| **Release** | it is sent | trigger on HOLDs, file on approval |
+
+Drafting with an open HOLD is deliberately allowed — the practitioner may
+need to see what would be said in order to decide whether the HOLD matters.
+Hard rule 9 gates *release*, not analysis or drafting.
+
+The approval check lives in the script and the HOLD check in a trigger, on
+purpose: **a workflow can be edited, reordered or bypassed; a trigger
+cannot be forgotten**. The check that must never be missed lives where
+nothing can route around it, and the script's job is to fail earlier and
+more legibly. `test_safety.py` proves the trigger half by writing the
+UPDATE directly, so there is no doubt which layer refused.

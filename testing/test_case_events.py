@@ -566,7 +566,7 @@ def main() -> int:
 
     admin.execute(
         """insert into case_flags (client_id, rule_key, severity, source, detail)
-           values (%s,'CRITICAL_LAB_THRESHOLD','HOLD','DETERMINISTIC','ALT 340 U/L')""",
+           values (%s,'CRITICAL_LAB','HOLD','DETERMINISTIC','ALT 340 U/L')""",
         (a,))
     expect_error(
         admin,
