@@ -210,24 +210,33 @@ to agree on the stored document over 26 control blocks, verdict **and**
 blamed field, in `test_contract_registry.py`, and CI installs `ajv@8` so
 it is a real gate.
 
-**BUILT.** `workflows/run_engine.json`, 13 nodes. Parity is **byte-identical**
-(D26): 15 requests identical to the byte and 15 responses identical field
-for field, against one golden corpus, with the JavaScript extracted from
-the workflow at run time so a copy cannot drift from it.
+**BUILT AND FROZEN.** `workflows/run_engine.json`, **14 nodes**. Parity is
+**byte-identical** (D26): 15 requests identical to the byte and 15
+responses identical field for field, against one golden corpus, with the
+JavaScript extracted from the workflow at run time so a copy cannot drift
+from it. The workflow's **SQL is executed** by `test_n8n_sql.py` against a
+real database as `phi_runtime`, with its parameters bound by a faithful
+port of n8n's own algorithm (D31) — that is what caught a missing
+`engine_mode`, a missing `client_id` on the dead letter, and an INSERT into
+a column that has never existed. Transport retry matches the reference
+exactly (D29): exponential, jittered, capped, `Retry-After` honoured, every
+physical attempt in `cost_events`.
+
+No further step-11 work is to be started. Changes to it are bug fixes only.
 
 **No n8n credentials are required.** `scripts/local_n8n.sh` installs n8n
 from npm at a **pinned** version (the container registries are blocked in
 some environments), seeds a `phi_runtime` credential from `.env.local`,
-imports a workflow and runs it headlessly. What the VPS runs is unknown —
-`docs/OPERATIONS.md` "n8n version".
+imports a workflow and runs it headlessly. **The VPS runs 2.11.4** against
+that pin — see `docs/OPERATIONS.md` "n8n version" for the choice that has
+to be made before the workflow is deployed there.
 
 **The port must mirror the reference on all three outputs, not two.** D24:
 a run produces human output, a substantive handoff, and a control block.
 `engine_handoffs` (`013`) says which handoff tag to expect per engine and
 mode; the workflow reads those rows rather than carrying a map of its own,
 and a response missing a required handoff dead-letters exactly as an
-invalid control block does. What remains is authoring
-`workflows/run_engine.json`.
+invalid control block does.
 
 ## Step 12 — K1 ontology seed *(BUILT 2026-09-10)*
 

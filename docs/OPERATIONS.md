@@ -70,6 +70,15 @@ DATABASE_URL=postgresql://phi_admin:...@host:port/phi \
 DATABASE_URL=postgresql://phi_admin:...@host:port/phi \
   python3 scripts/load_handoffs.py
 
+# 6d. LOAD THE RATE CARD. The fourth registry (D30). n8n cannot read
+#     config/model_prices.json, so the rates are rows too -- without them
+#     the workflow records UNPRICED for calls the reference implementation
+#     prices, and every cost figure then describes the reference instead of
+#     the system. An empty rate card is not an error; a silently empty one
+#     on a metered provider is a bad surprise.
+DATABASE_URL=postgresql://phi_admin:...@host:port/phi \
+  python3 scripts/load_prices.py
+
 # 7. Verify, and do not skip the second half.
 docker compose exec postgres psql -U phi_admin -d phi -c \
   "SELECT capability, enabled FROM system_capabilities;"
@@ -100,11 +109,20 @@ DATABASE_URL=postgresql://phi_admin:...@host:port/phi \
 #    exit 1  -> an engine/mode has no registered handoff
 #    exit 2  -> a registered tag is not defined in its prompt, which means
 #               a specification was renamed and the registry was not
+
+DATABASE_URL=postgresql://phi_admin:...@host:port/phi \
+  python3 scripts/load_prices.py --check
+#    exit 0  -> READY, and prints the active rates
+#    exit 1  -> the registry differs from config/model_prices.json
 ```
 
-**Whenever `prompts/*.md` or `schemas/orchestration/*.json` changes, the
-matching loaders must be re-run — `load_handoffs.py` included, since it
-verifies its tags against the prompts** — deploying a prompt or contract edit is a
+**Four loaders. Migrating alone is not enough**, and a database that has
+been migrated but not loaded is perfectly valid and completely unusable.
+
+**Whenever `prompts/*.md`, `schemas/orchestration/*.json` or
+`config/model_prices.json` changes, the matching loaders must be re-run —
+`load_handoffs.py` included, since it verifies its tags against the
+prompts** — deploying a prompt or contract edit is a
 load, not a restart. The registry is
 append-only: loading changed content inserts a new version and deactivates
 the old one, so the superseded text stays readable for any `engine_runs`
@@ -120,34 +138,52 @@ docker compose exec postgres psql -U phi_admin -d phi
 
 ## n8n version
 
-**Pinned locally, unknown on the VPS, and that gap is a deployment risk.**
+**ANSWERED 2026-09-10, and the answer is a gap.**
 
-`scripts/local_n8n.sh` pins `N8N_VERSION` (2.35.7 as of 2026-09-10) because
-workflow JSON is version-sensitive: node `typeVersion` values move across
-releases, and 2.x already dropped `n8n execute --file`, which is why
-workflows in this repo carry a stable `id` and are imported before being
-run.
-
-**Nothing in this repository records what the VPS runs**, and the VPS has
-had n8n installed since before this build started — so it may well be on
-1.x. A workflow proven against 2.35.7 may not import on a 1.x instance.
-
-Check it on the VPS, once, and record the answer here:
-
-```bash
-docker ps --format '{{.Names}}\t{{.Image}}' | grep -i n8n
-docker exec <n8n-container> n8n --version
-```
-
-Then pick, deliberately:
-
-| The VPS is | Do |
+| | |
 |---|---|
-| the same major (2.x) | pin `N8N_VERSION` to the VPS's exact version and re-run the parity suite |
-| 1.x | either upgrade the VPS to the pinned version, or re-target the workflow at 1.x node `typeVersion`s and re-prove parity there |
+| `scripts/local_n8n.sh` pins | **2.35.7** |
+| The VPS runs | **2.11.4** |
 
-Do not assume they match. The failure mode is a workflow that passes every
-local test and refuses to import on the machine it was built for.
+Workflow JSON is version-sensitive: node `typeVersion` values move across
+releases, and 2.x dropped `n8n execute --file`, which is why workflows in
+this repo carry a stable `id` and are imported before being run.
+`workflows/run_engine.json` uses `postgres` 2.5, `code` 2, `if` 2.2 and
+`executeWorkflowTrigger` 1.1, and its parameter binding depends on the
+**v2.5** branch of the Postgres node's `queryReplacement` handling (D31) —
+which is precisely the kind of thing that differs between generations.
+
+**So `workflows/run_engine.json` must not be assumed importable on the VPS
+as it stands.** It has not been tried there, and trying it is not urgent:
+`LLM_API_KEY` is empty on the VPS and nothing there makes a call yet.
+
+### The choice, and it is the practitioner's to confirm
+
+The n8n stack on that box runs **three live business automations** (GFG T1
+v2, AiSensy, a detection PoC) that have nothing to do with this build.
+Upgrading it is not a free action.
+
+| Option | What it costs |
+|---|---|
+| **Upgrade the VPS to 2.35.7** *(preferred)* | an upgrade of a stack running three live automations, with its volume `n8n-sdc9_n8n_data` backed up first (it already is: `/root/n8n-data-2026-09-10.tar.gz`). Buys a workflow that is proven, byte for byte, against the version it will run on |
+| **Re-target the workflow at 2.11.4** | re-pin `N8N_VERSION`, re-check every node `typeVersion`, re-verify the `queryReplacement` binding semantics against 2.11.4's own source, and re-run the parity and SQL suites. The three automations are untouched |
+
+Do not pick by preference. Pick by whether the three live automations can
+tolerate an n8n upgrade window, which is a question about that business,
+not about this build. Until it is picked, the workflow is proven for
+2.35.7 and for nothing else.
+
+Whichever is chosen, **re-run `test_n8n_parity.py` and `test_n8n_sql.py`
+afterwards.** The failure mode this section exists to prevent is a workflow
+that passes every local test and refuses to import — or worse, imports and
+binds its parameters differently — on the machine it was built for.
+
+### Never touch the n8n side
+
+That stack, the `n8n-sdc9_n8n_data` volume and the n8n `docker-compose.yml`
+are out of scope for this build, permanently. This repo adds a database to
+the same Docker network (`n8n-sdc9_default`, no published port) and nothing
+else.
 
 ---
 
@@ -327,6 +363,7 @@ DATABASE_URL=... python3 scripts/set_role_passwords.py
 DATABASE_URL=...phi_restore_test python3 scripts/load_prompts.py --check
 DATABASE_URL=...phi_restore_test python3 scripts/load_contracts.py --check
 DATABASE_URL=...phi_restore_test python3 scripts/load_handoffs.py --check
+DATABASE_URL=...phi_restore_test python3 scripts/load_prices.py --check
 #     exit 0 -> the restored registry matches prompts/ in this checkout
 #     exit 1 -> it does not. Read the output before loading over it: the
 #               restored rows are what produced every engine_runs.prompt_hash

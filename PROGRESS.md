@@ -1,22 +1,37 @@
 # PROGRESS
 
-## STATE AS OF 2026-09-10 — merged to `main` (`9c8c33a`)
+## STATE AS OF 2026-09-10 — RUNNING ON REAL INFRASTRUCTURE
 
 Read this first. The sections below are the working record and are written
 in the order things happened, so a few of them describe a position that a
 later section supersedes. Where they disagree, this summary is current.
 
-**Build steps 1–10b are complete and verified against a real PostgreSQL,
-not inspected by eye.** Nothing in this repo had ever run on a database
-before 2026-09-09; all of it has now.
+**The distinction this record now makes, and did not before:**
 
 | | |
 |---|---|
-| Schema | 15 migrations, 77 tables, 23 views, 51 enums, 202 indexes, 44 triggers, 58 policies, 29 RLS tables |
+| **Container-verified** | ran on a PostgreSQL this build controls, on a developer machine or in CI, usually with trust auth and a superuser DSN |
+| **Infrastructure-verified** | ran on the Hostinger VPS, on a database it does not control the surroundings of, with real roles, scram passwords over TCP, alongside three live business automations |
+
+They are not the same claim and the second is much stronger. Everything
+below is container-verified; the section *Deployed to the VPS* says what is
+now infrastructure-verified as well. **The reason to separate them is not
+bookkeeping.** Everything passed in containers for weeks while
+`RUN_ENGINE` could not have run as `phi_runtime` at all (D25) — trust auth
+and a superuser DSN hid it. Container-green is evidence about the code, not
+about the deployment.
+
+**Build steps 1–15 are complete and verified against a real PostgreSQL,
+not inspected by eye.**
+
+| | |
+|---|---|
+| Schema | 17 migrations, 78 tables, 24 views, 51 enums, 211 indexes, 45 triggers, 60 policies, 30 RLS tables |
 | Suites | **16**, green from an empty database, each run followed by a re-run, and on the D15 floor with no optional extension available |
 | CI | `.github/workflows/tests.yml` — every push on every branch, **with and without pgvector** |
 | Engines | All seven canonical prompts installed; E6 → E1 Pass A → E7 → E1 Pass B proven **live** |
 | Ontology | 26 domains, 269 concepts seeded from the curriculum, hash-verified |
+| Registries | **Four**: prompts (`010`), contract (`012`), handoffs (`013`), prices (`016`) |
 | Backup | Restore drill performed 2026-09-10; roles gap found and fixed |
 | Bugs | 56 found and fixed, each with a regression test |
 
@@ -42,25 +57,89 @@ so a full 8-call new-client cycle lands near **$0.75–0.80** on
 `gemini-3.8-flash`. The free tier (20 requests/day/model) is not viable for
 this system — billing is a prerequisite, not an optimisation.
 
-**Steps 12, 13, 14 and 15 are BUILT**, and step 11's registry half is
-done. The case track now runs end to end in one call: a submitted intake
-reaches the practitioner's review queue through E6 → E1 Pass A →
-normalization → E7 → E1 Pass B → E2 → E3 → E6, on one prompt hash.
+**Step 11 is COMPLETE and FROZEN.** `workflows/run_engine.json` is built,
+14 nodes, and proven byte-identical to `scripts/run_engine.py` on one
+golden corpus: 15 requests identical to the byte, 15 responses identical
+field for field, and the workflow's **SQL executed** against a real
+database as `phi_runtime` (D31). The JavaScript under test is extracted
+from the workflow at run time, so a copy cannot drift from it. No further
+step-11 work is to be started; changes to it are bug fixes only.
+
+**The case track runs end to end.** `scripts/client_new.py` takes a
+submitted intake to the practitioner's review queue: E6 → E1 Pass A →
+normalization → E7 → E1 Pass B → E2 → E3 → E6, on one prompt hash. It
+stops at the queue by design — Engine 5 is gated on a practitioner
+decision, and an open HOLD never stops the analysis (hard rule 9).
+
+### Before the first full synthetic case is run — set expectations now
+
+**Engine 7 will retrieve from an empty library, and Engine 1 Pass B will
+reason from an empty retrieval set.** That is expected and it is not a bug.
+The Knowledge Factory is step 16 and has not been built; until it has run,
+there is nothing in `strategies`, `evidence_records`, `claims` or
+`knowledge_chunks` to retrieve. A first full case will therefore produce a
+structurally complete report whose evidence citations are thin or absent.
+
+Read that as the library being empty, never as Engine 7 or Pass B being
+broken, and do not "fix" it by loosening a floor or a gate.
 
 **What is NOT done, and should not be assumed:**
-- The **n8n workflow JSON itself**. Both registries it needs now exist —
-  the prompts (`010`) and the control contract (`012`) — and jsonschema and
-  ajv are proven to agree on the stored document. What remains is authoring
-  the subworkflow.
-- Steps 16–23.
+- Steps 16–23. Step 16, the Knowledge Factory (K02–K11), is next.
 - Engine 5 and the release path. `CLIENT_NEW` deliberately stops at the
   review queue; nothing yet turns an approval into client-facing output.
-- `scripts/backup.sh` has never run **on the VPS**, under cron, with GPG
-  encryption or an off-site target. The drill could not exercise those paths.
 - `STRIP_IDENTITY_FROM_ENGINE_PAYLOADS` is documented and **not enforced**
   in `RUN_ENGINE`.
-- No VPS exists yet. Everything above was verified on a local PostgreSQL 16
-  and in CI.
+- On the VPS specifically: the restore drill has not been run **on that
+  box**, the backup cron has not yet fired once, and SSH still allows
+  password authentication. See *Deployed to the VPS*.
+
+---
+
+## Deployed to the VPS — 2026-09-10
+
+The first time any of this has run on real infrastructure. Hostinger,
+`srv1498536`, Ubuntu, 2 vCPU / 7.8 GB RAM, 90 GB free.
+
+| | |
+|---|---|
+| Container | `phi-postgres`, `pgvector/pgvector:pg16`, healthy |
+| Network | joined to the existing `n8n-sdc9_default`; **no published port**; reachable only as `phi-postgres:5432` |
+| Migrations | deployed from `main` = **000–011 only**. `012`–`016` land on merge |
+| Roles | `phi_admin`, `phi_runtime`, `phi_practitioner` — verified, scram auth over TCP |
+| Prompts | all seven loaded; `load_prompts.py --check` exits 0; E7 hash `c1276c136368` |
+| Suites | `run_all.sh` — ALL SUITES PASSED (13 suites at that revision) **against the real roles**, not a superuser DSN |
+| Backup | `backup.sh` nightly, cron `30 2 * * *` UTC, GPG-encrypted; the private half is **not on the VPS**; decryption verified from a separate machine |
+| `BACKUP_REMOTE_TARGET` | unset — backups are on the same box as the database |
+| `LLM_API_KEY` | deliberately **EMPTY** on the VPS. Nothing there makes a paid call yet |
+
+### Do not touch the n8n side
+
+The existing stack runs **three live business automations** (GFG T1 v2,
+AiSensy, a detection PoC) on volume `n8n-sdc9_n8n_data`, backed up to
+`/root/n8n-data-2026-09-10.tar.gz`. That stack, that volume and its
+`docker-compose.yml` are out of scope for this build, permanently. This
+repo adds a database to the same network and nothing else.
+
+### The n8n version question is answered, and the answer is a gap
+
+`scripts/local_n8n.sh` pins **2.35.7**. The VPS runs **2.11.4**. Workflow
+JSON is version-sensitive and the two are not the same major generation, so
+`workflows/run_engine.json` must not be assumed importable there. This is
+exactly the risk `docs/OPERATIONS.md` "n8n version" was written to flag; it
+is no longer unknown. See that section for the choice.
+
+### Two things the deployment taught
+
+1. **GPG refused to encrypt to an untrusted key and `backup.sh` exited 2,
+   leaving the files unencrypted rather than reporting success.** That is
+   the correct failure: a backup script that claims success while writing
+   plaintext PHI is worse than one that stops.
+2. **Everything passing in containers passed on the VPS only because the
+   role and DSN bugs had already been found.** Trust auth and a superuser
+   DSN hid D25 for weeks. This is why the two verification claims are now
+   recorded separately.
+
+---
 
 ---
 
@@ -418,8 +497,9 @@ clinically distinct state an alias.
 alias separation, the confusable mirrors, seed **quality**, and — per D13 —
 that the seed is explicitly **not complete**.
 
-### Step 11 — n8n `RUN_ENGINE`: feasibility settled, port not yet written
-`DETERMINED 2026-09-10`
+### Step 11 — n8n `RUN_ENGINE`: feasibility settled `DETERMINED 2026-09-10`
+*(historical — the port was written the same day; see* Step 11 — n8n
+`RUN_ENGINE` `BUILT 2026-09-10` *above)*
 
 The brief's first question was whether step 11 can be developed and
 validated from workflow JSON, a local n8n and the existing fixtures alone.
@@ -1084,14 +1164,12 @@ a model change, not to re-confirm a settled result.)*
 them. `scripts/client_new.py` runs a submitted intake to the practitioner's
 queue in one call.
 
-**The next exact task is the n8n `RUN_ENGINE` subworkflow JSON.** Both
-registries it needs now exist — the seven prompts (`010`) and the control
-contract (`012`) — so a Code node can read a specification and a schema out
-of PostgreSQL with no copy of this repository, and `jsonschema` and `ajv`
-are proven to agree on the stored document over 26 control blocks. It needs
-**no n8n credentials**: `scripts/local_n8n.sh` installs n8n from npm,
-seeds a `phi_runtime` credential from `.env.local`, imports a workflow and
-executes it headlessly. See *Step 11 — feasibility* below.
+*(**Superseded.** This section recorded the n8n `RUN_ENGINE` subworkflow
+JSON as the next task. It was written on 2026-09-10 and built the same
+day: `workflows/run_engine.json`, 14 nodes, byte-identical parity, SQL
+executed against a real database. Step 11 is complete and frozen — see the
+state summary at the top. The next exact task is **step 16, the Knowledge
+Factory**.)*
 
 **After that, the release path.** `CLIENT_NEW` stops at the review queue by
 design; nothing yet turns a practitioner approval into Engine 5 output.
@@ -1288,10 +1366,14 @@ Two Engine 7 items for the practitioner, neither blocking:
   RUN_ENGINE is the safer place.
 - Fixture-mode token counts are character estimates, not measurements. The
   report says so on every run; do not quote them as call sizes.
-- n8n workflows not yet built (M2)
-- n8n subworkflow JSON not yet exported; `scripts/run_engine.py` is the
-  reference implementation and both must be validated by the same suite so
-  behaviour cannot drift
+- `RUN_ENGINE` is **built** in both implementations and validated by one
+  suite, so behaviour cannot drift (D26, D31). The remaining n8n gap is
+  that `CLIENT_NEW` exists only as `scripts/client_new.py`; the workflow
+  form of it is step 15's n8n half and is not written.
+- **The VPS runs n8n 2.11.4; `scripts/local_n8n.sh` pins 2.35.7.** Workflow
+  JSON is version-sensitive. `workflows/run_engine.json` must not be
+  assumed importable on the VPS until that is resolved — see
+  `docs/OPERATIONS.md` "n8n version".
 - Deterministic flag rule set not yet written; `case_flags` and the gate
   work, but the SQL rules that populate HOLD/NOTE are still to come and
   must start narrow

@@ -212,17 +212,25 @@ Database is in India; model inference is not. Engine payloads carry
 
 ---
 
-## State as of 2026-09-10
+## State as of 2026-09-10 — running on real infrastructure
 
-**Complete and verified** — M0 foundations, M1 schema (15 migrations), M2
-engine execution layer, all seven canonical prompts installed, and build
-steps **10b, 12, 13, 14, 15** and step 11's registry half.
+**Container-verified and infrastructure-verified are different claims.**
+Container-verified means it ran on a database this build controls, usually
+with trust auth and a superuser DSN. Infrastructure-verified means it ran
+on the Hostinger VPS with real roles and scram passwords over TCP. The
+second is much stronger, and the reason to keep them apart is that
+everything was container-green for weeks while `RUN_ENGINE` could not have
+run as `phi_runtime` at all (D25). See `PROGRESS.md` *Deployed to the VPS*.
 
-77 tables, 23 views, 51 enums, 202 indexes, 64 check constraints,
-44 triggers, 29 RLS tables, 58 policies. **Sixteen test suites**, passing
-from an empty database three consecutive times, idempotent, and verified in
-three capability configurations: full, **no pgvector**, and **no optional
-extension at all**.
+**Complete and verified** — M0 foundations, M1 schema, M2 engine execution
+layer, all seven canonical prompts installed, and build steps **10b and
+11–15**. Step 11 is **frozen**: changes to it are bug fixes only.
+
+17 migrations, 78 tables, 24 views, 51 enums, 211 indexes, 66 check
+constraints, 45 triggers, 30 RLS tables, 60 policies. **Sixteen test
+suites**, passing from an empty database, idempotent on a re-run, and
+verified in three capability configurations: full, **no pgvector**, and
+**no optional extension at all**.
 
 Working end to end **on a live provider**, not only on the fixture:
 ```
@@ -234,15 +242,19 @@ Measured 2026-09-09: 81,258 in / 86,681 out, **$0.386** per 4-call cycle,
 do not stage Engine 1.** The free provider tier is not viable; billing is a
 prerequisite.
 
-**Nothing is blocked on input.** `LLM_API_KEY` and the base URL are set.
+**Nothing is blocked on input.** `LLM_API_KEY` and the base URL are set
+locally. On the VPS it is deliberately empty — nothing there makes a paid
+call yet.
 
-**Three runtime registries, all rows (D23, D24).** `prompts/*.md` and
-`schemas/orchestration/*.json` stay the authored forms; `engine_prompts`
-(`010`), `orchestration_contracts` (`012`) and `engine_handoffs` (`013`)
-are what `RUN_ENGINE` reads. A fresh deployment must run **all three**
-loaders after migrating — `load_prompts.py`, `load_contracts.py`,
-`load_handoffs.py` — or every engine raises `PromptMissing`,
-`ContractMissing` or `HandoffMissing`. Migrating alone is not enough.
+**Four runtime registries, all rows (D23, D24, D30).** `prompts/*.md`,
+`schemas/orchestration/*.json` and `config/model_prices.json` stay the
+authored forms; `engine_prompts` (`010`), `orchestration_contracts`
+(`012`), `engine_handoffs` (`013`) and `model_prices` (`016`) are what the
+runtime reads. A fresh deployment must run **all four** loaders after
+migrating — `load_prompts.py`, `load_contracts.py`, `load_handoffs.py`,
+`load_prices.py` — or every engine raises `PromptMissing`,
+`ContractMissing` or `HandoffMissing`, and every call the workflow prices
+records UNPRICED. Migrating alone is not enough.
 
 **The control block routes; the handoff is the reasoning (D24).** Every
 engine emits both, and they are never interchangeable. `<CONTROL_BLOCK>`
@@ -251,26 +263,37 @@ next engine thinks with. A run missing its required handoff repairs and
 then dead-letters — a valid control block is not evidence that an engine
 did its work. **A delta is never stored as `canonical_state`.**
 
-**Mode is passed, never hand-written (D24a).** `RUN_ENGINE` injects a
-`<RUNTIME_INVOCATION>` envelope — engine, mode, pass, expected handoff
-blocks — ahead of the payload, once, for every engine. **Never put a
-`"MODE"` key in `structured_input`**; a test walks `scripts/` and fails if
-anything outside `run_engine.py` does. **E6 and E7 have no default mode**
-and `mode=` must be passed: E6 `INIT`/`REBUILD` emit a full state and
-`UPDATE` a delta; E7 has four modes — `FOUNDATION` and `UPDATE` share the
-foundation handoff, `CASE` and `INBOX` have their own.
+**Mode is passed, never hand-written (D24a), and now stored (D27).**
+`RUN_ENGINE` injects a `<RUNTIME_INVOCATION>` envelope — engine, mode,
+pass, expected handoff blocks — ahead of the payload, once, for every
+engine. **Never put a `"MODE"` key in `structured_input`**; a test walks
+`scripts/` and fails if anything outside `run_engine.py` does. **E6 and E7
+have no default mode** and `mode=` must be passed: E6 `INIT`/`REBUILD`
+emit a full state and `UPDATE` a delta; E7 has four modes — `FOUNDATION`
+and `UPDATE` share the foundation handoff, `CASE` and `INBOX` have their
+own. The mode is written to `engine_runs.engine_mode` when the run opens,
+and `trg_engine_run_coherent` rejects an incoherent client/mode
+combination **before** the insert: E1–E6 and E7 `CASE` require a client;
+E7 `FOUNDATION`/`UPDATE`/`INBOX` must have none.
 
-**The case track runs end to end.** `scripts/client_new.py` takes a
-submitted intake to the practitioner's review queue: E6 → E1 Pass A →
-normalization → E7 → E1 Pass B → E2 → E3 → E6, on one prompt hash. It
-stops at the queue by design — Engine 5 is gated on a practitioner
-decision, and an open HOLD never stops the analysis (hard rule 9).
+**A failed engine response is client data (D28).** `dead_letter_jobs`
+carries `client_id` and is RLS-forced. `raw_payload` holds up to 8,000
+characters of the failed response, which for a case run is the clinical
+record in a different shape. Do not relabel it telemetry, and do not read
+it to triage — `v_dead_letter_triage` answers how-many-since-when without
+it.
 
 **`workflows/run_engine.json` is built and proven byte-identical to the
 Python reference (D26).** One golden corpus, two implementations: 15
 requests identical to the byte, 15 responses identical field for field.
 The JavaScript under test is extracted from the workflow at run time, so a
-copy cannot drift from it.
+copy cannot drift from it. **Its SQL is executed too (D31)** —
+`test_n8n_sql.py` binds the workflow's real expressions through a faithful
+port of n8n's own parameter algorithm and runs the result against the
+database as `phi_runtime`. Every `queryReplacement` uses the **array
+form**; the string form discards literal text outside `{{ }}`, turns
+`null` into the string `'null'`, and comma-splits any resolved value that
+is not JSON. Do not "simplify" one back.
 
 **Engine runs set transaction-local client scope (D25).** `RUN_ENGINE`
 could not run as `phi_runtime` at all before this — every run went around
@@ -283,9 +306,12 @@ retrieves from an empty library and Pass B reasons from an empty retrieval
 set — that is expected, not a bug, and `PROGRESS.md` says so before the
 first full case is run.
 
-**Before deploying:** `scripts/local_n8n.sh` pins n8n **2.35.7**. What the
-VPS runs is **unknown and unrecorded**, and workflow JSON is
-version-sensitive. See `docs/OPERATIONS.md` "n8n version".
+**Before deploying:** `scripts/local_n8n.sh` pins n8n **2.35.7**. The VPS
+runs **2.11.4**, and workflow JSON is version-sensitive. The choice —
+upgrade the VPS or re-target the workflow — is in `docs/OPERATIONS.md`
+"n8n version" and has not been made. The VPS's n8n stack runs three live
+business automations; **never touch that stack, its volume, or its
+`docker-compose.yml`.**
 
 ## Do NOT build
 
