@@ -19,13 +19,29 @@
 
 name: tests
 
+# Every push, on every branch. A commit pushed to a branch with no open PR
+# used to run nothing at all -- `pull_request` needs a PR to exist and
+# `push: branches: [main]` ignored everything else -- so work could sit
+# unverified until someone opened one. That happened on 03b9d14.
+#
+# `pull_request` is deliberately NOT listed alongside it. Both events fire
+# on a push to a branch that has an open PR, and they carry different
+# github.ref values (refs/pull/N/merge vs refs/heads/<branch>), so they land
+# in different concurrency groups and BOTH run: two identical suites per
+# commit, forever. Check runs attach to the commit SHA, so the push-
+# triggered run still shows on the PR; nothing is lost from the PR view.
+#
+# What is given up: `pull_request` tests the MERGE of head into base, while
+# `push` tests the branch as it stands. A conflict-free merge that breaks
+# something is therefore caught by the run on `main` immediately after the
+# merge rather than just before it. That is a ~1 minute difference on this
+# repo, and worth it to avoid running everything twice. If branch
+# protection with required checks is added later, revisit this.
 on:
-  pull_request:
   push:
-    branches: [main]
   workflow_dispatch:
 
-# A second push to the same PR makes the first run's result irrelevant.
+# A second push to the same branch makes the first run's result irrelevant.
 concurrency:
   group: tests-${{ github.ref }}
   cancel-in-progress: true
