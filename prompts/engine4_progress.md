@@ -1219,6 +1219,72 @@ MEDICAL_COORDINATION_ITEMS:
 HIGH_PRIORITY_MISSING_DATA:
 </PROGRESS_INTELLIGENCE_HANDOFF>
 
+---
+
+## 64B. MACHINE-READABLE RESPONSE OUTCOMES <PROGRESS_OUTCOMES>
+
+*Added by the build. The handoff above reports response across thirty-odd
+prose fields for the next engine to reason with —
+`SUCCESSFUL_INTERVENTION_COMPONENTS`, `TARGETS_NOT_RESPONDING`,
+`STRONGEST_POSITIVE_RESPONSE`. Nothing carried it as DATA, and
+`client_interventions.outcome` has existed since migration 004 with
+nothing able to write it.*
+
+Emitted after the handoff block and before the control block.
+
+<PROGRESS_OUTCOMES>
+OUTCOMES_JSON:
+</PROGRESS_OUTCOMES>
+
+### Learning that leaves no row is not learning
+
+Engine 4 exists to learn from response. Three things depend on that
+learning being a row rather than a paragraph, and none of them can parse
+one:
+
+* **The deterministic safety rules.** `WORSENING_MARKER` reads
+  `client_interventions.outcome` directly (D6). Without this block the rule
+  cannot fire for any client, ever — it would evaluate against a column
+  nothing has written and report "nothing worsening" about a case that is.
+* **The next cycle.** Engine 1 asks what has already been tried and what
+  it did. An intervention with no recorded outcome reads as untried.
+* **Practice experience, in aggregate** (§D9, hard rule 6). De-identified,
+  minimum cohort five, and never evidence — but an aggregate over rows
+  that were never written is an aggregate over nothing.
+
+### `OUTCOMES_JSON` — a strict JSON array, one entry per intervention
+
+| field | |
+|---|---|
+| `name` | **Required.** The intervention as it was recorded. Match what is in the case, not a rephrasing — a renamed intervention is a new one to everything downstream. |
+| `outcome` | **Required.** `IMPROVING` \| `STABLE` \| `WORSENING` \| `LIMITED_RESPONSE` \| `TOO_EARLY` \| `NOT_TRACKED`. |
+| `status` | `ONGOING` \| `MODIFIED` \| `PAUSED` \| `STOPPED` \| `COMPLETED`. Omit to leave the status alone. |
+| `adherence` | What was actually done, as distinct from what was planned. |
+| `evidence` | What the outcome rests on: which marker, which measurement, which report. |
+| `stop_reason` | Required when `status` is `STOPPED`. |
+
+### `TOO_EARLY` and `NOT_TRACKED` are real answers
+
+An intervention started three weeks ago has usually not had time to show
+anything, and one nobody measured has no outcome to report. Both are
+honest and both are common. **Recording `STABLE` for either is a
+fabrication** — it claims a measurement that was never made, and the next
+cycle will reason as though the intervention was tried and found neutral.
+
+### Adherence is separate from outcome, and reporting it that way matters
+
+An intervention that was never carried out has not failed; it has not been
+tested. Collapsing "did not work" and "was not done" into one verdict is
+how a workable plan gets abandoned, and how an unworkable one gets tried
+again.
+
+### This block records; it does not prescribe
+
+Nothing here starts, changes or stops what a client is told to do. It says
+what happened. The routing that follows is the control block's, the plan
+that follows is Engines 1–3's, and no engine instructs a client to change a
+prescribed medication (§9, hard rule 9).
+
 ## 64A. ORCHESTRATION CONTROL BLOCK — REQUIRED
 
 *Added after the original specification. The runtime cannot route without this. Engine 4 is the

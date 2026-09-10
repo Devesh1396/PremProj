@@ -26,7 +26,7 @@ finished it must keep working on n8n + PostgreSQL + an LLM API alone.
 
 | File | When |
 |---|---|
-| `docs/DECISIONS.md` | **Before proposing any structural change.** 42 settled decisions with rationale and rejected alternatives. |
+| `docs/DECISIONS.md` | **Before proposing any structural change.** 43 settled decisions with rationale and rejected alternatives. |
 | `docs/MASTER_SPEC.md` | The 40-phase build specification plus amendments. |
 | `BUILD_PLAN.md` | Milestones, dependencies, acceptance criteria. |
 | `PROGRESS.md` | What actually works, tests passed, bugs fixed, next exact task. |
@@ -336,11 +336,11 @@ run as `phi_runtime` at all (D25). See `PROGRESS.md` *Deployed to the VPS*.
 layer, all seven canonical prompts installed, and build steps **10b and
 11–15**. Step 11 is **frozen**: changes to it are bug fixes only.
 
-27 migrations, 94 tables, 34 views, 54 enums, 244 indexes, 94 check
-constraints, 53 triggers, 30 RLS tables, 60 policies — measured
+28 migrations, 95 tables, 36 views, 54 enums, 248 indexes, 94 check
+constraints, 53 triggers, 31 RLS tables, 62 policies — measured
 2026-09-10, with the counting queries recorded in `PROGRESS.md`; earlier
 figures used a different method and do not reconcile, so re-measure rather
-than adjust. **Twenty-five test suites**, passing from an empty database,
+than adjust. **Twenty-six test suites**, passing from an empty database,
 idempotent on a re-run, and verified in four configurations: full, **no
 pgvector**, **no optional extension at all**, and **`MODEL_EMBEDDING`
 unset with pgvector present** — the last is what the VPS actually runs,
@@ -636,6 +636,35 @@ practitioner may need to see what would be said before deciding whether the
 HOLD matters. The approval check lives in `client_release.py` and the HOLD
 check in a trigger, deliberately — a workflow can be edited or bypassed, a
 trigger cannot be forgotten.
+
+**Step 21: CLIENT_FOLLOWUP is a DIFFERENT pipeline, not CLIENT_NEW with a
+flag (D43).** Engine 4 is the routing authority:
+`ROUTING_RECOMMENDATION` — a **typed** control-block field, never prose —
+decides which of E1/E2/E3 run, and a value the route map does not know
+**stops** the pipeline rather than routing nowhere. The contract also
+refuses a recommendation with no `ROUTING_REASON`. E6 runs in `UPDATE` mode
+here (§A1's normal path), and the delta still never becomes
+`canonical_state`.
+
+**`client_interventions.outcome` had NEVER been written**, so
+`WORSENING_MARKER` read an empty column and could not fire for any client —
+the same shape as D42, one layer later. E4 emits §64B `<PROGRESS_OUTCOMES>`,
+one entry per live intervention, and the live list is **passed in** because
+an engine cannot be held to "one per intervention" if it was never told
+what the list was.
+
+**`TOO_EARLY` and `NOT_TRACKED` are real answers.** An unreadable outcome
+lands at `NOT_TRACKED`, **never `STABLE`** — `STABLE` claims a measurement
+that was never made, and the next cycle would read the intervention as
+tried and neutral. `v_intervention_response.never_assessed` separates
+"nobody looked" from "looked and found nothing".
+
+**An outcome that changes leaves what it changed from.**
+`record_intervention_outcome()` writes `intervention_outcome_history`
+BEFORE the column, `STOPPED` requires a reason, and **adherence is stored
+beside the outcome, never folded into it** — an intervention nobody carried
+out has not failed, it has not been tested. A follow-up is processed once
+(`processed_at`) and spends one routing hop.
 
 **FULL-TEXT SEARCH ORS ITS TERMS. Never `websearch_to_tsquery`,
 `plainto_tsquery` or `phraseto_tsquery` here — they AND (bug 63).** A

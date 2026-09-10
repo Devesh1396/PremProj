@@ -703,11 +703,26 @@ def fixture_handoffs(engine: str, mode: str, params: dict) -> dict[str, str]:
         }
 
     if engine == "E4":
-        return {tag: (
-            f"RESPONSE_SUMMARY: {s('RESPONSE')}\n"
-            f"CURRENT_DECISION_REASON: {s('DECISION-REASON')}\n"
-            f"WHAT_WE_LEARNED: {s('LEARNING')}"
-        )}
+        # §64B. One outcome per live intervention, named as the caller
+        # supplied them -- a fixture that invented names would exercise
+        # only the unmatched branch, which is the branch that writes
+        # nothing. TOO_EARLY rather than STABLE: the fixture has measured
+        # nothing, and STABLE would be the fabrication §64B names.
+        outcomes = json.dumps([
+            {"name": item.get("name"),
+             "outcome": "TOO_EARLY",
+             "adherence": s("ADHERENCE"),
+             "evidence": s("OUTCOME-EVIDENCE")}
+            for item in (params.get("live_interventions") or [])
+        ], indent=2)
+        return {
+            tag: (
+                f"RESPONSE_SUMMARY: {s('RESPONSE')}\n"
+                f"CURRENT_DECISION_REASON: {s('DECISION-REASON')}\n"
+                f"WHAT_WE_LEARNED: {s('LEARNING')}"
+            ),
+            "PROGRESS_OUTCOMES": f"OUTCOMES_JSON:\n{outcomes}",
+        }
 
     return {tag: (
         f"CLIENT_MESSAGE: {s('MESSAGE')}\n"
@@ -1003,6 +1018,12 @@ def run_engine(conn: psycopg.Connection, req: EngineRequest) -> EngineResult:
         # which block to produce.
         "handoff_mode": handoff_mode,
         "client_id": req.client_id,
+        # §64B asks Engine 4 for one outcome per live intervention, and a
+        # fixture that invented names would only ever exercise the
+        # unmatched branch -- the branch that writes nothing. A live
+        # provider ignores this; the PROMPT is what tells a model to echo
+        # the names it was given.
+        "live_interventions": req.structured_input.get("LIVE_INTERVENTIONS") or [],
     }
 
     attempts = 0

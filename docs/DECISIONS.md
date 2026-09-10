@@ -2318,3 +2318,105 @@ cannot be forgotten**. The check that must never be missed lives where
 nothing can route around it, and the script's job is to fail earlier and
 more legibly. `test_safety.py` proves the trigger half by writing the
 UPDATE directly, so there is no doubt which layer refused.
+
+---
+
+## D43 — A follow-up is a different pipeline, not CLIENT_NEW with a flag
+**SETTLED 2026-09-10** — BUILD_GUIDE step 21; migration `027`
+
+```
+follow-up -> E6 UPDATE -> E4 -> routing -> E1/E2/E3 -> E6 -> review
+```
+
+### Why not one pipeline with a parameter
+
+`CLIENT_NEW` runs every engine in a fixed order because a new client needs
+all of them and there is nothing yet to route on. A follow-up is the
+opposite case: most of the case is unchanged, **Engine 4 is the routing
+authority** (§64A), and running E1, E2 and E3 unconditionally would spend a
+full cycle re-deriving a plan nothing has challenged.
+
+The difference is not a flag. It is which engines run, in what mode, and on
+whose say-so.
+
+### Routing reads a typed field, and an unknown value stops
+
+`ROUTING_RECOMMENDATION` is a closed enum in the control contract, and
+`ROUTES` maps each value to the engines it means. A value the map does not
+know **stops the pipeline** rather than routing nowhere — routing on an
+unrecognised recommendation is guessing what an engine meant (hard rule 5).
+
+The contract also refuses a recommendation that carries no
+`ROUTING_REASON`, which the suite asserts rather than merely satisfies:
+"route to Engine 1" with no reason is a decision the practitioner cannot
+review.
+
+`MULTIPLE` runs E1 → E2 → E3 as a chain, not three engines in parallel: E1
+re-deciding what matters invalidates the plans built on the old decision.
+`MEDICAL_COORDINATION` and `MORE_DATA` replan nothing and still queue a
+review — both mean "a human, or more data, first", and the review queue is
+where a human is.
+
+### E6 runs in UPDATE mode, and the delta is still not the state
+
+`CLIENT_NEW` uses `REBUILD` because the case is being established across one
+cycle. A follow-up is Engine 6 §A1's *normal* path: a `<CASE_MEMORY_DELTA>`
+describing what changed. The delta goes in the `delta` column and a **full
+state** becomes `canonical_state` (D24) — storing a diff there would make
+`get_current_client_state()` return a description of a change instead of a
+case.
+
+### Learning that leaves no row is not learning (extends D42)
+
+`client_interventions.outcome` has existed since migration `004` and
+**nothing ever wrote it** — so `WORSENING_MARKER` (D6) read a column nobody
+had filled and could never fire for any client. Engine 4 now emits §64B
+`<PROGRESS_OUTCOMES>`, one entry per live intervention. Same argument as
+§60B/§70B, one layer later: the plan had to become rows before it could be
+checked; the *response* has to become rows before anything can learn from it.
+
+The live interventions are **passed in** rather than left for the engine to
+recall, because §64B asks for one entry per intervention and an engine
+cannot be held to that if it was never told what the list was. An outcome
+naming something this client does not have is dropped and counted —
+`record_intervention_outcome` refuses it anyway, since a response to a plan
+nobody made is not a response.
+
+**`TOO_EARLY` and `NOT_TRACKED` are real answers.** An unreadable outcome
+lands at `NOT_TRACKED`, never at `STABLE`: `STABLE` claims a measurement
+that was never made, and the next cycle would reason as though the
+intervention had been tried and found neutral. `v_intervention_response`
+exposes `never_assessed` for the same reason — the column default is
+`NOT_TRACKED`, so without it "nobody looked" and "looked and found nothing"
+are the same value.
+
+### An outcome that changes is history
+
+`intervention_outcome_history` records every assessment with what it
+replaced. IMPROVING becoming WORSENING is arguably the most important fact
+a follow-up produces and a bare `UPDATE` loses it. One function
+(`record_intervention_outcome`) writes the history row **before** the
+column, so an outcome cannot move without leaving what it moved from — and
+`STOPPED` requires a reason, because "stopped" with none cannot tell a later
+cycle whether it failed, was unworkable, or simply finished.
+
+**Adherence is stored beside the outcome, never folded into it.** An
+intervention nobody carried out has not failed; it has not been tested.
+Collapsing the two is how a workable plan gets abandoned and an unworkable
+one gets tried again.
+
+### A follow-up is processed once, and the budget is real
+
+`processed_at` makes the queue a queue. Re-running one would spend another
+routing hop and write a second set of outcomes over the first, so it is
+refused with the timestamp of the first run.
+
+One follow-up opens one cycle and spends one hop against
+`case_cycles.max_loops`; `ck_loop_bound` refuses the hop past it. That is
+what stops a case cycling on its own recommendation (hard rule 3).
+
+### Nothing here reaches a client
+
+The cycle ends at the review queue, exactly as `CLIENT_NEW` does. E5 and
+release stay in `client_release.py`, behind a practitioner decision and the
+safety gate (hard rule 9).

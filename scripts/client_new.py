@@ -169,13 +169,24 @@ def record_plan_items(conn: psycopg.Connection, client_id: str, engine: str,
     return written, refused
 
 
-def open_cycle(conn: psycopg.Connection, client_id: str,
+def open_cycle(conn: psycopg.Connection, client_id: str, *,
+               cycle_type: str = "NEW_CLIENT",
                max_loops: int | None = None) -> str:
-    """Open the next NEW_CLIENT cycle for this client.
+    """Open the next cycle for this client.
 
     cycle_number is derived rather than passed in: (client_id, cycle_number)
     is unique, and letting a caller choose it is how two concurrent runs
     collide.
+
+    `cycle_type` because CLIENT_FOLLOWUP opens cycles too (step 21), and a
+    second copy of this function would be a second place for the derived
+    cycle_number to be got wrong.
+
+    Both options are KEYWORD-ONLY. Adding `cycle_type` ahead of `max_loops`
+    silently rebound every positional caller -- `open_cycle(conn, id,
+    max_loops)` started writing the loop budget into `cycle_type` -- and
+    the `*` makes that class of change impossible rather than merely
+    caught.
     """
     nxt = conn.execute(
         "select coalesce(max(cycle_number), 0) + 1 from case_cycles where client_id=%s",
@@ -183,12 +194,12 @@ def open_cycle(conn: psycopg.Connection, client_id: str,
     if max_loops is None:
         return str(conn.execute(
             """insert into case_cycles (client_id, cycle_number, cycle_type)
-               values (%s,%s,'NEW_CLIENT') returning cycle_id""",
-            (client_id, nxt)).fetchone()[0])
+               values (%s,%s,%s) returning cycle_id""",
+            (client_id, nxt, cycle_type)).fetchone()[0])
     return str(conn.execute(
         """insert into case_cycles (client_id, cycle_number, cycle_type, max_loops)
-           values (%s,%s,'NEW_CLIENT',%s) returning cycle_id""",
-        (client_id, nxt, max_loops)).fetchone()[0])
+           values (%s,%s,%s,%s) returning cycle_id""",
+        (client_id, nxt, cycle_type, max_loops)).fetchone()[0])
 
 
 def spend_routing_hop(conn: psycopg.Connection, cycle_id: str) -> None:
@@ -318,7 +329,7 @@ def run_new_client(conn: psycopg.Connection, submission_id: str,
         outcome.step("INTAKE_EXTRACT", "OK", detail=json.dumps(counts))
 
         e6_input = IN.to_e6_input(conn, submission_id)
-        outcome.cycle_id = open_cycle(conn, client_id, max_loops)
+        outcome.cycle_id = open_cycle(conn, client_id, max_loops=max_loops)
         # One hop, charged once, before any engine runs. Charging after
         # would let a pipeline that crashes halfway be retried forever.
         spend_routing_hop(conn, outcome.cycle_id)

@@ -460,7 +460,10 @@ migration `023`, `testing/test_retrieval.py`. See D39.
 **Step 20 is BUILT** — migration `026`, `scripts/client_release.py`, E2/E3
 §60B and §70B, `testing/test_safety.py`. See D42.
 
-**Next:** step 21, `CLIENT_FOLLOWUP` and E4. **Do not begin mass
+**Step 21 is BUILT** — migration `027`, `scripts/client_followup.py`, E4
+§64B, `testing/test_followup.py`. See D43.
+
+**Next:** step 22, the Wave-1 foundation build. **Do not begin mass
 ingestion** until one real source has run the whole loop.
 
 `MODEL_EXTRACTION` on the cheapest capable model — highest volume.
@@ -578,12 +581,31 @@ are all rows — adding a sulfonylurea is an INSERT.
 rules match on an intervention name against an empty table and pass every
 client clean having inspected nothing (D42).
 
-## Step 21 — `CLIENT_FOLLOWUP` and E4
+## Step 21 — `CLIENT_FOLLOWUP` and E4  ✅ BUILT
 
 ```
 follow-up → E6 update → E4 → routing → E1/E2/E3 → E6 → review → E5
 ```
 Respect `case_cycles.max_loops`.
+
+```
+python3 scripts/client_followup.py --queue
+python3 scripts/client_followup.py FOLLOWUP_ID
+```
+
+Engine 4 is the routing authority. `ROUTING_RECOMMENDATION` is a **typed**
+field and an unknown value stops the pipeline (hard rule 5). One follow-up
+opens one cycle and spends one hop; `ck_loop_bound` refuses the hop past
+`max_loops`.
+
+**E4 now emits its outcomes as data** (§64B). `client_interventions.outcome`
+had never been written, so `WORSENING_MARKER` read an empty column and could
+not fire — the same shape as D42, one layer later. `intervention_outcome_history`
+keeps what each outcome replaced, and adherence is stored beside the outcome
+rather than folded into it.
+
+The cycle ends at the review queue. E5 and release stay in
+`client_release.py` (step 20).
 
 ## Step 22 — Wave-1 foundation build
 

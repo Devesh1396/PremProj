@@ -36,13 +36,13 @@
   },
   {
     "file": "engine4_progress.md",
-    "words": 5629,
-    "chars": 40389,
-    "sections": 65,
+    "words": 6119,
+    "chars": 43504,
+    "sections": 66,
     "has_control_tag": true,
     "has_handoff_open_tag": true,
     "has_handoff_close_tag": true,
-    "sha256": "0a708a8ebc492595f402dbcfd41003d8e97085768ccb02cc6120baebd4318cc0"
+    "sha256": "baca8ed84caa10fe513e260b7ea7045e8cfa6a6b4b45387dd86bdf5532bc93ad"
   },
   {
     "file": "engine5_communication.md",

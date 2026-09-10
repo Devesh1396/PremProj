@@ -26,8 +26,8 @@ not inspected by eye.**
 
 | | |
 |---|---|
-| Schema | 27 migrations, 94 tables, 34 views, 54 enums, 244 indexes, 94 check constraints, 53 triggers, 60 policies, 30 RLS tables |
-| Suites | **25**, green from an empty database, each run followed by a re-run, and in three configurations: full, no optional extension, and **`MODEL_EMBEDDING` unset with pgvector present** |
+| Schema | 28 migrations, 95 tables, 36 views, 54 enums, 248 indexes, 94 check constraints, 53 triggers, 62 policies, 31 RLS tables |
+| Suites | **26**, green from an empty database, each run followed by a re-run, and in three configurations: full, no optional extension, and **`MODEL_EMBEDDING` unset with pgvector present** |
 | CI | `.github/workflows/tests.yml` — every push on every branch, **with and without pgvector** |
 | Engines | All seven canonical prompts installed; E6 → E1 Pass A → E7 → E1 Pass B proven **live** |
 | Ontology | 26 domains, 269 concepts seeded from the curriculum, hash-verified |
@@ -128,6 +128,49 @@ single thing `gemini-embedding-001` did not do.
 Two calls in total, both incidental to a CLI smoke test. This is a
 one-call verification of the wire format and **not** evidence about
 throughput, rate limits or cost at corpus scale.
+
+**Step 21: CLIENT_FOLLOWUP and E4 — the second and every later cycle.**
+
+```
+follow-up -> E6 UPDATE -> E4 -> routing -> E1/E2/E3 -> E6 -> review
+```
+
+`client_followups` has existed since `004` and nothing ever read one;
+`client_interventions.outcome` has existed just as long and **nothing ever
+wrote one** — so `WORSENING_MARKER` read a column nobody had filled and
+could never fire for any client. Engine 4 now emits §64B
+`<PROGRESS_OUTCOMES>`, and the suite proves the rule finally fires.
+
+**A follow-up is a different pipeline, not CLIENT_NEW with a flag (D43).**
+Engine 4 is the routing authority: `ROUTING_RECOMMENDATION` — a **typed**
+control-block field, never prose — decides which of E1/E2/E3 run, and an
+unknown value **stops** rather than routing nowhere. The contract also
+refuses a recommendation carrying no `ROUTING_REASON`, which the suite
+asserts rather than merely satisfies.
+
+| | |
+|---|---|
+| `027` | `processed_at`, `intervention_outcome_history`, `record_intervention_outcome()`, `v_followup_queue`, `v_intervention_response` |
+| `client_followup.py` | the cycle, ending at the review queue |
+| §64B | one outcome per live intervention, as data |
+
+**An outcome that changes leaves what it changed from.** IMPROVING becoming
+WORSENING is arguably the most important fact a follow-up produces, and a
+bare `UPDATE` loses it. One function writes the history row **before** the
+column. `STOPPED` requires a reason. Adherence is stored **beside** the
+outcome, never folded into it — an intervention nobody carried out has not
+failed, it has not been tested.
+
+**`TOO_EARLY` and `NOT_TRACKED` are real answers.** An unreadable outcome
+lands at `NOT_TRACKED`, never `STABLE`: `STABLE` claims a measurement never
+made. `v_intervention_response.never_assessed` separates "nobody looked"
+from "looked and found nothing", which the column default otherwise makes
+identical.
+
+**A follow-up is processed once** and spends one routing hop;
+`ck_loop_bound` refuses the hop past `max_loops` (hard rule 3). The cycle
+ends at the review queue — E5 and release stay behind a practitioner
+decision and the safety gate.
 
 **Step 20: the safety gate finally has something to gate.**
 
@@ -316,7 +359,7 @@ suite on the no-extension floor, not by reading the branch.
 - **No real source has run the loop yet** — only fixtures and synthetic
   documents. Do not begin mass ingestion; one real source first, then the
   20-video pilot.
-- Steps 21–23.
+- Steps 22–23.
 - `STRIP_IDENTITY_FROM_ENGINE_PAYLOADS` is documented and **not enforced**
   in `RUN_ENGINE`.
 - On the VPS specifically: the restore drill has not been run **on that

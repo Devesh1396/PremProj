@@ -61,9 +61,18 @@ HANDOFFS: dict[tuple[str, str], list[tuple[str, bool, str, str]]] = {
          "data. Carbohydrate reduction on insulin, or turmeric on warfarin, "
          "is a HOLD -- and the rule matches on the name."),
     ],
-    ("E4", "SINGLE"): [(
-        "PROGRESS_INTELLIGENCE_HANDOFF", True, "engine4",
-        "What the response taught us. Drives follow-up routing.")],
+    ("E4", "SINGLE"): [
+        ("PROGRESS_INTELLIGENCE_HANDOFF", True, "engine4",
+         "What the response taught us. Drives follow-up routing."),
+        # Step 21. The response as ROWS. client_interventions.outcome has
+        # existed since 004 with nothing writing it, and WORSENING_MARKER
+        # reads that column -- so the rule could never fire for any client
+        # (D42, D43).
+        ("PROGRESS_OUTCOMES", True, "engine4 §64B",
+         "One outcome per intervention. Learning that leaves no row is not "
+         "learning: the next cycle reads an unrecorded intervention as "
+         "untried, and the safety rule reads a column nobody wrote."),
+    ],
     ("E5", "SINGLE"): [(
         "CLIENT_COMMUNICATION_HANDOFF", True, "engine5",
         "The client-facing communication. Release is gated on practitioner "
