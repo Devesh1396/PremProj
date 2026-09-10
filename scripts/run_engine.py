@@ -23,6 +23,7 @@ Set LLM_API_KEY to switch to a live provider.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -283,6 +284,30 @@ def validate_control(conn: psycopg.Connection, control: dict[str, Any]) -> list[
         f"{'/'.join(str(p) for p in e.absolute_path) or '(root)'}: {e.message}"
         for e in validator(conn).iter_errors(control)
     )
+
+
+@contextlib.contextmanager
+def client_scope(conn: psycopg.Connection, client_id: str | None):
+    """One short transaction with transaction-local client scope set (D25).
+
+    Every write RUN_ENGINE makes goes through this, and the n8n workflow
+    mirrors it: each Postgres node runs `SELECT set_client_scope($1)` and
+    its statement inside one transaction.
+
+    SHORT is the operative word. Scope is transaction-local by design (005
+    passes `true` to set_config) so a pooled connection cannot carry Client
+    A's context into a later Client B query -- but that also means holding
+    one transaction across a 300-second provider call would keep a
+    connection idle-in-transaction for five minutes. So the transaction
+    wraps the write, never the model call.
+
+    None is legitimate and means a knowledge-clock run (Engine 7
+    FOUNDATION / UPDATE / INBOX, D18). Migration 014 lets those write; it
+    does not widen access to anything that has a client.
+    """
+    with conn.transaction():
+        conn.execute("select set_client_scope(%s)", (client_id,))
+        yield
 
 
 def build_user_prompt(envelope: dict[str, Any], structured_input: dict[str, Any]) -> str:
@@ -709,17 +734,18 @@ def run_engine(conn: psycopg.Connection, req: EngineRequest) -> EngineResult:
         model_name = f"fixture:{configured or provider_mode}"
 
     run_id = str(uuid.uuid4())
-    conn.execute(
-        """insert into engine_runs
-             (run_id, client_id, case_version_id, cycle_id, engine, pass,
-              prompt_file, prompt_hash, schema_version, model_role, model_name,
-              model_params, status, started_at)
-           values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'RUNNING',now())""",
-        (run_id, req.client_id, req.case_version_id, req.cycle_id, req.engine,
-         req.pass_label, prompt_file, prompt_hash, SCHEMA_VERSION,
-         req.model_role, model_name,
-         json.dumps(req.run_context)),
-    )
+    with client_scope(conn, req.client_id):
+        conn.execute(
+            """insert into engine_runs
+                 (run_id, client_id, case_version_id, cycle_id, engine, pass,
+                  prompt_file, prompt_hash, schema_version, model_role, model_name,
+                  model_params, status, started_at)
+               values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'RUNNING',now())""",
+            (run_id, req.client_id, req.case_version_id, req.cycle_id, req.engine,
+             req.pass_label, prompt_file, prompt_hash, SCHEMA_VERSION,
+             req.model_role, model_name,
+             json.dumps(req.run_context)),
+        )
 
     # THE RUNTIME ENVELOPE.
     #
@@ -821,27 +847,29 @@ def run_engine(conn: psycopg.Connection, req: EngineRequest) -> EngineResult:
         if control is not None and not errors:
             break
 
-        conn.execute(
-            "update engine_runs set status='REPAIR_RETRY', attempts=%s where run_id=%s",
-            (attempts, run_id),
-        )
+        with client_scope(conn, req.client_id):
+            conn.execute(
+                "update engine_runs set status='REPAIR_RETRY', attempts=%s "
+                "where run_id=%s", (attempts, run_id))
         user_prompt = (build_user_prompt(envelope, req.structured_input)
                        + "\n\n" + repair_instruction(errors))
 
     if errors or control is None:
         # Malformed output is never inserted into the knowledge or case
         # tables. It goes to the dead-letter queue for inspection.
-        conn.execute(
-            """update engine_runs
-                  set status='DEAD_LETTER', attempts=%s, completed_at=now(),
-                      input_tokens=%s, output_tokens=%s, duration_ms=%s,
-                      error_class=%s, error_detail=%s
-                where run_id=%s""",
-            (attempts, totals["input_tokens"], totals["output_tokens"],
-             totals["duration_ms"],
-             "PROVIDER_ERROR" if provider_failed else "SCHEMA_INVALID",
-             "; ".join(errors)[:2000], run_id),
-        )
+        with client_scope(conn, req.client_id):
+            conn.execute(
+                """update engine_runs
+                      set status='DEAD_LETTER', attempts=%s, completed_at=now(),
+                          input_tokens=%s, output_tokens=%s, duration_ms=%s,
+                          error_class=%s, error_detail=%s
+                    where run_id=%s""",
+                (attempts, totals["input_tokens"], totals["output_tokens"],
+                 totals["duration_ms"],
+                 "PROVIDER_ERROR" if provider_failed else "SCHEMA_INVALID",
+                 "; ".join(errors)[:2000], run_id))
+        # dead_letter_jobs has no RLS: a dead letter is operational
+        # telemetry about a failure, and the payload is already truncated.
         conn.execute(
             """insert into dead_letter_jobs
                  (job_type, entity_type, entity_id, failure_reason, raw_payload, attempts)
@@ -871,26 +899,27 @@ def run_engine(conn: psycopg.Connection, req: EngineRequest) -> EngineResult:
     structured = handoffs.get(primary_tag, {}) if primary_tag else {}
     secondary = {tag: body for tag, body in handoffs.items() if tag != primary_tag}
 
-    conn.execute(
-        """update engine_runs
-              set status='SUCCEEDED', attempts=%s, completed_at=now(),
-                  input_tokens=%s, output_tokens=%s, duration_ms=%s
-            where run_id=%s""",
-        (attempts, totals["input_tokens"], totals["output_tokens"],
-         totals["duration_ms"], run_id),
-    )
+    # One transaction for both writes: a run marked SUCCEEDED with no output
+    # row is a lie the next reader would believe.
+    with client_scope(conn, req.client_id):
+        conn.execute(
+            """update engine_runs
+                  set status='SUCCEEDED', attempts=%s, completed_at=now(),
+                      input_tokens=%s, output_tokens=%s, duration_ms=%s
+                where run_id=%s""",
+            (attempts, totals["input_tokens"], totals["output_tokens"],
+             totals["duration_ms"], run_id))
     # `structured` held json.dumps(structured_input.get("_echo", {})) from
     # 004 until D24 -- the INPUT's `_echo` key, which nothing has ever set,
     # so every run since the engine layer was built stored `{}`. It holds
     # the engine's own reasoning now.
-    conn.execute(
-        """insert into engine_outputs
-             (run_id, human_output, structured, control, schema_valid,
-              handoff_tag, handoff_mode, secondary_handoffs)
-           values (%s,%s,%s,%s,true,%s,%s,%s)""",
-        (run_id, human_output, json.dumps(structured), json.dumps(control),
-         primary_tag, handoff_mode, json.dumps(secondary)),
-    )
+        conn.execute(
+            """insert into engine_outputs
+                 (run_id, human_output, structured, control, schema_valid,
+                  handoff_tag, handoff_mode, secondary_handoffs)
+               values (%s,%s,%s,%s,true,%s,%s,%s)""",
+            (run_id, human_output, json.dumps(structured), json.dumps(control),
+             primary_tag, handoff_mode, json.dumps(secondary)))
     return EngineResult(run_id, "SUCCEEDED", control, human_output, structured,
                         attempts, handoff_tag=primary_tag,
                         handoff_mode=handoff_mode, secondary_handoffs=secondary)

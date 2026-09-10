@@ -893,6 +893,74 @@ entries.
 
 ---
 
+## D25 — Engine runs set transaction-local client scope, and always have to
+**SETTLED — found preparing the n8n port; a real blocker, not a tidy-up**
+
+`set_client_scope()` appears nowhere in `scripts/`. Connecting as
+`phi_runtime` and calling `run_engine()` fails on its **first statement**,
+both ways:
+
+```
+client run       InsufficientPrivilege: new row violates row-level
+knowledge clock  security policy for table "engine_runs"
+```
+
+Two independent causes, and the Python reference has never hit either
+because `DATABASE_URL` connects as `phi_admin`, which is **SUPERUSER** and
+so bypasses RLS entirely. **Every engine run this system has ever made went
+around the policies rather than through them.** n8n connects as
+`phi_runtime` (hard rule 8) and would have been the first thing to discover
+that — in production, on a pooled connection.
+
+**Cause 1: nothing set the scope.** Fixed in `run_engine.py`. Every write
+now runs inside an explicit transaction that calls `set_client_scope()`
+first, via one `client_scope()` context manager, and the n8n workflow
+mirrors it: each Postgres node runs `SELECT set_client_scope($1)` and its
+statement in one transaction.
+
+The transaction wraps the **write**, never the model call. Scope is
+transaction-local by design so a pooled connection cannot carry Client A's
+context into a later Client B query — but holding one transaction across a
+300-second provider call would leave a connection idle-in-transaction for
+five minutes.
+
+**Cause 2: a knowledge-clock run has no client.** Engine 7 in FOUNDATION,
+UPDATE or INBOX mode carries `client_id` NULL and `CASE_VERSION` 0 (D18),
+and the policy was `client_id = current_client_scope()`. `NULL = anything`
+is never true, so those runs were unwritable as `phi_runtime` whatever
+scope was set. Migration `014` widens the runtime policy on `engine_runs`
+and `engine_outputs` to `client_id IS NULL OR client_id =
+current_client_scope()` — **the same judgement and the same policy shape
+005 already applied** to `chat_threads` and `chat_messages`: "carries no
+client data, so it stays readable without a client context."
+
+This does not widen access to client rows. A run **with** a client is still
+visible only under that client's scope.
+
+*The cost of tolerating NULL*, stated rather than glossed: a CASE run that
+lost its client would now file quietly as a knowledge-clock run instead of
+being rejected. `v_runs_without_client` is the check — only Engine 7 has
+clock modes, so any other engine without a client lost it somewhere — and
+the suite asserts it is empty.
+
+**The test that matters is the pooled one.** Two clients run back to back
+on **one** `phi_runtime` connection, and neither can see the other's rows
+under its own scope, with no `client_id` filter in the query. That test is
+close to meaningless in Python — one short-lived connection — and
+essential in n8n, whose Postgres node pools.
+
+*Rejected:* running n8n as `phi_admin` so the policies do not apply. It is
+hard rule 8, and it would make the isolation guarantee decorative.
+
+*Rejected:* giving knowledge-clock runs a synthetic client id. Inventing a
+client so a policy passes is how a system loses the meaning of the word.
+
+*Rejected:* one long transaction around the whole run. Correct for scope
+and wrong for everything else: a five-minute idle-in-transaction
+connection per engine call, on a 2 vCPU box.
+
+---
+
 ## OPEN
 
 **O1 — Intake form. `RESOLVED FOR V1` — see D22.** Core Intake V1 is built:

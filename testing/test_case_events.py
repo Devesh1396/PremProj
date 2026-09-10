@@ -14,10 +14,14 @@ from __future__ import annotations
 import json
 import os
 import sys
+from pathlib import Path
 
 from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+
 import psycopg
+import run_engine as RE_SCOPE
 
 FAILS: list[str] = []
 
@@ -583,6 +587,91 @@ def main() -> int:
     unclassified = admin.execute(
         "select count(*) from missing_data_reports where classification is null").fetchone()[0]
     check("reporting a gap never auto-changes intake", unclassified == 5, str(unclassified))
+
+    # ------------------------------------------------------------------
+    # D25. The test that is close to meaningless in Python and essential in
+    # n8n: n8n's Postgres node POOLS connections, so the same physical
+    # connection serves Client A's run and then Client B's. Scope is
+    # transaction-local (005 passes `true` to set_config) precisely so that
+    # cannot leak, and this proves it on ONE connection rather than
+    # trusting the flag.
+    #
+    # Until D25 nothing exercised this at all: RUN_ENGINE connects as
+    # phi_admin, which is SUPERUSER and bypasses RLS entirely, so every
+    # engine run this system has made went around the policies rather than
+    # through them.
+    print("\nengine runs are client-scoped on a POOLED connection (D25)")
+    os.environ["LLM_API_KEY"] = ""
+    assert RE_SCOPE.select_provider()[1] == "fixture", \
+        "this suite must never call a live provider"
+    # A SEPARATE connection, autocommit, standing in for one n8n Postgres
+    # node's pooled connection serving two clients in turn.
+    pooled = psycopg.connect(runtime_dsn, autocommit=True)
+    try:
+        check("the pooled connection is phi_runtime, not a superuser",
+              pooled.execute("select current_user, "
+                             "(select rolsuper from pg_roles where rolname=current_user)"
+                             ).fetchone() == ("phi_runtime", False))
+
+        run_a = RE_SCOPE.run_engine(pooled, RE_SCOPE.EngineRequest(
+            engine="E6", mode="INIT", client_id=a,
+            structured_input={"CASE_VERSION": 1}))
+        run_b = RE_SCOPE.run_engine(pooled, RE_SCOPE.EngineRequest(
+            engine="E6", mode="INIT", client_id=b,
+            structured_input={"CASE_VERSION": 1}))
+        check("two clients ran back to back on ONE connection",
+              run_a.status == "SUCCEEDED" and run_b.status == "SUCCEEDED",
+              f"{run_a.status} / {run_b.status}")
+
+        # The leak this guards: after B's run, the connection must not be
+        # able to see A's row. No client_id filter -- the policy is the
+        # only thing that can exclude it.
+        with pooled.transaction():
+            pooled.execute("select set_client_scope(%s)", (b,))
+            visible = {str(r[0]) for r in pooled.execute(
+                "select run_id from engine_runs").fetchall()}
+        check("under B's scope, A's run is invisible",
+              run_b.run_id in visible and run_a.run_id not in visible,
+              f"{len(visible)} runs visible")
+
+        with pooled.transaction():
+            pooled.execute("select set_client_scope(%s)", (a,))
+            visible_a = {str(r[0]) for r in pooled.execute(
+                "select run_id from engine_runs").fetchall()}
+        check("...and under A's scope, B's run is invisible",
+              run_a.run_id in visible_a and run_b.run_id not in visible_a)
+
+        # No scope at all is default-deny, not "everything". The one
+        # exception is a knowledge-clock run, which has no client by design.
+        unscoped = pooled.execute(
+            "select count(*) from engine_runs where client_id is not null").fetchone()[0]
+        check("with no scope set, no client run is visible", unscoped == 0, str(unscoped))
+
+        # A knowledge-clock run has no client and must still be writable
+        # and readable -- migration 014. Before it, this raised
+        # InsufficientPrivilege no matter what scope was set.
+        clock = RE_SCOPE.run_engine(pooled, RE_SCOPE.EngineRequest(
+            engine="E7", mode="FOUNDATION", model_role="MODEL_RESEARCH",
+            structured_input={"CASE_VERSION": 0}))
+        check("a knowledge-clock run writes with no client at all",
+              clock.status == "SUCCEEDED", clock.error or clock.status)
+        check("...and is readable without a scope",
+              str(clock.run_id) in {str(r[0]) for r in pooled.execute(
+                  "select run_id from engine_runs where client_id is null").fetchall()})
+        check("...and its output is readable too",
+              pooled.execute("select count(*) from engine_outputs where run_id=%s",
+                             (clock.run_id,)).fetchone()[0] == 1)
+
+        # The cost of tolerating NULL: a CASE run that lost its client would
+        # file as a knowledge-clock run. Only E7 has clock modes.
+        check("no non-E7 run is missing its client",
+              admin.execute(
+                  "select count(*) from v_runs_without_client").fetchone()[0] == 0,
+              str(admin.execute(
+                  "select engine::text, count(*) from v_runs_without_client "
+                  "group by 1").fetchall()))
+    finally:
+        pooled.close()
 
     runtime.close()
     print()
