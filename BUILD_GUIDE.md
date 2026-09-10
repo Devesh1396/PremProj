@@ -239,9 +239,20 @@ cached, so a guess cannot harden into a fact by reuse. The
 `CONFUSABLE_DO_NOT_MERGE` check runs at the exit, on every tier's answer
 including the LLM's.
 
-## Step 14 — Intake form V1 *(Core Intake V1 built 2026-09-10)*
+## Step 14 — Intake form V1 *(Core Intake V1 BUILT 2026-09-10)*
 
-The largest unstarted piece on the case track. It gates everything.
+Was the largest unstarted piece on the case track and gated everything.
+**Step 15 `CLIENT_NEW` is now the gating piece**: `scripts/intake.py`
+already produces the E6 canonical-state v1 input, so what remains is
+orchestration rather than new reasoning.
+
+Scope and, more importantly, the exclusions are settled in `DECISIONS.md`
+**D22** — written before any field, with the fields derived from them.
+Schema in `009_intake.sql`; RLS enabled and forced on all three
+client-scoped tables from that first migration.
+
+The requirements below are the original brief, all of them now met, and
+they stay here because step 15 has to keep meeting them.
 
 Keep it **practical**. Do not recreate RHT — that is a separate paid
 assessment and duplicating it dilutes it. Emit structured JSON, not prose.
@@ -338,8 +349,9 @@ the data and none of the access controls (52 policies and 246 grants
 failed). `backup.sh` now dumps roles alongside the database, and the
 restore procedure in `docs/OPERATIONS.md` applies them first.
 
-Verification is the suite, not row counts: all eight suites must pass
-against the restored database. Encoding must match UTF8 — `migrate.py`
+Verification is the suite, not row counts: **every suite** must pass
+against the restored database (eleven at the time of writing; run
+`testing/run_all.sh` rather than counting). Encoding must match UTF8 — `migrate.py`
 refuses otherwise.
 
 **Still unproven:** the script has never run on the VPS under cron with

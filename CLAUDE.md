@@ -212,28 +212,38 @@ Database is in India; model inference is not. Engine payloads carry
 
 ---
 
-## State as of this writing
+## State as of 2026-09-10
 
-**Complete and verified** — M0 foundations, M1 schema (8 migrations),
-M2 engine execution layer, and all seven canonical prompts installed.
+**Complete and verified** — M0 foundations, M1 schema (11 migrations), M2
+engine execution layer, all seven canonical prompts installed, and build
+steps **10b, 12, 13 and 14**.
 
-70 tables, 15 views, 48 enums, 183 indexes, 44 check constraints,
-38 triggers, 26 RLS tables, 52 policies. **Seven test suites**, all passing
-from an empty database three consecutive times, idempotent, and verified on
-a build with **no pg_trgm and no btree_gin**.
+75 tables, 18 views, 51 enums, 201 indexes, 55 check constraints,
+42 triggers, 29 RLS tables, 58 policies. **Eleven test suites**, passing
+from an empty database three consecutive times, idempotent, and verified in
+three capability configurations: full, **no pgvector**, and **no optional
+extension at all**.
 
-Working end to end with the fixture provider:
+Working end to end **on a live provider**, not only on the fixture:
 ```
 E6 init → case v1 → E1 Pass A → research questions
         → E7 → E1 Pass B → both passes, one prompt hash
 ```
+Measured 2026-09-09: 81,258 in / 86,681 out, **$0.386** per 4-call cycle,
+306s, both passes producing complete 19-part reports. **D5 is answered —
+do not stage Engine 1.** The free provider tier is not viable; billing is a
+prerequisite.
 
-**Blocked pending input:** `LLM_API_KEY` and provider base URL. Nothing
-else. The seven prompts are installed and hashed.
+**Nothing is blocked on input.** `LLM_API_KEY` and the base URL are set.
 
-**Next:** C3 normalization layer (case track) and K1 ontology seed
-(knowledge track), in parallel. K1 reads
-`knowledge/seed/foundation_domains.md`. See `BUILD_PLAN.md`.
+**Since D23 the prompts are rows, not files.** `prompts/*.md` stays the
+authored form; `engine_prompts` is what `RUN_ENGINE` reads, so a fresh
+deployment must run `scripts/load_prompts.py` after migrating or every
+engine raises `PromptMissing`. Migrating alone is no longer enough.
+
+**Next:** step 11 (the control-contract registry, then the n8n `RUN_ENGINE`
+subworkflow — no n8n credentials are required, see `PROGRESS.md`) and step
+15 `CLIENT_NEW`, in parallel. See `BUILD_GUIDE.md`.
 
 ## Do NOT build
 
@@ -252,11 +262,16 @@ no inbox UI, no ingestion pipeline, no acquisition adapters.
 ## Deferred by decision, not forgotten
 
 Full engine-output JSON schemas beyond the control contract. Client report
-formatting, WhatsApp output, practitioner deep view. Engine 1 call-size
-measurement (pending real prompt and API key — measure, do not pre-empt).
+formatting, WhatsApp output, practitioner deep view.
+
+*(Engine 1 call-size measurement is no longer deferred — it was measured
+live on 2026-09-09 and settled D5. See above.)*
 
 ## Genuinely open
 
-Intake form V1 (largest unstarted piece, gates the case track).
+Intake form **V2** — V1 is built (D22, migration `009`); which fields V2
+adds is a question for `v_missing_data_recurrence` after real cases, not
+for a design session. The practitioner-facing capture surface: V1 accepts a
+structured submission and how a human fills it in is still open.
 Practitioner review UI. Deterministic flag rule set (start narrow).
 Indian food composition data source. See `docs/DECISIONS.md` OPEN section.

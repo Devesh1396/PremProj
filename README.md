@@ -32,8 +32,17 @@ export POSTGRES_HOST=localhost
 
 python scripts/migrate.py --status
 python scripts/migrate.py
+python scripts/load_prompts.py     # engine specifications into the DB (D23)
 bash testing/run_all.sh
 ```
+
+`load_prompts.py` is not optional and is not part of migrating. Since D23
+the seven engine specifications are **rows**: `prompts/*.md` is the
+authored form and `engine_prompts` is what `RUN_ENGINE` reads, which is
+what lets n8n run an engine without a copy of this repository. A migrated
+database with an empty registry is valid and unusable — every engine
+raises `PromptMissing` on its first call. `load_prompts.py --check` exits
+0 only when all seven are active and match the files.
 
 n8n at http://localhost:5678
 

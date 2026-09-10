@@ -168,14 +168,33 @@ def main() -> int:
             "where active order by engine"
         ).fetchall()
         print()
-        print("ACTIVE REGISTRY")
+        print(f"ACTIVE REGISTRY  ({len(rows)} of {len(ENGINE_PROMPTS)} engines)")
         for engine, filename, short, chars in rows:
             print(f"  {engine}  {filename:34s} {short}  {chars:>7,} chars")
 
-    changed = [a for _, a in actions if a not in ("unchanged",)]
-    if check_only and changed:
-        print(f"\n{len(changed)} prompt(s) differ from the registry.", file=sys.stderr)
+    changed = [(e, a) for e, a in actions if a != "unchanged"]
+
+    # Readiness, not just drift. An engine with no active row raises
+    # PromptMissing at run time, so a deployment that migrated and stopped
+    # is a deployment where every engine fails on its first call. That must
+    # be a non-zero exit here rather than a surprise there.
+    if len(rows) != len(ENGINE_PROMPTS):
+        missing = sorted(set(ENGINE_PROMPTS) - {r[0] for r in rows})
+        print(f"\nNOT READY: no active prompt for {', '.join(missing)}. "
+              "RUN_ENGINE will raise PromptMissing for these engines.",
+              file=sys.stderr)
         return 1
+
+    if check_only and changed:
+        print(f"\n{len(changed)} prompt(s) differ from the authored files: "
+              + ", ".join(f"{e} ({a})" for e, a in changed)
+              + "\nRun `python3 scripts/load_prompts.py` to load them.",
+              file=sys.stderr)
+        return 1
+
+    if check_only:
+        print(f"\nREADY: all {len(rows)} engine prompts active and matching "
+              "prompts/.")
     return 0
 
 

@@ -73,6 +73,13 @@ same order and for the same reason:
 4. assert `phi_runtime` is `NOSUPERUSER NOBYPASSRLS`, and print
    `system_capabilities`
 
+`run_all.sh` runs `scripts/load_prompts.py` itself, right after migrating,
+so the suites always start from a registry that matches `prompts/` — see
+D23, and note that `test_run_engine.py` deliberately replaces the seven
+specifications with stubs for the length of its run. A **deployment** has
+no such safety net: `docs/OPERATIONS.md` step 6 loads them explicitly, and
+step 7 refuses to call n8n ready until `load_prompts.py --check` exits 0.
+
 ---
 
 ## Running the suites
@@ -104,8 +111,25 @@ passwords through `scripts/set_role_passwords.py`, run the suites. That
 script is shared rather than duplicated, so the step that decides whether
 RLS is real is the same three places it happens — laptop, CI, VPS.
 
-CI runs it twice over: once on `pgvector/pgvector:pg16` and once on plain
-`postgres:16` with pgvector absent.
+CI runs it three times over: on `pgvector/pgvector:pg16` (full
+capability), on plain `postgres:16` (no pgvector), and on `postgres:16`
+with the **contrib control files deleted from the server** — no pgvector,
+no pg_trgm, no btree_gin. That third job exists because pg_trgm and
+btree_gin ship in every PostgreSQL image, so no choice of image can test
+their absence, and steps 12 and 13 duly shipped an ungated `similarity()`
+call that killed the K1 seeder on a database without pg_trgm.
+
+Reproduce that floor locally:
+
+```bash
+set -a; . ./.env.local; set +a
+bash testing/run_bare.sh
+```
+
+It moves the extension control files aside, rebuilds the schema, asserts
+every capability is recorded false, runs the suites, and puts the files
+back — including on failure and on Ctrl-C. **Destructive**: it drops and
+rebuilds `public`, so point it at the throwaway database only.
 
 ---
 

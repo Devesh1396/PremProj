@@ -43,10 +43,41 @@ docker compose exec postgres psql -U phi_admin -d phi -c \
 docker compose exec postgres psql -U phi_admin -d phi -c \
   "ALTER ROLE phi_practitioner WITH PASSWORD 'from-your-env';"
 
-# 6. Verify
+# 6. LOAD THE ENGINE PROMPTS. Not optional, and not part of migrating.
+#    Since D23 the prompts are ROWS: prompts/*.md is the authored form and
+#    engine_prompts is what RUN_ENGINE reads, which is the only reason n8n
+#    can run an engine without a copy of the repository.
+#
+#    A database that has been migrated and not loaded is perfectly valid
+#    and completely unusable: engine_prompts is empty, and RUN_ENGINE
+#    raises PromptMissing on the first call of every engine. That is
+#    correct behaviour (hard rule 7 -- never substitute a stub) and a
+#    miserable thing to diagnose at 2am, so do this now.
+DATABASE_URL=postgresql://phi_admin:...@host:port/phi \
+  python3 scripts/load_prompts.py
+
+# 7. Verify, and do not skip the second half.
 docker compose exec postgres psql -U phi_admin -d phi -c \
   "SELECT capability, enabled FROM system_capabilities;"
+
+#    n8n is NOT ready until this exits 0. It asserts all seven engines have
+#    an active prompt AND that each active hash matches the authored file,
+#    and prints the hash of each so it can be compared against the hash
+#    recorded in engine_runs later.
+DATABASE_URL=postgresql://phi_admin:...@host:port/phi \
+  python3 scripts/load_prompts.py --check
+#    exit 0  -> READY: all 7 engine prompts active and matching prompts/
+#    exit 1  -> NOT READY: names the engines with no active row, or the
+#               prompts that differ from the authored files
+#    exit 2  -> a file in prompts/ is missing or empty
 ```
+
+**Whenever `prompts/*.md` changes, `load_prompts.py` must be re-run** —
+deploying a prompt edit is a load, not a restart. The registry is
+append-only: loading changed content inserts a new version and deactivates
+the old one, so the superseded text stays readable for any `engine_runs`
+row that cites its hash. Reverting reactivates the stored version rather
+than creating a third.
 
 Connect from the host for admin work:
 ```bash
@@ -222,13 +253,26 @@ docker compose exec postgres psql -U phi_admin -d phi_restore_test -c "
 # 5. Set the role passwords from .env, as at first install
 DATABASE_URL=... python3 scripts/set_role_passwords.py
 
+# 5b. The prompt registry comes back WITH the dump -- engine_prompts is an
+#     ordinary table, so pg_dump carried its rows and their hashes. Verify
+#     that rather than assuming it, because a restore from a backup taken
+#     before migration 010 will have no such table at all, and a restore
+#     from a machine whose prompts/ had drifted will disagree with this
+#     checkout.
+DATABASE_URL=...phi_restore_test python3 scripts/load_prompts.py --check
+#     exit 0 -> the restored registry matches prompts/ in this checkout
+#     exit 1 -> it does not. Read the output before loading over it: the
+#               restored rows are what produced every engine_runs.prompt_hash
+#               in this database, and superseding them is a deliberate act.
+
 # 6. THE REAL TEST: is it usable, or merely present?
 #    Counts prove nothing about whether triggers, constraints and policies
 #    survived. Run the suite against the restored database.
 DATABASE_URL=postgresql://phi_admin:...@host:port/phi_restore_test \
   bash testing/run_all.sh
-# All eight suites must pass, and migrations must report "Up to date"
-# rather than trying to re-apply.
+# EVERY suite must pass, and migrations must report "Up to date"
+# rather than trying to re-apply. run_all.sh exits non-zero if any suite
+# fails; read the exit code, do not read the last line and hope.
 
 # 7. Clean up
 docker compose exec postgres dropdb -U phi_admin phi_restore_test
@@ -245,6 +289,28 @@ cluster where `phi_runtime` and `phi_practitioner` do **not** exist and
 follow step 2a. If `pg_restore` reports errors mentioning a role that does
 not exist, the roles file was not applied first — the data will land and
 the access controls will not.
+
+### Rebuilding from the repository, with no backup
+
+The other disaster: the database is gone and there is nothing to restore.
+The repository can rebuild an empty one, and the sequence is longer than
+`migrate.py` by exactly one step that is easy to forget:
+
+```bash
+python3 scripts/migrate.py             # schema
+python3 scripts/set_role_passwords.py  # roles
+python3 scripts/load_prompts.py        # THE ENGINE SPECIFICATIONS (D23)
+python3 scripts/seed_ontology.py       # K1 concept dictionary, if wanted
+python3 scripts/load_prompts.py --check   # must exit 0 before n8n is ready
+bash testing/run_all.sh                # prove it, do not assume it
+```
+
+Client data is **not** recoverable this way and never was; this rebuilds
+the machine, not the record. What it does mean is that a lost prompt
+registry is not a crisis: `prompts/*.md` is the authored form and is in
+version control, so the registry can always be rebuilt from it. Rows for
+superseded versions that no longer exist in the checkout cannot, which is
+why the dump is still the primary path.
 
 ---
 
