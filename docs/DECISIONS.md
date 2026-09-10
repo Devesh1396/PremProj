@@ -2420,3 +2420,101 @@ what stops a case cycling on its own recommendation (hard rule 3).
 The cycle ends at the review queue, exactly as `CLIENT_NEW` does. E5 and
 release stay in `client_release.py`, behind a practitioner decision and the
 safety gate (hard rule 9).
+
+---
+
+## D44 — The budget was a name; K00 is what made it matter
+**SETTLED 2026-09-10** — BUILD_GUIDE step 22; migration `028`; A4, hard rule 3
+
+`K00_FOUNDATION_CONTROLLER` adds **no new knowledge work**. Every stage it
+drives already exists as its own script (K02–K13). What it adds is the
+decision of what runs next, the position so a restart resumes, and the
+stop.
+
+### `KNOWLEDGE_DAILY_TOKEN_BUDGET` had never been read
+
+It has been in `.env.example` since the beginning and **nothing has ever
+read it**. That mattered nowhere: every earlier stage ran on fixtures or one
+item at a time, under a human who could see the bill.
+
+K00 is where it matters — a loop that discovers, ingests, extracts,
+researches and synthesises across 26 domains, unattended. An unenforced
+budget on *that* is not an oversight, it is the entire risk. This is the
+fourth thing in this build to have existed as a name with nothing behind it
+(the safety rules, `client_interventions.outcome`, `client_followups`, and
+now the budget), and the pattern is always the same: a control that only
+mattered once something was built that could actually run away.
+
+**The cap is measured from `cost_events`**, not from a counter the
+controller keeps. A counter can be forgotten to increment; the rows are
+what actually happened. Client work is excluded **in both directions**: a
+case does not eat the foundation budget, and a practitioner with a case in
+front of them is never waiting on tomorrow.
+
+**Unset means unbounded, and every caller says so.** No default is invented
+here — choosing a number would be a spending decision that belongs to the
+practitioner, not to the builder.
+
+### It does not execute by default
+
+`--plan` is the default; `--execute` is an explicit act. K00 is the one
+component that could begin mass ingestion unattended, and the standing
+instruction is one source through the complete loop first. **A controller
+whose safe mode is the one you have to remember to ask for is not safe.**
+
+`DISCOVER` and `INGEST` are not executable stages at all. Both are real,
+tested scripts; wiring them into an unattended loop before a single source
+has been through the whole thing by hand is exactly what that instruction
+forbids. They are reported as **MANUAL, with the reason**, rather than
+quietly omitted — a stage that vanishes from the plan looks like a stage
+that does not exist.
+
+### Library stages are not per-domain, and pretending otherwise is a bug
+
+A claim belongs to a **source**, not to a domain: `knowledge_extract`,
+`knowledge_research` and `knowledge_synthesize` each queue library-wide.
+Running them once per domain had every domain claim the same item — three
+domains "processing" one claim, with the accounting to match. Caught in the
+first `--plan` output, which is what a dry run is for.
+
+`CONTROVERSY` and `GAP` genuinely are per-domain: both read across what has
+accumulated in one domain, which is why they exist as separate passes at
+all (D41). So `Stage.scope` is `LIBRARY` or `DOMAIN`, and library stages run
+**once** per batch, before the per-domain ones that depend on them.
+
+### The cursor is a row, and a failing domain is paused
+
+`foundation_progress` holds each domain's stage. A controller keeping its
+position in memory would restart every domain from `DISCOVER` after a
+container restart — which turns a bounded build into an unbounded one.
+
+A domain that fails `K00_ERROR_PAUSE_AFTER` times consecutively is
+**paused, with its reason**, and leaves the working queue while staying
+visible. An unattended loop that retries a permanent failure spends the
+whole budget on it and covers nothing else. `record_error` ensures the
+progress row before writing: failing to record a failure because the row
+was missing is the worst possible moment to be strict — the domain would
+fail silently and forever, never reaching the pause.
+
+### Priority orders the queue and nothing else
+
+Core domains first, then `wave1_priority`, then least-recently-advanced.
+That is a **weight on this queue**. It never restricts what Engine 7 may
+discover, autonomous domain expansion continues throughout, and the suite
+asserts no column exists that would turn it into a boundary.
+
+### `WAVE1_FOUNDATION_READY` is computed, and `IDLE` is not `COMPLETE`
+
+`v_wave1_readiness` reports A4's four dimensions **at once** — domain
+coverage, knowledge depth, retrieval quality, provenance — and every one is
+a floor rather than a definition of quality. A strategy with no concepts
+counts against provenance, not depth: it is a strategy nothing will ever
+retrieve (D8).
+
+It is a **view**, never a stored flag, because a saved READY outlives the
+library it described: a row saying so from three months ago is worse than
+no row. The suite asserts no base table carries a contradicting column.
+
+`foundation_stage` has no `COMPLETE` value (§70). A domain with nothing
+queued is `IDLE` and **stays in the queue** — the next source to arrive puts
+it back to work.

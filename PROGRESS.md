@@ -26,8 +26,8 @@ not inspected by eye.**
 
 | | |
 |---|---|
-| Schema | 28 migrations, 95 tables, 36 views, 54 enums, 248 indexes, 94 check constraints, 53 triggers, 62 policies, 31 RLS tables |
-| Suites | **26**, green from an empty database, each run followed by a re-run, and in three configurations: full, no optional extension, and **`MODEL_EMBEDDING` unset with pgvector present** |
+| Schema | 29 migrations, 97 tables, 38 views, 55 enums, 251 indexes, 96 check constraints, 53 triggers, 62 policies, 31 RLS tables |
+| Suites | **27**, green from an empty database, each run followed by a re-run, and in three configurations: full, no optional extension, and **`MODEL_EMBEDDING` unset with pgvector present** |
 | CI | `.github/workflows/tests.yml` — every push on every branch, **with and without pgvector** |
 | Engines | All seven canonical prompts installed; E6 → E1 Pass A → E7 → E1 Pass B proven **live** |
 | Ontology | 26 domains, 269 concepts seeded from the curriculum, hash-verified |
@@ -128,6 +128,49 @@ single thing `gemini-embedding-001` did not do.
 Two calls in total, both incidental to a CLI smoke test. This is a
 one-call verification of the wire format and **not** evidence about
 throughput, rate limits or cost at corpus scale.
+
+**Step 22: K00_FOUNDATION_CONTROLLER — and the budget that was a name.**
+
+`KNOWLEDGE_DAILY_TOKEN_BUDGET` has been in `.env.example` since the
+beginning and **nothing had ever read it**. That mattered nowhere while
+every stage ran on fixtures or one item at a time under a human who could
+see the bill. K00 is where it matters — a loop across 26 domains,
+unattended — and an unenforced budget on that is the entire risk.
+
+| | |
+|---|---|
+| `028` | `knowledge_spend_today()`, `foundation_progress`, `foundation_batches`, `v_wave1_readiness`, `v_foundation_queue` |
+| `foundation_controller.py` | the loop: what runs next, where it is, when it stops |
+
+**The controller adds no new knowledge work.** Every stage it drives
+already exists (K02–K13). What it adds is the decision, the cursor and the
+stop.
+
+**It does not execute by default.** `--plan` is the default and
+`--execute` is an explicit act, because K00 is the one component that could
+begin mass ingestion unattended. `DISCOVER` and `INGEST` are not executable
+stages at all — reported as **MANUAL with the reason**, never quietly
+omitted.
+
+**The cap is measured from `cost_events`**, not a counter the controller
+keeps: a counter can be forgotten to increment, rows cannot. Client work is
+excluded in **both** directions — a case neither eats the foundation budget
+nor waits on it. **Unset means unbounded and says so**; no default is
+invented, because that is a spending decision.
+
+**Library stages are not per-domain, and pretending otherwise was a bug**
+the first `--plan` caught: a claim belongs to a source, so running
+extraction per domain had three domains claim the same item.
+`CONTROVERSY` and `GAP` genuinely are per-domain (D41), so `Stage.scope`
+separates them.
+
+**The cursor is a row**, so a restart resumes rather than restarting every
+domain from `DISCOVER`. A domain failing repeatedly is **paused with its
+reason** rather than retried forever.
+
+**`WAVE1_FOUNDATION_READY` is computed, never stored** — A4's four
+dimensions at once, every one a floor. `foundation_stage` has no
+`COMPLETE` (§70); `IDLE` stays in the queue.
 
 **Step 21: CLIENT_FOLLOWUP and E4 — the second and every later cycle.**
 
@@ -359,7 +402,7 @@ suite on the no-extension floor, not by reading the branch.
 - **No real source has run the loop yet** — only fixtures and synthetic
   documents. Do not begin mass ingestion; one real source first, then the
   20-video pilot.
-- Steps 22–23.
+- Step 23.
 - `STRIP_IDENTITY_FROM_ENGINE_PAYLOADS` is documented and **not enforced**
   in `RUN_ENGINE`.
 - On the VPS specifically: the restore drill has not been run **on that

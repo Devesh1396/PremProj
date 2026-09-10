@@ -463,8 +463,12 @@ migration `023`, `testing/test_retrieval.py`. See D39.
 **Step 21 is BUILT** — migration `027`, `scripts/client_followup.py`, E4
 §64B, `testing/test_followup.py`. See D43.
 
-**Next:** step 22, the Wave-1 foundation build. **Do not begin mass
-ingestion** until one real source has run the whole loop.
+**Step 22 is BUILT** — migration `028`, `scripts/foundation_controller.py`,
+`testing/test_foundation.py`. See D44.
+
+**Next:** step 23, practice intelligence. **Do not begin mass ingestion**
+until one real source has run the whole loop — and note that K00 is exactly
+the thing that would, which is why `--execute` is not its default.
 
 `MODEL_EXTRACTION` on the cheapest capable model — highest volume.
 Use the **Batch API** where the provider offers it: the knowledge clock is
@@ -607,7 +611,7 @@ rather than folded into it.
 The cycle ends at the review queue. E5 and release stay in
 `client_release.py` (step 20).
 
-## Step 22 — Wave-1 foundation build
+## Step 22 — Wave-1 foundation build  ✅ BUILT
 
 `K00_FOUNDATION_CONTROLLER`. Long-running, resumable, batched, cost-capped.
 Core domains carry higher **processing priority only** — never a limit on
@@ -615,6 +619,25 @@ what E7 may discover.
 
 `WAVE1_FOUNDATION_READY` is a **computed operational state**, not a
 certification and not a meeting. No `COMPLETE` status exists.
+
+```
+python3 scripts/foundation_controller.py --status
+python3 scripts/foundation_controller.py --plan
+python3 scripts/foundation_controller.py --execute --batch 1
+```
+
+**`--plan` is the default.** K00 is the one component that could begin mass
+ingestion unattended, so executing is an explicit act, and `DISCOVER` /
+`INGEST` are not executable stages at all — reported as MANUAL, with the
+reason.
+
+**The budget is enforced now** (D44). `KNOWLEDGE_DAILY_TOKEN_BUDGET` had
+been in `.env.example` since the beginning with nothing reading it; the cap
+is measured from `cost_events`, client work is excluded both ways, and
+unset means unbounded rather than a default nobody chose.
+
+Resumable because the cursor is a row (`foundation_progress`). A domain
+that keeps failing is paused with its reason. `IDLE` is not `COMPLETE`.
 
 ## Step 23 — Practice intelligence
 

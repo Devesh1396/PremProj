@@ -26,7 +26,7 @@ finished it must keep working on n8n + PostgreSQL + an LLM API alone.
 
 | File | When |
 |---|---|
-| `docs/DECISIONS.md` | **Before proposing any structural change.** 43 settled decisions with rationale and rejected alternatives. |
+| `docs/DECISIONS.md` | **Before proposing any structural change.** 44 settled decisions with rationale and rejected alternatives. |
 | `docs/MASTER_SPEC.md` | The 40-phase build specification plus amendments. |
 | `BUILD_PLAN.md` | Milestones, dependencies, acceptance criteria. |
 | `PROGRESS.md` | What actually works, tests passed, bugs fixed, next exact task. |
@@ -336,11 +336,11 @@ run as `phi_runtime` at all (D25). See `PROGRESS.md` *Deployed to the VPS*.
 layer, all seven canonical prompts installed, and build steps **10b and
 11–15**. Step 11 is **frozen**: changes to it are bug fixes only.
 
-28 migrations, 95 tables, 36 views, 54 enums, 248 indexes, 94 check
+29 migrations, 97 tables, 38 views, 55 enums, 251 indexes, 96 check
 constraints, 53 triggers, 31 RLS tables, 62 policies — measured
 2026-09-10, with the counting queries recorded in `PROGRESS.md`; earlier
 figures used a different method and do not reconcile, so re-measure rather
-than adjust. **Twenty-six test suites**, passing from an empty database,
+than adjust. **Twenty-seven test suites**, passing from an empty database,
 idempotent on a re-run, and verified in four configurations: full, **no
 pgvector**, **no optional extension at all**, and **`MODEL_EMBEDDING`
 unset with pgvector present** — the last is what the VPS actually runs,
@@ -665,6 +665,36 @@ BEFORE the column, `STOPPED` requires a reason, and **adherence is stored
 beside the outcome, never folded into it** — an intervention nobody carried
 out has not failed, it has not been tested. A follow-up is processed once
 (`processed_at`) and spends one routing hop.
+
+**Step 22: K00_FOUNDATION_CONTROLLER, and the budget that was a name
+(D44).** `KNOWLEDGE_DAILY_TOKEN_BUDGET` had been in `.env.example` since
+the beginning with **nothing ever reading it** — harmless while every stage
+ran on fixtures under a human who could see the bill, and the entire risk
+once a loop across 26 domains exists. The cap is measured from
+`cost_events`, never from a counter the controller keeps; client work is
+excluded **in both directions**; and **unset means UNBOUNDED and says so**,
+because inventing a default would be a spending decision that is not the
+builder's to make.
+
+**K00 does not execute by default.** `--plan` is the default, `--execute`
+an explicit act — a controller whose safe mode is the one you have to
+remember to ask for is not safe. `DISCOVER` and `INGEST` are **not
+executable stages**: reported as MANUAL with the reason, never quietly
+omitted, because the standing instruction is one source through the
+complete loop first.
+
+**Library stages are not per-domain.** A claim belongs to a SOURCE, so
+running K09/K10/K11 once per domain had every domain claim the same item.
+`Stage.scope` is `LIBRARY` or `DOMAIN`; only `CONTROVERSY` and `GAP` are
+genuinely per-domain (D41). The cursor is a ROW (`foundation_progress`) so
+a restart resumes, and a domain failing repeatedly is **paused with its
+reason** rather than retried until the budget is gone.
+
+**Priority orders the queue and nothing else** — core first, then
+`wave1_priority`. It never restricts what Engine 7 may discover.
+**`WAVE1_FOUNDATION_READY` is a VIEW, never stored**: a saved READY
+outlives the library it described. `foundation_stage` has no `COMPLETE`
+(§70) and `IDLE` stays in the queue.
 
 **FULL-TEXT SEARCH ORS ITS TERMS. Never `websearch_to_tsquery`,
 `plainto_tsquery` or `phraseto_tsquery` here — they AND (bug 63).** A
