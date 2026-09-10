@@ -110,6 +110,21 @@ HANDOFFS: dict[tuple[str, str], list[tuple[str, bool, str, str]]] = {
          "is a failed run.")],
 }
 
+# Which (engine, mode) pairs are KNOWLEDGE-CLOCK work rather than client
+# work. A clock run must have NO client and emits CASE_VERSION 0 (D18).
+#
+# Declared here because this is the authored form of the registry, the same
+# way `required` is. It is NOT a second copy of the rule: migration 015 put
+# the list inside trg_engine_run_coherent as well, which its own comment
+# said not to do, and 020 moved it out. The trigger reads
+# engine_handoffs.client_required; this is what writes it.
+CLOCK_MODES: set[tuple[str, str]] = {
+    ("E7", "FOUNDATION"),
+    ("E7", "UPDATE"),
+    ("E7", "INBOX"),
+}
+
+
 # Which mode an engine runs in when the caller does not say. Five engines
 # have one mode; E6 and E7 have no safe default, because guessing wrong
 # means expecting a delta where a state was needed or the reverse.
@@ -201,12 +216,15 @@ def load(conn: psycopg.Connection, check_only: bool = False) -> list[tuple[str, 
                 actions.append((label, "would-load" if current is None else "would-update"))
                 continue
             conn.execute(
-                """insert into engine_handoffs (engine, mode, tag, required, prompt_ref, note)
-                   values (%s,%s,%s,%s,%s,%s)
+                """insert into engine_handoffs
+                     (engine, mode, tag, required, prompt_ref, note, client_required)
+                   values (%s,%s,%s,%s,%s,%s,%s)
                    on conflict (engine, mode, tag) do update
                      set required=excluded.required, prompt_ref=excluded.prompt_ref,
-                         note=excluded.note, active=true, loaded_at=now()""",
-                (engine, mode, tag, required, ref, note))
+                         note=excluded.note, active=true, loaded_at=now(),
+                         client_required=excluded.client_required""",
+                (engine, mode, tag, required, ref, note,
+                 (engine, mode) not in CLOCK_MODES))
             actions.append((label, "loaded" if current is None else "updated"))
 
     if not check_only:

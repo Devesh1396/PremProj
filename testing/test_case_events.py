@@ -149,6 +149,49 @@ def main() -> int:
                              _role_password("POSTGRES_RUNTIME_PASSWORD"))
     runtime = psycopg.connect(runtime_dsn)
 
+    # ------------------------------------------------------------------
+    print("\nthe client/clock rule comes from the registry, not a second list")
+
+    # 015 hard-coded ('FOUNDATION','UPDATE','INBOX') inside the trigger,
+    # under a comment saying not to. Harmless until a fifth clock mode is
+    # registered, at which point every correct call to it is rejected with
+    # a message about a case with no case. 020 moved the rule to
+    # engine_handoffs.client_required, so registering a mode is enough.
+    admin.execute("delete from engine_handoffs where mode='COHTEST'")
+    admin.execute(
+        "insert into engine_handoffs (engine, mode, tag, required, prompt_ref, "
+        "                             note, client_required) "
+        "values ('E7','COHTEST','RESEARCH_PRACTICE_FOUNDATION_HANDOFF',true,"
+        "        'test','a clock mode registered at runtime',false)")
+    run_id = str(__import__("uuid").uuid4())
+    admin.execute(
+        "insert into engine_runs (run_id, engine, engine_mode, prompt_file, "
+        "                         prompt_hash, model_role) "
+        "values (%s,'E7','COHTEST','engine7_research_practice.md','x','MODEL_RESEARCH')",
+        (run_id,))
+    check("a newly registered clock mode runs with NO client, no code change",
+          admin.execute("select client_id from engine_runs where run_id=%s",
+                        (run_id,)).fetchone()[0] is None)
+    expect_error(
+        admin,
+        "insert into engine_runs (engine, engine_mode, client_id, prompt_file, "
+        "                         prompt_hash, model_role) "
+        "values ('E7','COHTEST',gen_random_uuid(),'x','y','MODEL_RESEARCH')",
+        (),
+        "...and is still refused a client",
+        "knowledge-clock run")
+    admin.execute("delete from engine_runs where run_id=%s", (run_id,))
+    admin.execute("delete from engine_handoffs where mode='COHTEST'")
+
+    expect_error(
+        admin,
+        "insert into engine_runs (engine, engine_mode, prompt_file, prompt_hash, "
+        "                         model_role) "
+        "values ('E7','NOSUCHMODE','x','y','MODEL_RESEARCH')",
+        (),
+        "an UNREGISTERED mode is refused, and says that is the problem",
+        "no active handoff is registered")
+
     print("\nrole configuration")
     # Assert the identity of the connection, not just the properties of the
     # role in pg_roles. Every isolation assertion below is meaningless if
