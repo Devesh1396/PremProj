@@ -125,6 +125,25 @@ HANDOFFS: dict[tuple[str, str], list[tuple[str, bool, str, str]]] = {
         "The synthesis DECISIONS. NO_CHANGE is a decision and a common, "
         "good one; a block that only ever carried creations would make "
         "'never silently duplicate' unenforceable.")],
+
+    # K12. The per-domain pass over accumulated evidence. Neither
+    # controversies nor negative knowledge falls out of ingestion: no
+    # single source says "these two bodies of evidence disagree" or "this
+    # was examined and does not work".
+    ("E7", "CONTROVERSY"): [(
+        "RESEARCH_PRACTICE_CONTROVERSY", True, "engine7 §R14",
+        "The disagreements and the negative findings themselves. §R8 "
+        "reported CONTROVERSIES_MAPPED and NEGATIVE_KNOWLEDGE_CREATED as "
+        "counts, and the tables have existed since 003 with no block able "
+        "to fill them.")],
+
+    # K13. What this domain still cannot answer.
+    ("E7", "GAP"): [(
+        "RESEARCH_PRACTICE_GAPS", True, "engine7 §R15",
+        "The gap QUESTIONS plus the governance record that the pass ran. "
+        "§R2b gave gap assessment three control-block fields, all counts; "
+        "nothing carried the questions, and 'nobody looked' and 'nothing "
+        "found' were the same absent row.")],
 }
 
 # Which (engine, mode) pairs are KNOWLEDGE-CLOCK work rather than client
@@ -141,6 +160,8 @@ CLOCK_MODES: set[tuple[str, str]] = {
     ("E7", "INBOX"),
     ("E7", "EVIDENCE"),
     ("E7", "SYNTHESIS"),
+    ("E7", "CONTROVERSY"),
+    ("E7", "GAP"),
 }
 
 

@@ -454,8 +454,11 @@ migration `023`, `testing/test_retrieval.py`. See D39.
 **Step 18 is BUILT** — migration `024`, `scripts/evaluate.py`,
 `testing/test_evaluation.py`, `docs/evidence/layer_a_baseline.md`. See D40.
 
-**Next:** step 19, K12/K13 controversy, negative knowledge and gaps. **Do
-not begin mass ingestion** until one real source has run the whole loop.
+**Step 19 is BUILT** — migration `025`, `scripts/knowledge_controversy.py`,
+`scripts/knowledge_gap.py`, `testing/test_controversy_gaps.py`. See D41.
+
+**Next:** step 20, E2, E3, the review queue and E5. **Do not begin mass
+ingestion** until one real source has run the whole loop.
 
 `MODEL_EXTRACTION` on the cheapest capable model — highest volume.
 Use the **Batch API** where the provider offers it: the knowledge clock is
@@ -523,11 +526,28 @@ Layers B and C cannot report anything until a real source is ingested and a
 domain reaches moderate coverage. `v_evaluation_state` shows a layer with
 `tests_defined = 0` rather than a passing score.
 
-## Step 19 — K12/K13 controversy, negative knowledge, gaps
+## Step 19 — K12/K13 controversy, negative knowledge, gaps  ✅ BUILT
 
 Dedicated per-domain passes once evidence has accumulated. Neither falls
 out of ingestion naturally — negative knowledge and controversies are the
 floors most likely to be missed at the end.
+
+```
+python3 scripts/knowledge_controversy.py --status   # which domains are OVERDUE
+python3 scripts/knowledge_controversy.py --one      # one overdue domain (K12)
+python3 scripts/knowledge_gap.py --one              # one un-assessed domain (K13)
+python3 scripts/knowledge_gap.py --escalate         # take up the top N gaps
+```
+
+Two knowledge-clock E7 modes, `CONTROVERSY` (§R14) and `GAP` (§R15), added
+as registry rows. See D41 for the four refusals that make a written row
+mean something — a controversy needs two positions, negative knowledge
+needs a revisit trigger, a gap status is a closed set, and "nobody looked"
+is not "nothing found".
+
+**`RESEARCHING` marks a gap as taken up, not researched.** Wiring an
+escalated gap into a live E7 run is step 21's continuous update: a gap
+question is not a claim, and `knowledge_research.py` researches claims.
 
 ## Step 20 — E2, E3, review queue, E5
 

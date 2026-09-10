@@ -26,8 +26,8 @@ not inspected by eye.**
 
 | | |
 |---|---|
-| Schema | 25 migrations, 90 tables, 31 views, 54 enums, 238 indexes, 85 check constraints, 50 triggers, 60 policies, 30 RLS tables |
-| Suites | **23**, green from an empty database, each run followed by a re-run, and in three configurations: full, no optional extension, and **`MODEL_EMBEDDING` unset with pgvector present** |
+| Schema | 26 migrations, 91 tables, 33 views, 54 enums, 239 indexes, 90 check constraints, 52 triggers, 60 policies, 30 RLS tables |
+| Suites | **24**, green from an empty database, each run followed by a re-run, and in three configurations: full, no optional extension, and **`MODEL_EMBEDDING` unset with pgvector present** |
 | CI | `.github/workflows/tests.yml` — every push on every branch, **with and without pgvector** |
 | Engines | All seven canonical prompts installed; E6 → E1 Pass A → E7 → E1 Pass B proven **live** |
 | Ontology | 26 domains, 269 concepts seeded from the curriculum, hash-verified |
@@ -128,6 +128,50 @@ single thing `gemini-embedding-001` did not do.
 Two calls in total, both incidental to a CLI smoke test. This is a
 one-call verification of the wire format and **not** evidence about
 throughput, rate limits or cost at corpus scale.
+
+**Step 19: K12 and K13 are built — the two passes nothing else produces.**
+
+`controversies`, `controversy_positions` and `negative_knowledge` have
+existed since migration `003` and **nothing had ever written to them**.
+That is a property of the pipeline, not an oversight: K09 reads one source
+and K11 turns claims into strategies, and neither can produce "these two
+bodies of evidence contradict each other" or "this was examined and does
+not work", because no single source says either.
+
+| | | |
+|---|---|---|
+| K12 | `knowledge_controversy.py` | E7 `CONTROVERSY` (§R14) — per domain, over accumulated evidence |
+| K13 | `knowledge_gap.py` | E7 `GAP` (§R15) — per domain, plus capped escalation |
+
+Two new knowledge-clock modes, added as **registry rows** plus their output
+contracts. `v_controversy_state`, `v_knowledge_gap_queue`,
+`domain_controversy_assessments`. 41 checks, both capability floors.
+
+**Four refusals carry it** (D41):
+
+- **A controversy with one position is refused at COMMIT.** It is a
+  consensus statement or a gap, and stored here it is retrieved and shown
+  as a live disagreement. A CONSTRAINT TRIGGER, deferred, because the
+  positions are written after the parent — deleting one back down to a
+  single position is refused the same way.
+- **Negative knowledge needs `why_investigated`, `evidence_examined` and
+  `revisit_trigger`.** Its only job is to stop the same question being
+  researched twice, and it cannot without the first two. Without the
+  third, "this does not work" is a `COMPLETE` status by another name,
+  which §70 forbids.
+- **`knowledge_gaps.status` is a closed set now.** It was free text, and
+  `foundation_ready` turns on `status = 'OPEN'` — a row written `'open'`
+  would have hidden a CRITICAL gap and marked a domain ready, silently and
+  in the direction that hides the problem.
+- **"Nobody looked" is not "nothing found".** `domain_controversy_assessments`
+  gives K12 the record `domain_gap_assessments` already gave K13. Without
+  it both states are an absent row, and the second is the dangerous one
+  (hard rule 11).
+
+**Escalation is capped and ranks by impact** (hard rule 3), and
+`RESEARCHING` means a gap was **taken up, not researched** — wiring one
+into a live E7 run is step 21's continuous update, and a gap question is
+not a claim. Named rather than half-built.
 
 **Step 18: evaluation layers A-E are built, and layer A has a baseline.**
 
@@ -230,7 +274,7 @@ suite on the no-extension floor, not by reading the branch.
 - **No real source has run the loop yet** — only fixtures and synthetic
   documents. Do not begin mass ingestion; one real source first, then the
   20-video pilot.
-- Steps 19–23.
+- Steps 20–23.
 - Engine 5 and the release path. `CLIENT_NEW` deliberately stops at the
   review queue; nothing yet turns an approval into client-facing output.
 - `STRIP_IDENTITY_FROM_ENGINE_PAYLOADS` is documented and **not enforced**

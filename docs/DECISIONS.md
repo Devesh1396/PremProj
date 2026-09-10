@@ -2119,3 +2119,99 @@ full text alone **0.1372**, full text + vector **0.3255**, same fourteen
 tests, 269 concepts embedded in between. The floor was 0.30 before either
 run — a threshold chosen to sit just under the number it judges is not a
 threshold.
+
+---
+
+## D41 — Controversy and negative knowledge are passes, not by-products
+**SETTLED 2026-09-10** — BUILD_GUIDE step 19; migration `025`
+
+`controversies`, `controversy_positions` and `negative_knowledge` have
+existed since migration `003` and nothing had ever written to them. That is
+not an oversight in the pipeline; it is a property of what the pipeline
+does.
+
+### Why they cannot fall out of ingestion
+
+K09 reads **one source** and produces claims. K11 turns claims into
+strategies. Nothing on that path can produce *"these two bodies of evidence
+contradict each other"* or *"this was investigated and does not work"*,
+because **no single source says either**. Both are statements about what has
+accumulated, so both need a dedicated pass over the accumulation — per
+domain, and **once that domain reaches moderate coverage rather than at the
+end** (BUILD_PLAN K9). Running it at the end is how a library ends up
+confidently recommending something the evidence already argued about.
+
+Two new E7 modes, both knowledge-clock: `CONTROVERSY` (§R14) and `GAP`
+(§R15). Adding them was an INSERT in `load_handoffs.py` plus the output
+contracts — the mode list is registry data, and migration `020` already
+removed the copy that lived in a trigger.
+
+### A controversy with one position is not a controversy
+
+It is a consensus statement, or a gap, and stored here it would be
+retrieved and shown to the practitioner as a **live disagreement**.
+`trg_controversy_positions_at_commit` refuses it — a CONSTRAINT TRIGGER
+deferred to commit, because the positions are written after the parent and
+an immediate check would make the correct write order impossible. Deleting
+a position back down to one is refused the same way.
+
+`ck_position_has_evidence` requires each position's `evidence_summary`.
+`held_by` records who holds a position, which is a fact about them and
+never the evidence (§12) — recorded beside it, never instead of it.
+
+**Do not manufacture controversy where consensus exists.** An empty result
+is legitimate and common; a fabricated controversy is indistinguishable
+from a real one at retrieval time, which makes it worse than silence.
+
+### Negative knowledge must be able to stop the next search
+
+That is the only job it has — 003's own comment: *"prevents repeated wasted
+research"*. So `ck_negative_is_actionable` requires `why_investigated`,
+`evidence_examined` **and** `revisit_trigger`. Without the first two the
+next pass cannot tell whether its question was already answered or answered
+badly; without the third, *"this does not work"* is a permanent verdict on
+a moving field — a `COMPLETE` status by another name, which §70 forbids.
+
+**Absence of evidence is not evidence of absence.** Something nobody has
+studied is a gap; something examined and found wanting is negative
+knowledge. Recording the first as the second tells the library it has an
+answer when what it has is a hole.
+
+### "Nobody looked" and "nothing found" must not be the same row
+
+`domain_gap_assessments` already made that distinction for gaps.
+`domain_controversy_assessments` now makes it for K12, for the same reason
+and in the same shape: a row means the pass **ran**, and
+`controversies_found = 0` is an honest result. Without it, a domain with no
+controversies and a domain nobody examined are both an absent row — and the
+second is the dangerous one (hard rule 11).
+
+`v_controversy_state.overdue` is the number worth watching: a domain deep
+enough to have disagreements in it, with no pass over them.
+
+### A gap's status is a closed set
+
+`knowledge_gaps.status` was free text defaulting to `'OPEN'`, and
+`v_domain_readiness` computes `foundation_ready` from `status = 'OPEN'`. A
+row written as `'open'` would have made a CRITICAL gap invisible and flipped
+a domain to ready — silently, and in the direction that hides the problem.
+`ck_gap_status` closes it to OPEN / RESEARCHING / RESOLVED / SUPERSEDED, and
+`ck_gap_resolution_coherent` means "resolved" cannot be a state something
+drifts into: it requires the resolution and the timestamp together.
+
+An unrecognised severity from a model lands at `MEDIUM` — the schema
+default — and is never promoted to CRITICAL or quietly demoted to LOW.
+
+### Escalation is capped and ranks by impact
+
+Hard rule 3. `v_knowledge_gap_queue` orders severity first, then how much of
+the library leans on that domain, then age — deterministically, so the same
+cap always takes the same top N. `--escalate` moves that top N from `OPEN`
+to `RESEARCHING`.
+
+**`RESEARCHING` marks a gap as taken up; it does not run a research pass.**
+Wiring an escalated gap into a live E7 run belongs to the continuous-update
+step (BUILD_PLAN K11 / step 21) and is deliberately **not** invented here: a
+gap question is not a claim, and `knowledge_research.py` researches claims.
+Building half a loop that looks finished would be worse than naming the
+boundary.

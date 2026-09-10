@@ -8,8 +8,8 @@
 >   summarised or reworded; heading levels adjusted only so the parts nest correctly.
 > - **Part II, §R1–§R3** — operating detail retained verbatim from the earlier master
 >   specification because the runtime depends on it and Part I does not restate it.
-> - **Part III, §R4–§R13 and §88** — the required output contract: self-audits, human-readable
->   formats, the three machine-readable handoff blocks, and the orchestration control block.
+> - **Part III, §R4–§R15 and §88** — the required output contract: self-audits, human-readable
+>   formats, the machine-readable handoff blocks, and the orchestration control block.
 > - **Appendix D** — the foundation domain curriculum, retained verbatim. Reference data for
 >   foundation building and the ontology seed, not a per-call instruction.
 >
@@ -3493,6 +3493,149 @@ recommendation.
 
 ---
 
+## R14. MACHINE-READABLE CONTROVERSY AND NEGATIVE KNOWLEDGE <RESEARCH_PRACTICE_CONTROVERSY>
+
+*Added by the build. §R8's foundation block reports
+`CONTROVERSIES_MAPPED` and `NEGATIVE_KNOWLEDGE_CREATED` as counts and
+carried neither the disagreements nor the findings. `controversies`,
+`controversy_positions` and `negative_knowledge` have existed since
+migration 003 with no block able to fill them.*
+
+Emitted in **CONTROVERSY** mode. The input is ONE domain and the evidence,
+claims and strategies already accumulated in it. The output is what the
+field genuinely disagrees about, and what has been examined and found not
+to work.
+
+<RESEARCH_PRACTICE_CONTROVERSY>
+MODE:
+DOMAIN_REFERENCE:
+CONTROVERSIES_JSON:
+NEGATIVE_KNOWLEDGE_JSON:
+</RESEARCH_PRACTICE_CONTROVERSY>
+
+### Neither of these falls out of ingestion
+
+Positive extraction produces claims and strategies. It does not produce
+"these two bodies of evidence contradict each other" or "this was
+investigated and does not work", because no single source says either.
+Both require reading across what has accumulated, which is why this is a
+dedicated per-domain pass and not a stage of K09.
+
+### `CONTROVERSIES_JSON` — an array of genuine disagreements
+
+Strict JSON. Each object:
+
+| field | |
+|---|---|
+| `question` | **Required.** The question the field disagrees about, stated so both sides would recognise it. |
+| `summary` | What the disagreement is, in a sentence or two. |
+| `why_studies_disagree` | Design, population, dose, duration, outcome definition, funding — whatever actually differs. "More research is needed" is not an answer. |
+| `population_differences` | Who each body of evidence studied. Say so explicitly where vegetarian Indian adults are not represented. |
+| `current_consensus` | What is genuinely agreed, if anything. `null` where nothing is. |
+| `current_uncertainty` | What remains open. |
+| `practical_interpretation` | What a practitioner should do while this is unsettled. |
+| `positions` | **Required, at least two.** Each with `position`, `evidence_summary`, `population_context`, `held_by`. |
+
+**At least two positions, and the database enforces it.** A record with one
+position is a consensus statement or a gap wearing a controversy's
+clothes, and it would be retrieved and shown to the practitioner as a live
+disagreement. `trg_controversy_positions_at_commit` refuses it.
+
+**Do not manufacture controversy where strong consensus genuinely
+exists.** An empty array is a legitimate and common result. Inventing a
+disagreement to fill this block makes the library less trustworthy than
+leaving it empty, because a fabricated controversy is indistinguishable
+from a real one at retrieval time.
+
+`held_by` records who holds a position. It is **not** evidence (§12) and
+never substitutes for `evidence_summary`, which is required.
+
+### `NEGATIVE_KNOWLEDGE_JSON` — what was examined and does not work
+
+Strict JSON. Each object:
+
+| field | |
+|---|---|
+| `claim_or_strategy` | **Required.** What was investigated. |
+| `why_investigated` | **Required.** Why it looked promising. A finding with no reason to have looked cannot stop the next pass looking again. |
+| `evidence_examined` | **Required.** What was actually read. |
+| `finding` | **Required.** What the evidence showed. |
+| `current_interpretation` | What this means in practice now. |
+| `revisit_trigger` | **Required.** What would make us look again — a trial reporting, a population studied, a dose tested. |
+| `strategy_id` | Where this negates a strategy already in the library. |
+
+`ck_negative_is_actionable` requires `why_investigated`,
+`evidence_examined` and `revisit_trigger`. The purpose of this table is to
+**prevent repeated wasted research**, and a row missing any of the three
+cannot: the next pass cannot tell whether its question was already
+answered, or answered badly, or answered before the evidence changed.
+
+**A revisit trigger is required for the reason §70 forbids a COMPLETE
+status.** "This does not work" with no condition attached is a permanent
+verdict on a field that keeps moving.
+
+### Absence of evidence is not evidence of absence
+
+A strategy nobody has studied is a **gap** (§R15), not negative knowledge.
+Negative knowledge means *examined and found wanting*. Recording an
+unstudied intervention here would tell the library it has an answer when
+what it has is a hole.
+
+---
+
+## R15. MACHINE-READABLE GAP ASSESSMENT <RESEARCH_PRACTICE_GAPS>
+
+*Added by the build. §R2b defines gap assessment as governance and gives
+it three control-block fields — `GAP_ASSESSMENT_COMPLETE`,
+`OPEN_CRITICAL_GAPS`, `OPEN_HIGH_PRIORITY_GAPS` — all counts. Nothing
+carried the questions.*
+
+Emitted in **GAP** mode. The input is ONE domain, its coverage across the
+18 §R2a dimensions, and what it currently holds. The output is what this
+domain still does not know.
+
+<RESEARCH_PRACTICE_GAPS>
+MODE:
+DOMAIN_REFERENCE:
+GAPS_JSON:
+ASSESSMENT_JSON:
+</RESEARCH_PRACTICE_GAPS>
+
+### `GAPS_JSON` — an array of open questions
+
+Strict JSON. Each object:
+
+| field | |
+|---|---|
+| `question` | **Required.** What the library cannot currently answer, as a question. |
+| `severity` | `CRITICAL` \| `HIGH` \| `MEDIUM` \| `LOW`. |
+| `why_it_matters` | What decision is worse without it. |
+| `what_would_close_it` | The kind of source or evidence that would answer it. |
+
+**`CRITICAL` means the foundation is not usable for this domain until it
+is addressed**, and `foundation_ready` turns on there being none open
+(hard rule 11). It is not a synonym for "important". Reach for `HIGH`
+unless a practitioner would be misled without the answer.
+
+### `ASSESSMENT_JSON` — the governance record
+
+| field | |
+|---|---|
+| `dimensions_examined` | Which of the 18 §R2a dimensions this pass actually looked at. |
+| `note` | What the pass covered and what it deliberately did not. |
+
+**Finding zero gaps is a legitimate result and is not completion.** A row
+in `domain_gap_assessments` means the pass RAN; `gaps_found = 0` means
+none were identified today. §70 forbids a `COMPLETE` status and this block
+does not create one by another name.
+
+**An empty `GAPS_JSON` with no assessment is a failed run**, not a clean
+one. The pass either happened or it did not, and the two must not look the
+same — that distinction is the whole reason the governance record exists
+separately from the count.
+
+---
+
 ## 88. ORCHESTRATION CONTROL BLOCK — REQUIRED
 
 *Added by the build. The runtime cannot route without this.*
@@ -3519,7 +3662,7 @@ absent values typed as nullable.
 
 | Field | Type | How to determine it |
 |---|---|---|
-| `ENGINE7_MODE` | enum | `"FOUNDATION"` \| `"UPDATE"` \| `"CASE"` \| `"INBOX"` \| `"EVIDENCE"` \| `"SYNTHESIS"`. Required. Determines which table below applies. `INBOX` is a manually added source processed through the Knowledge Inbox (§44–§55); `EVIDENCE` researches ONE claim (§R12) and `SYNTHESIS` turns claims and their evidence into strategy decisions (§R13). All of EVIDENCE, SYNTHESIS, FOUNDATION, UPDATE and INBOX are knowledge-clock work: no client, `CASE_VERSION` 0. |
+| `ENGINE7_MODE` | enum | `"FOUNDATION"` \| `"UPDATE"` \| `"CASE"` \| `"INBOX"` \| `"EVIDENCE"` \| `"SYNTHESIS"` \| `"CONTROVERSY"` \| `"GAP"`. Required. Determines which table below applies. `INBOX` is a manually added source processed through the Knowledge Inbox (§44–§55); `EVIDENCE` researches ONE claim (§R12); `SYNTHESIS` turns claims and their evidence into strategy decisions (§R13); `CONTROVERSY` is the dedicated per-domain pass over accumulated evidence (§R14) and `GAP` the dedicated gap assessment (§R15). Everything except `CASE` is knowledge-clock work: no client, `CASE_VERSION` 0. |
 | `CASE_VERSION` | integer | Echo the value supplied in the input. **In foundation, update and inbox mode emit `0`** — the contract requires this field on every run. |
 | `ENGINE_RUN_STATUS` | enum | `SUCCEEDED` \| `PARTIAL` \| `FAILED` \| `INSUFFICIENT_INPUT`. |
 | `ERROR_STATE` | string \| null | `null` unless `ENGINE_RUN_STATUS` is `FAILED`. |

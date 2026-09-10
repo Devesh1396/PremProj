@@ -26,7 +26,7 @@ finished it must keep working on n8n + PostgreSQL + an LLM API alone.
 
 | File | When |
 |---|---|
-| `docs/DECISIONS.md` | **Before proposing any structural change.** 40 settled decisions with rationale and rejected alternatives. |
+| `docs/DECISIONS.md` | **Before proposing any structural change.** 41 settled decisions with rationale and rejected alternatives. |
 | `docs/MASTER_SPEC.md` | The 40-phase build specification plus amendments. |
 | `BUILD_PLAN.md` | Milestones, dependencies, acceptance criteria. |
 | `PROGRESS.md` | What actually works, tests passed, bugs fixed, next exact task. |
@@ -336,11 +336,11 @@ run as `phi_runtime` at all (D25). See `PROGRESS.md` *Deployed to the VPS*.
 layer, all seven canonical prompts installed, and build steps **10b and
 11–15**. Step 11 is **frozen**: changes to it are bug fixes only.
 
-25 migrations, 90 tables, 31 views, 54 enums, 238 indexes, 85 check
-constraints, 50 triggers, 30 RLS tables, 60 policies — measured
+26 migrations, 91 tables, 33 views, 54 enums, 239 indexes, 90 check
+constraints, 52 triggers, 30 RLS tables, 60 policies — measured
 2026-09-10, with the counting queries recorded in `PROGRESS.md`; earlier
 figures used a different method and do not reconcile, so re-measure rather
-than adjust. **Twenty-three test suites**, passing from an empty database,
+than adjust. **Twenty-four test suites**, passing from an empty database,
 idempotent on a re-run, and verified in four configurations: full, **no
 pgvector**, **no optional extension at all**, and **`MODEL_EMBEDDING`
 unset with pgvector present** — the last is what the VPS actually runs,
@@ -483,12 +483,12 @@ adapters through the real chokepoint with only the transport replaced, so
 the policy, cursor, history, refusals and handoff are proven and the wire
 format is **not**. Treat the first live `PUBMED` run as unverified code.
 
-**E7 now has six modes** — `CASE` is client work; `FOUNDATION`, `UPDATE`,
-`INBOX`, `EVIDENCE` and `SYNTHESIS` are knowledge-clock work with no client
-and `CASE_VERSION` 0. The client/clock rule lives in
-`engine_handoffs.client_required`, so **adding a mode is an INSERT** — do
-not put a mode list in a trigger again (migration `020` removed the one
-`015` had).
+**E7 now has EIGHT modes** — `CASE` is client work; `FOUNDATION`,
+`UPDATE`, `INBOX`, `EVIDENCE`, `SYNTHESIS`, `CONTROVERSY` and `GAP` are
+knowledge-clock work with no client and `CASE_VERSION` 0. The client/clock
+rule lives in `engine_handoffs.client_required`, so **adding a mode is an
+INSERT** — do not put a mode list in a trigger again (migration `020`
+removed the one `015` had).
 
 **K10: the source's own citation is never the input (D36).**
 `evidence_referenced_by_source` is deliberately not sent to an EVIDENCE
@@ -566,6 +566,38 @@ rather than counted zero). Layer D is capped — a second spot-check sample
 is refused while one is unreviewed, because a queue that grows whether or
 not anyone looks at it is the recurring manual job hard rule 3 forbids.
 Layer E's denominator is items **reviewed**, never items presented.
+
+**Step 19: K12 and K13 are built — the two passes nothing else produces
+(D41).** `controversies`, `controversy_positions` and `negative_knowledge`
+existed since `003` with nothing ever writing to them, because K09 reads
+ONE source and no single source says "these two bodies of evidence
+disagree" or "this was examined and does not work". Both are statements
+about what has accumulated, so both are dedicated per-domain passes, run
+**from moderate coverage rather than at the end**.
+
+Four refusals make a written row mean something. **A controversy with one
+position is refused at COMMIT** — it is a consensus statement or a gap, and
+stored here it is retrieved as a live disagreement (a deferred CONSTRAINT
+TRIGGER, because positions are written after the parent). **Negative
+knowledge needs `why_investigated`, `evidence_examined` and
+`revisit_trigger`** — its only job is to stop the same question being
+researched twice, and a verdict with no revisit condition is a `COMPLETE`
+status by another name (§70). **`knowledge_gaps.status` is a closed set**;
+it was free text and `foundation_ready` turns on `status = 'OPEN'`, so
+`'open'` would have hidden a CRITICAL gap and marked a domain ready.
+**`domain_controversy_assessments` separates "nobody looked" from "nothing
+found"**, the way `domain_gap_assessments` already did for gaps — without
+it both are an absent row and the second is the dangerous one.
+
+**Absence of evidence is not evidence of absence.** Unstudied is a GAP;
+examined-and-found-wanting is NEGATIVE KNOWLEDGE. Swapping them either
+tells the library it has an answer when it has a hole, or sends the next
+pass to re-research something already refuted.
+
+**`RESEARCHING` means a gap was taken up, not researched.** Escalation is
+capped and ranks by impact (hard rule 3); wiring a gap into a live E7 run
+is step 21, because a gap question is not a claim and
+`knowledge_research.py` researches claims.
 
 **FULL-TEXT SEARCH ORS ITS TERMS. Never `websearch_to_tsquery`,
 `plainto_tsquery` or `phraseto_tsquery` here — they AND (bug 63).** A
