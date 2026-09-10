@@ -20,7 +20,10 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+
 import psycopg
+import manifest as MF
 
 REPO = Path(__file__).resolve().parents[1]
 PROMPTS = REPO / "prompts"
@@ -123,6 +126,39 @@ def main() -> int:
           "A candidate strategy is still a candidate" in e7)
 
     # ------------------------------------------------ hygiene
+    # ------------------------------------------------ manifest
+    print("\nMANIFEST.json is checkable, and checked")
+    # It used to carry `sections_expected`, a hand-declared number whose
+    # counting rule could not be reproduced -- no rule matched all seven
+    # prompts and the closest matched four. It looked like coverage and was
+    # not, and its Engine 7 sha256 had been stale since the D16 merge
+    # without anything noticing. Every field is derived now, and asserted
+    # here for all seven rather than for the one that happened to change.
+    manifest = json.loads((PROMPTS / "MANIFEST.json").read_text())
+    header, rows = manifest[0], manifest[1:]
+    check("the manifest documents its own counting rule",
+          header.get("_section_rule") and header.get("_section_rule_meaning"))
+    check("it covers all seven prompts",
+          {r["file"] for r in rows} == set(ALL_ENGINES), str(sorted(
+              r["file"] for r in rows)))
+    stale = []
+    for row in rows:
+        fresh = MF.entry(PROMPTS / row["file"])
+        for field, value in fresh.items():
+            if row.get(field) != value:
+                stale.append(f"{row['file']}.{field}: manifest={row.get(field)!r} "
+                             f"actual={value!r}")
+    check("every manifest field matches the file it describes",
+          not stale, "; ".join(stale[:3]))
+    check("every prompt declares a handoff tag that opens on its own line",
+          all(r["has_handoff_open_tag"] for r in rows),
+          str([r["file"] for r in rows if not r["has_handoff_open_tag"]]))
+    check("...and closes on its own line",
+          all(r["has_handoff_close_tag"] for r in rows))
+    check("...and carries a control block", all(r["has_control_tag"] for r in rows))
+    check("no two prompts have the same sha256",
+          len({r["sha256"] for r in rows}) == 7)
+
     print("\nprompt hygiene")
     hashes = {}
     for name in ALL_ENGINES:
