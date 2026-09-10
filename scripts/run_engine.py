@@ -35,11 +35,11 @@ from typing import Any, Callable
 import psycopg
 from jsonschema import Draft202012Validator
 
+import load_contracts
 import load_prompts
 import pricing
 
 REPO = Path(__file__).resolve().parent.parent
-SCHEMA_PATH = REPO / "schemas" / "orchestration" / "control_contract.v1.json"
 
 MAX_ATTEMPTS = 3          # initial + repair + final
 
@@ -127,14 +127,32 @@ def load_prompt(conn: psycopg.Connection, engine: str) -> tuple[str, str, str]:
 # Control block extraction and validation
 # ---------------------------------------------------------------------
 
-_validator: Draft202012Validator | None = None
+SCHEMA_VERSION = "control_contract.v1"
+
+# The contract's ContractMissing, re-exported alongside PromptMissing.
+ContractMissing = load_contracts.ContractMissing
+
+# Keyed by document hash, not by schema_version. A cache keyed by version
+# would keep serving a superseded contract after a load, which is exactly
+# the failure mode 012 exists to make impossible; keying by hash means a
+# new document is a new key and the old compiled validator is simply never
+# asked for again. Compiling a 21-property schema is cheap; doing it per
+# attempt on a 300-second engine call is not worth measuring.
+_validators: dict[str, Draft202012Validator] = {}
 
 
-def validator() -> Draft202012Validator:
-    global _validator
-    if _validator is None:
-        _validator = Draft202012Validator(json.loads(SCHEMA_PATH.read_text()))
-    return _validator
+def validator(conn: psycopg.Connection) -> Draft202012Validator:
+    """The compiled validator for the active contract (D23, migration 012).
+
+    Read from orchestration_contracts, not from the working tree. The n8n
+    port issues the identical SELECT and hands the same document to ajv, so
+    the two implementations cannot disagree about WHICH schema they are
+    enforcing.
+    """
+    document, digest = load_contracts.active(conn, SCHEMA_VERSION)
+    if digest not in _validators:
+        _validators[digest] = Draft202012Validator(document)
+    return _validators[digest]
 
 
 def extract_control(raw: str) -> dict[str, Any] | None:
@@ -156,11 +174,18 @@ def extract_control(raw: str) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
-def validate_control(control: dict[str, Any]) -> list[str]:
-    return [
+def validate_control(conn: psycopg.Connection, control: dict[str, Any]) -> list[str]:
+    """Contract violations in a control block, as readable strings.
+
+    Sorted by path, so the same block produces the same message order every
+    time. jsonschema's iteration order is not guaranteed stable across
+    versions, and an unstable order makes a repair prompt differ between
+    attempts for no reason -- and makes the n8n parity assertion flap.
+    """
+    return sorted(
         f"{'/'.join(str(p) for p in e.absolute_path) or '(root)'}: {e.message}"
-        for e in validator().iter_errors(control)
-    ]
+        for e in validator(conn).iter_errors(control)
+    )
 
 
 def repair_instruction(errors: list[str]) -> str:
@@ -401,9 +426,10 @@ def run_engine(conn: psycopg.Connection, req: EngineRequest) -> EngineResult:
              (run_id, client_id, case_version_id, cycle_id, engine, pass,
               prompt_file, prompt_hash, schema_version, model_role, model_name,
               model_params, status, started_at)
-           values (%s,%s,%s,%s,%s,%s,%s,%s,'control_contract.v1',%s,%s,%s,'RUNNING',now())""",
+           values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'RUNNING',now())""",
         (run_id, req.client_id, req.case_version_id, req.cycle_id, req.engine,
-         req.pass_label, prompt_file, prompt_hash, req.model_role, model_name,
+         req.pass_label, prompt_file, prompt_hash, SCHEMA_VERSION,
+         req.model_role, model_name,
          json.dumps(req.run_context)),
     )
 
@@ -449,7 +475,7 @@ def run_engine(conn: psycopg.Connection, req: EngineRequest) -> EngineResult:
         if control is None:
             errors = [f"no parseable <{CONTROL_TAG}> block in response"]
         else:
-            errors = validate_control(control)
+            errors = validate_control(conn, control)
             if not errors:
                 break
 

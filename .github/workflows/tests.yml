@@ -116,6 +116,19 @@ jobs:
       - name: Install dependencies
         run: pip install --quiet 'psycopg[binary]' jsonschema
 
+      - name: Install ajv for the control-contract parity check
+        # test_contract_registry.py runs the same control blocks through
+        # jsonschema and through ajv and asserts identical verdicts. ajv is
+        # what the n8n Code node will use, so without this the parity claim
+        # is only ever checked on a developer machine that happens to have
+        # an n8n install -- and the suite skips rather than fails, which is
+        # exactly how a claim quietly stops being tested.
+        #
+        # ajv 8 is the major version n8n 2.x bundles; the suite asserts
+        # that, so a drift here is a failure rather than a silent change of
+        # what parity means.
+        run: npm install --no-audit --no-fund --no-save ajv@8 ajv-formats@3
+
       - name: Apply migrations
         run: python3 scripts/migrate.py
 
@@ -183,6 +196,19 @@ jobs:
       - name: Install dependencies
         run: pip install --quiet 'psycopg[binary]' jsonschema
 
+      - name: Install ajv for the control-contract parity check
+        # test_contract_registry.py runs the same control blocks through
+        # jsonschema and through ajv and asserts identical verdicts. ajv is
+        # what the n8n Code node will use, so without this the parity claim
+        # is only ever checked on a developer machine that happens to have
+        # an n8n install -- and the suite skips rather than fails, which is
+        # exactly how a claim quietly stops being tested.
+        #
+        # ajv 8 is the major version n8n 2.x bundles; the suite asserts
+        # that, so a drift here is a failure rather than a silent change of
+        # what parity means.
+        run: npm install --no-audit --no-fund --no-save ajv@8 ajv-formats@3
+
       - name: Apply migrations without pgvector
         run: python3 scripts/migrate.py
 
@@ -236,6 +262,19 @@ jobs:
 
       - name: Install dependencies
         run: pip install --quiet 'psycopg[binary]' jsonschema
+
+      - name: Install ajv for the control-contract parity check
+        # test_contract_registry.py runs the same control blocks through
+        # jsonschema and through ajv and asserts identical verdicts. ajv is
+        # what the n8n Code node will use, so without this the parity claim
+        # is only ever checked on a developer machine that happens to have
+        # an n8n install -- and the suite skips rather than fails, which is
+        # exactly how a claim quietly stops being tested.
+        #
+        # ajv 8 is the major version n8n 2.x bundles; the suite asserts
+        # that, so a drift here is a failure rather than a silent change of
+        # what parity means.
+        run: npm install --no-audit --no-fund --no-save ajv@8 ajv-formats@3
 
       - name: Remove the contrib extensions from the server
         # There is no PostgreSQL image without pg_trgm and btree_gin -- they

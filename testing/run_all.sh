@@ -11,7 +11,13 @@ echo "=== prompt registry ==="
 # them with stubs. Reload the canonical seven before every run so a suite
 # that died mid-way cannot leave stub specifications active.
 python3 scripts/load_prompts.py | tail -9 || fail=1
-for t in concept_layer knowledge_layer client_layer run_engine case_events knowledge_inbox prompt_contracts measurement intake normalization ontology_seed; do
+echo
+echo "=== contract registry ==="
+# Same reason as the prompts (D23, migration 012): RUN_ENGINE validates
+# against a ROW now, and a migrated database with an empty registry raises
+# ContractMissing on the first control block.
+python3 scripts/load_contracts.py | tail -3 || fail=1
+for t in concept_layer knowledge_layer client_layer run_engine case_events knowledge_inbox prompt_contracts contract_registry measurement intake normalization ontology_seed; do
   echo
   echo "=== $t ==="
   out=$(python3 "testing/test_$t.py" 2>&1); rc=$?

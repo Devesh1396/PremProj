@@ -56,6 +56,14 @@ docker compose exec postgres psql -U phi_admin -d phi -c \
 DATABASE_URL=postgresql://phi_admin:...@host:port/phi \
   python3 scripts/load_prompts.py
 
+# 6b. LOAD THE ORCHESTRATION CONTRACT. Same reason, same class of failure.
+#     Since migration 012 the control contract is a row too, and it is what
+#     RUN_ENGINE validates every control block against -- the typed fields
+#     n8n routes on (hard rule 5). An unloaded registry raises
+#     ContractMissing rather than validating against nothing.
+DATABASE_URL=postgresql://phi_admin:...@host:port/phi \
+  python3 scripts/load_contracts.py
+
 # 7. Verify, and do not skip the second half.
 docker compose exec postgres psql -U phi_admin -d phi -c \
   "SELECT capability, enabled FROM system_capabilities;"
@@ -70,10 +78,20 @@ DATABASE_URL=postgresql://phi_admin:...@host:port/phi \
 #    exit 1  -> NOT READY: names the engines with no active row, or the
 #               prompts that differ from the authored files
 #    exit 2  -> a file in prompts/ is missing or empty
+
+DATABASE_URL=postgresql://phi_admin:...@host:port/phi \
+  python3 scripts/load_contracts.py --check
+#    exit 0  -> READY, and prints the property and required counts, which
+#               are worth reading: a contract that suddenly has three
+#               properties would validate almost anything
+#    exit 1  -> NOT READY, or the document differs from the authored file
+#    exit 2  -> the schema file is missing, unparseable, or constrains
+#               nothing
 ```
 
-**Whenever `prompts/*.md` changes, `load_prompts.py` must be re-run** —
-deploying a prompt edit is a load, not a restart. The registry is
+**Whenever `prompts/*.md` or `schemas/orchestration/*.json` changes, the
+matching loader must be re-run** — deploying a prompt or contract edit is a
+load, not a restart. The registry is
 append-only: loading changed content inserts a new version and deactivates
 the old one, so the superseded text stays readable for any `engine_runs`
 row that cites its hash. Reverting reactivates the stored version rather
@@ -260,6 +278,7 @@ DATABASE_URL=... python3 scripts/set_role_passwords.py
 #     from a machine whose prompts/ had drifted will disagree with this
 #     checkout.
 DATABASE_URL=...phi_restore_test python3 scripts/load_prompts.py --check
+DATABASE_URL=...phi_restore_test python3 scripts/load_contracts.py --check
 #     exit 0 -> the restored registry matches prompts/ in this checkout
 #     exit 1 -> it does not. Read the output before loading over it: the
 #               restored rows are what produced every engine_runs.prompt_hash
@@ -300,8 +319,10 @@ The repository can rebuild an empty one, and the sequence is longer than
 python3 scripts/migrate.py             # schema
 python3 scripts/set_role_passwords.py  # roles
 python3 scripts/load_prompts.py        # THE ENGINE SPECIFICATIONS (D23)
+python3 scripts/load_contracts.py      # THE ORCHESTRATION CONTRACT (D23)
 python3 scripts/seed_ontology.py       # K1 concept dictionary, if wanted
-python3 scripts/load_prompts.py --check   # must exit 0 before n8n is ready
+python3 scripts/load_prompts.py --check   # both must exit 0 before
+python3 scripts/load_contracts.py --check #   n8n is considered ready
 bash testing/run_all.sh                # prove it, do not assume it
 ```
 

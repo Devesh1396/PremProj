@@ -253,24 +253,24 @@ def main() -> int:
 
     print("\ncontract validation")
     check("valid control passes",
-          RE.validate_control({"CASE_VERSION": 1, "ENGINE_RUN_STATUS": "SUCCEEDED"}) == [])
+          RE.validate_control(conn, {"CASE_VERSION": 1, "ENGINE_RUN_STATUS": "SUCCEEDED"}) == [])
     check("missing required field caught",
-          any("CASE_VERSION" in e for e in RE.validate_control({"ENGINE_RUN_STATUS": "SUCCEEDED"})))
+          any("CASE_VERSION" in e for e in RE.validate_control(conn, {"ENGINE_RUN_STATUS": "SUCCEEDED"})))
     check("bad enum caught",
-          RE.validate_control({"CASE_VERSION": 1, "ENGINE_RUN_STATUS": "MAYBE"}) != [])
+          RE.validate_control(conn, {"CASE_VERSION": 1, "ENGINE_RUN_STATUS": "MAYBE"}) != [])
     check("routing without a reason caught",
-          RE.validate_control({"CASE_VERSION": 1, "ENGINE_RUN_STATUS": "SUCCEEDED",
+          RE.validate_control(conn, {"CASE_VERSION": 1, "ENGINE_RUN_STATUS": "SUCCEEDED",
                                "ROUTING_RECOMMENDATION": "ENGINE2"}) != [])
     check("routing with a reason passes",
-          RE.validate_control({"CASE_VERSION": 1, "ENGINE_RUN_STATUS": "SUCCEEDED",
+          RE.validate_control(conn, {"CASE_VERSION": 1, "ENGINE_RUN_STATUS": "SUCCEEDED",
                                "ROUTING_RECOMMENDATION": "ENGINE2",
                                "ROUTING_REASON": "Adherence, not strategy"}) == [])
     check("live research without an insufficiency finding caught",
-          RE.validate_control({"CASE_VERSION": 1, "ENGINE_RUN_STATUS": "SUCCEEDED",
+          RE.validate_control(conn, {"CASE_VERSION": 1, "ENGINE_RUN_STATUS": "SUCCEEDED",
                                "LIVE_RESEARCH_REQUIRED": True,
                                "KNOWLEDGE_SUFFICIENT": True}) != [])
     check("FAILED without ERROR_STATE caught",
-          RE.validate_control({"CASE_VERSION": 1, "ENGINE_RUN_STATUS": "FAILED"}) != [])
+          RE.validate_control(conn, {"CASE_VERSION": 1, "ENGINE_RUN_STATUS": "FAILED"}) != [])
 
     # ------------------------------------------------------------------
     print("\nsynthetic client: E6 initialization")

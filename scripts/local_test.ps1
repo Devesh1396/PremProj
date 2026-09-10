@@ -11,8 +11,15 @@ foreach ($line in Get-Content ".env.local") {
 
 $fail = 0
 python scripts/migrate.py; if ($LASTEXITCODE -ne 0) { $fail = 1 }
+# D23: the prompts and the control contract are ROWS now, and migrating
+# alone leaves both registries empty.
+python scripts/load_prompts.py | Select-Object -Last 9
+if ($LASTEXITCODE -ne 0) { $fail = 1 }
+python scripts/load_contracts.py | Select-Object -Last 3
+if ($LASTEXITCODE -ne 0) { $fail = 1 }
 foreach ($t in @('concept_layer','knowledge_layer','client_layer','run_engine',
-                 'case_events','knowledge_inbox','prompt_contracts','measurement',
+                 'case_events','knowledge_inbox','prompt_contracts',
+                 'contract_registry','measurement',
                  'intake','normalization','ontology_seed')) {
     Write-Host ""
     Write-Host "=== $t ==="
