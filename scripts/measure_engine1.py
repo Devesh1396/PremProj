@@ -251,12 +251,16 @@ def print_report(conn, cycle_id: str, mode: str, context: dict) -> int:
     if estimated:
         print()
         print("D5 call-size inputs (character estimates, fixture mode)")
-        for engine, filename in sorted(RE.ENGINE_PROMPTS.items()):
-            path = RE.PROMPTS_DIR / filename
-            if path.exists():
-                chars = len(path.read_text())
-                print(f"  {engine}  {filename:<34}{chars:>9,} chars  "
-                      f"~{chars // 4:>7,} tok")
+        # Read the REGISTRY, not the working tree (D23). What the D5
+        # question is about is the size of the specification that actually
+        # ran, and since the prompts became rows those are not necessarily
+        # the same bytes -- an unloaded edit to prompts/ would otherwise be
+        # reported as the call size of a call it never made.
+        for engine, filename, chars in conn.execute(
+                "select engine, prompt_file, content_chars "
+                "from v_active_engine_prompts order by engine").fetchall():
+            print(f"  {engine}  {filename:<34}{chars:>9,} chars  "
+                  f"~{chars // 4:>7,} tok")
     print("=" * 100)
     return 0 if (ok_two_pass and parsed_all and dead == 0) else 1
 

@@ -1,28 +1,60 @@
 #!/usr/bin/env python3
 """RUN_ENGINE + E6 initialization + E1 Pass A on a synthetic client.
 
-Prompt fixtures live under testing/fixtures/prompts and are pointed at by
-overriding PROMPTS_DIR. They are never written into prompts/, so a stub can
-never be mistaken for a canonical master specification.
+Prompt fixtures live under testing/fixtures/prompts. They are never written
+into prompts/, so a stub can never be mistaken for a canonical master
+specification.
+
+Since D23 the runtime source is `engine_prompts`, not the working tree, so
+the fixtures are LOADED into the registry for the duration of this suite
+and the canonical prompts are restored in a finally. A crash mid-suite
+would otherwise leave stub specifications active for every later suite --
+and `run_all.sh` reloads the canonical registry after migrating for the
+same reason.
 """
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
 import pathlib
 import sys
+import uuid
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "scripts"))
 
 import psycopg
+import load_prompts
 import run_engine as RE
 
 FIXTURE_PROMPTS = REPO / "testing" / "fixtures" / "prompts"
-RE.PROMPTS_DIR = FIXTURE_PROMPTS
+CANONICAL_PROMPTS = REPO / "prompts"
+
+
+@contextlib.contextmanager
+def rollback_after(conn):
+    """Run a block and undo it. psycopg3 has no tx.rollback(); Rollback is
+    raised into the transaction block and swallowed by it."""
+    try:
+        with conn.transaction():
+            yield
+            raise psycopg.Rollback
+    except psycopg.Rollback:
+        pass
+
+
+def install_prompts(conn, directory: pathlib.Path) -> None:
+    """Make `directory` the active registry content, whatever was there."""
+    original = load_prompts.PROMPTS_DIR
+    load_prompts.PROMPTS_DIR = directory
+    try:
+        load_prompts.load(conn)
+    finally:
+        load_prompts.PROMPTS_DIR = original
 
 FAILS: list[str] = []
 
@@ -105,44 +137,110 @@ def main() -> int:
     })
     check("a missing total never reduces the reported output", out_tok == 40, str(out_tok))
 
-    print("\nprompt discipline")
-    RE._prompt_cache.clear()
-    # Point at a directory with no prompt files. Asserting that prompts/ is
-    # empty would break the moment the canonical prompts land — the
-    # behaviour under test is the refusal to stub, not the absence.
-    import tempfile
-    with tempfile.TemporaryDirectory() as empty:
-        RE.PROMPTS_DIR = pathlib.Path(empty)
-        try:
-            RE.load_prompt("E1")
-            check("missing canonical prompt raises rather than stubbing", False,
-                  "load_prompt returned instead of raising")
-        except RE.PromptMissing as exc:
-            check("missing canonical prompt raises rather than stubbing",
-                  "will not fall back to a stub" in str(exc))
-    RE.PROMPTS_DIR = FIXTURE_PROMPTS
-    RE._prompt_cache.clear()
+    print("\nprompt registry (D23)")
+    # The canonical prompts are the registry's content right now: run_all.sh
+    # loads them after migrating. Assert that before the fixtures replace
+    # them, so a broken canonical load is caught here and not blamed on a
+    # later suite.
+    hashes = {}
+    for e in ["E1", "E2", "E3", "E4", "E5", "E6", "E7"]:
+        fn, content, digest = RE.load_prompt(conn, e)
+        hashes[e] = digest
+        if "<CONTROL_BLOCK>" not in content:
+            check(f"{e} prompt specifies the control block tag", False, fn)
+    check("all seven canonical prompts are registered and distinct",
+          len(set(hashes.values())) == 7, str(len(set(hashes.values()))))
+    check("every canonical prompt specifies the control block tag", True)
 
-    # The real prompts must also load and hash, now that they exist.
-    real = REPO / "prompts"
-    if (real / "engine1_prevention.md").exists():
-        RE.PROMPTS_DIR = real
-        RE._prompt_cache.clear()
-        hashes = {}
-        for e in ["E1", "E2", "E3", "E4", "E5", "E6", "E7"]:
-            fn, content, digest = RE.load_prompt(e)
-            hashes[e] = digest
-            if "<CONTROL_BLOCK>" not in content:
-                check(f"{e} prompt specifies the control block tag", False, fn)
-        check("all seven canonical prompts load and hash",
-              len(set(hashes.values())) == 7, str(len(hashes)))
-        check("every canonical prompt specifies the control block tag", True)
-        RE.PROMPTS_DIR = FIXTURE_PROMPTS
-        RE._prompt_cache.clear()
-
-    fname, content, digest = RE.load_prompt("E1")
+    fname, content, digest = RE.load_prompt(conn, "E1")
     check("prompt hashed for provenance",
           digest == hashlib.sha256(content.encode()).hexdigest() and len(digest) == 64)
+    check("the registry hash is the hash of the authored file",
+          digest == hashlib.sha256(
+              (CANONICAL_PROMPTS / fname).read_bytes()).hexdigest())
+
+    # Exactly one answer to "what does E1 run".
+    n_active = conn.execute(
+        "select count(*) from engine_prompts where engine='E1' and active").fetchone()[0]
+    check("exactly one active prompt per engine", n_active == 1, str(n_active))
+
+    # Hard rule 7. No active row is the registry's version of a missing
+    # file, and it must raise rather than substitute anything.
+    with rollback_after(conn):
+        conn.execute("update engine_prompts set active=false, superseded_at=now() "
+                     "where engine='E1' and active")
+        try:
+            RE.load_prompt(conn, "E1")
+            check("an unregistered prompt raises rather than stubbing", False,
+                  "load_prompt returned instead of raising")
+        except RE.PromptMissing as exc:
+            check("an unregistered prompt raises rather than stubbing",
+                  "will not fall back to a stub" in str(exc))
+
+    # Append-only. engine_runs.prompt_hash is the provenance link back to
+    # the text that produced an output; rewriting content under a recorded
+    # hash silently relabels every run that cites it.
+    try:
+        with rollback_after(conn):
+            conn.execute("update engine_prompts set content = content || ' tampered' "
+                         "where engine='E1' and active")
+        check("prompt content cannot be rewritten in place", False,
+              "the UPDATE was accepted")
+    except psycopg.errors.CheckViolation as exc:
+        check("prompt content cannot be rewritten in place",
+              "append-only" in str(exc))
+
+    # Activation state must stay writable, or superseding is impossible.
+    with rollback_after(conn):
+        conn.execute("update engine_prompts set active=false, superseded_at=now() "
+                     "where engine='E2' and active")
+        check("activation state is still writable", True)
+
+    # Superseding keeps the old text readable rather than replacing it.
+    #
+    # Content that has never been registered before, so this asserts an
+    # INSERT rather than a reactivation. Loading the FIXTURE prompts would
+    # pass on a fresh database and fail on the second run, when their rows
+    # already exist -- which is the whole point of the idempotency rule.
+    import tempfile
+    before = conn.execute("select count(*) from engine_prompts").fetchone()[0]
+    with rollback_after(conn), tempfile.TemporaryDirectory() as tmp:
+        edited = pathlib.Path(tmp)
+        marker = f"\n\n<!-- revision {uuid.uuid4()} -->\n"
+        for fn in load_prompts.ENGINE_PROMPTS.values():
+            (edited / fn).write_text((CANONICAL_PROMPTS / fn).read_text() + marker)
+        install_prompts(conn, edited)
+        after = conn.execute("select count(*) from engine_prompts").fetchone()[0]
+        check("superseding inserts a version rather than overwriting one",
+              after == before + 7, f"{before} -> {after}")
+        still_there = conn.execute(
+            "select count(*) from engine_prompts where prompt_hash=%s",
+            (digest,)).fetchone()[0]
+        check("the superseded specification stays readable", still_there == 1)
+        one_active = conn.execute(
+            "select count(*) from engine_prompts where engine='E1' and active"
+        ).fetchone()[0]
+        check("still exactly one active prompt after superseding", one_active == 1,
+              str(one_active))
+        check("the superseded row records when it stopped being current",
+              conn.execute("select superseded_at is not null from engine_prompts "
+                           "where prompt_hash=%s", (digest,)).fetchone()[0])
+
+    # Reverting to a previously-registered text reactivates that row rather
+    # than violating uq_engine_prompt_version. Reverting a prompt is a
+    # legitimate act and must not require deleting provenance.
+    with rollback_after(conn):
+        install_prompts(conn, FIXTURE_PROMPTS)
+        n = conn.execute("select count(*) from engine_prompts").fetchone()[0]
+        install_prompts(conn, CANONICAL_PROMPTS)
+        check("reverting a prompt reactivates its stored version",
+              conn.execute("select count(*) from engine_prompts").fetchone()[0] == n)
+        check("the reverted prompt is the one E1 loads",
+              RE.load_prompt(conn, "E1")[2] == digest)
+
+    # From here on this suite runs on the stub specifications. Restored in
+    # the finally below.
+    install_prompts(conn, FIXTURE_PROMPTS)
 
     print("\ncontrol block extraction")
     good = 'preamble\n<CONTROL_BLOCK>\n{"CASE_VERSION":1,"ENGINE_RUN_STATUS":"SUCCEEDED"}\n</CONTROL_BLOCK>'
@@ -385,5 +483,20 @@ def main() -> int:
     return 0
 
 
+def restore_canonical_prompts() -> None:
+    """Put the canonical specifications back, whatever happened above.
+
+    This suite deliberately runs on stub prompts. Every later suite runs
+    engines on the real ones, so leaving stubs active would make a crash
+    here look like a failure three suites away.
+    """
+    with psycopg.connect(os.environ["DATABASE_URL"], autocommit=True) as conn:
+        install_prompts(conn, CANONICAL_PROMPTS)
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        code = main()
+    finally:
+        restore_canonical_prompts()
+    sys.exit(code)

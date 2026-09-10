@@ -5,6 +5,12 @@ cd "$(dirname "$0")/.."
 fail=0
 echo "=== migrations ==="
 python3 scripts/migrate.py || fail=1
+echo
+echo "=== prompt registry ==="
+# D23: the prompts are rows now, and test_run_engine deliberately replaces
+# them with stubs. Reload the canonical seven before every run so a suite
+# that died mid-way cannot leave stub specifications active.
+python3 scripts/load_prompts.py | tail -9 || fail=1
 for t in concept_layer knowledge_layer client_layer run_engine case_events knowledge_inbox prompt_contracts measurement intake normalization ontology_seed; do
   echo
   echo "=== $t ==="
