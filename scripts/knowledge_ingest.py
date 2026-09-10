@@ -297,6 +297,29 @@ def open_envelope(conn, path: Path, digest: str, meta: dict) -> tuple[str, Recei
          version)).fetchone()[0]
     receipt.envelope_id = str(envelope_id)
 
+    # Migration 030. HOW a source was obtained is a fact about the source,
+    # so it belongs on the envelope. Written here rather than in the
+    # YOUTUBE adapter because the inbox is the ONE way in (D37) and any
+    # transcript source has the same three facts to record.
+    #
+    # `transcript_is_auto_generated` is only set when the sidecar says so:
+    # absent means "not a transcript", and defaulting it to false would
+    # claim a human transcript for every text file ever dropped in.
+    if meta.get("transcript_provider") or meta.get("external_ref") \
+            or meta.get("creator_id"):
+        conn.execute(
+            """update source_envelopes
+                  set transcript_is_auto_generated =
+                        coalesce(%s::boolean, transcript_is_auto_generated),
+                      transcript_language = coalesce(%s, transcript_language),
+                      transcript_provider = coalesce(%s, transcript_provider),
+                      external_ref = coalesce(%s, external_ref),
+                      creator_id = coalesce(%s::uuid, creator_id)
+                where envelope_id = %s""",
+            (meta.get("transcript_is_auto_generated"),
+             meta.get("transcript_language"), meta.get("transcript_provider"),
+             meta.get("external_ref"), meta.get("creator_id"), envelope_id))
+
     if dup is not None:
         # DEDUPED keeps the row: the practitioner handed this over and the
         # record that they did is worth as much as the content.
@@ -409,9 +432,10 @@ def normalize(conn, envelope_id: str, raw_path: Path, receipt: Receipt) -> None:
 
     env = conn.execute(
         "select source_kind, source_role::text, source_title, source_url, "
-        "       source_date, rights::text, content_hash "
+        "       source_date, rights::text, content_hash, "
+        "       transcript_is_auto_generated "
         "  from source_envelopes where envelope_id=%s", (envelope_id,)).fetchone()
-    kind, role, title, url, source_date, rights, digest = env
+    kind, role, title, url, source_date, rights, digest, asr = env
 
     # The kind -> type mapping is REGISTRY DATA (migration 017), never a
     # CASE expression here. Hard rule 13: a new source kind is an INSERT,
@@ -499,6 +523,9 @@ def normalize(conn, envelope_id: str, raw_path: Path, receipt: Receipt) -> None:
             (document_id, index, body,
              json.dumps({"location": location, "source_kind": kind,
                          "envelope_id": envelope_id,
+                         # Only when it is known. A missing key is "not a
+                         # transcript"; false would claim it was human.
+                         **({"auto_generated": asr} if asr is not None else {}),
                          "processing_version": PROCESSING_VERSION})))
 
     conn.execute(

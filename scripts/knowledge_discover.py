@@ -45,6 +45,7 @@ import psycopg
 
 import acquisition as AQ
 import knowledge_ingest as KI
+import youtube_apify as YT
 
 PROCESSING_VERSION = "k02-06.v1"
 
@@ -109,9 +110,54 @@ def already_known(conn, *, url=None, guid=None, doi=None, pmid=None) -> bool:
         (url, url, guid, guid, doi, doi, pmid, pmid)).fetchone())
 
 
+# Statuses a re-discovery may overwrite. Everything past QUEUED is a
+# statement about work that has ALREADY happened -- finding the same video
+# again must not reset a NORMALIZED item to QUEUED and invite the whole
+# pipeline to run over it a second time.
+REDISCOVERABLE = ("DISCOVERED", "QUEUED")
+
+
 def register_item(conn, source_id: str, *, title, url=None, guid=None,
                   doi=None, pmid=None, status="DISCOVERED",
                   note=None) -> str:
+    """One item per THING, whose status progresses. Re-discovery touches it.
+
+    Seeing a source again is normal — a channel is polled, a feed repeats,
+    a video is reachable from a playlist and from its own URL. Every one of
+    those is the same item found again, so this looks the thing up by its
+    identity before inserting: the canonical URL first (`uq_item_url`),
+    then the platform id within this source (`uq_item_source_external`).
+
+    Before this, a second sighting raised a unique violation and took the
+    whole discovery run down with it.
+    """
+    existing = None
+    if url:
+        existing = conn.execute(
+            "select item_id, ingestion_status::text from source_items "
+            " where url = %s", (url,)).fetchone()
+    if existing is None and guid and source_id:
+        existing = conn.execute(
+            "select item_id, ingestion_status::text from source_items "
+            " where source_id = %s and external_id = %s",
+            (source_id, guid)).fetchone()
+
+    if existing is not None:
+        item_id, current = existing
+        conn.execute(
+            """update source_items
+                  set last_seen = now(),
+                      title = coalesce(nullif(title,''), %s),
+                      external_id = coalesce(external_id, %s),
+                      url = coalesce(url, %s),
+                      access_note = coalesce(%s, access_note),
+                      ingestion_status = case when %s then %s::ingestion_status
+                                              else ingestion_status end
+                where item_id = %s""",
+            ((title or "")[:500], guid, url, note,
+             current in REDISCOVERABLE, status, item_id))
+        return str(item_id)
+
     return str(conn.execute(
         """insert into source_items
              (source_id, title, url, external_id, doi, pmid,
@@ -356,19 +402,67 @@ def discover_web(conn, source, transport=None) -> dict:
 # K06 — video
 # ---------------------------------------------------------------------
 
-def discover_video(conn, source, transport=None) -> dict:
-    """K06. Refused unless an authorization is recorded, and that is the answer.
+def upsert_creator(conn, meta: dict) -> str | None:
+    """The creator, keyed on the PLATFORM'S id (migration 030, D46).
 
-    "Do not build brittle unauthorized scraping as a core dependency." So
-    there is no scraper here to be brittle. The channel's items are
-    recorded as ACCESS_DENIED — a true statement about our access — and
-    the day an authorization exists, `acquisition_adapters` gets a note and
-    this same path fetches.
+    `channelName` can change and `channelId` cannot. §40 profiles
+    accumulate across sources, so matching on a display name means a
+    rename quietly starts a second profile holding half the history —
+    and the first one stops growing without anybody noticing.
+    """
+    external = (meta.get("creator_external_id") or "").strip()
+    namespace = (meta.get("creator_external_source") or "").strip()
+    name = (meta.get("creator_name") or "").strip()
+    if not external or not namespace:
+        return None
+    return str(conn.execute(
+        # OTHER, not a guess. A channel id says who published, never
+        # whether they are a researcher, a clinician or a coach — and
+        # `creator_type` is what §12 weighs a claim against. The
+        # practitioner classifies it; the adapter records that it exists.
+        """insert into source_creators
+             (name, creator_type, external_id, external_source, discovery_reason)
+           values (%s,'OTHER',%s,%s,%s)
+           on conflict (external_source, external_id)
+             where external_id is not null
+           do update set name = excluded.name,
+                         last_reviewed = source_creators.last_reviewed
+           returning creator_id""",
+        (name or external, external, namespace,
+         "Discovered by the YOUTUBE adapter; identity is the platform id, "
+         "never the display name.")).fetchone()[0])
+
+
+def discover_video(conn, source, transport=None, urls=None) -> dict:
+    """K06. Apify if an authorization is recorded; ACCESS_DENIED if not.
+
+    "Do not build brittle unauthorized scraping as a core dependency."
+    There is still no scraper here: the transcript comes from Apify's
+    documented API under the practitioner's own token, and that
+    authorization is recorded on the `acquisition_adapters` row where the
+    chokepoint reads it. Clear the note and this returns to refusing.
+
+    Discovery still does not ingest (D37) — every video ends at
+    `deliver_to_inbox()` and K07/K08 take it from there.
     """
     source_id, name, _stype, base, _access, _roles = source
+    wanted = [u for u in (urls or ([base] if base else [])) if u]
+    canonical = []
+    for raw in wanted:
+        vid = YT.video_id_of(raw)
+        canonical.append(YT.canonical_url(vid) if vid else raw)
+
     try:
-        AQ.fetch(conn, "YOUTUBE", base or "https://example.invalid/",
-                 transport=transport)
+        if not canonical:
+            raise DiscoveryFailed(
+                f"{name} has no video URL to fetch. The YOUTUBE adapter reads "
+                "videos, and a channel listing is not built — pass --url.")
+        items = YT.run_actor(conn, canonical, transport=transport)
+    except YT.ApifyUnavailable as exc:
+        # A malformed dataset IS a failure — unlike a missing credential,
+        # which `run_actor` records and re-raises as a refusal so it lands
+        # on the ACCESS_DENIED path below.
+        raise DiscoveryFailed(str(exc)) from exc
     except AQ.Refused as exc:
         item = register_item(
             conn, str(source_id), title=name, url=base, status="ACCESS_DENIED",
@@ -386,17 +480,60 @@ def discover_video(conn, source, transport=None) -> dict:
         return {"adapter": "YOUTUBE", "source": name, "entries": 0, "new": 0,
                 "delivered": 0, "item_id": item,
                 "detail": "refused, and recorded as inaccessible (K06)"}
-    raise DiscoveryFailed(
-        "the YOUTUBE adapter fetched, which means an authorization was "
-        "recorded. Transcript handling for an authorized channel is not "
-        "built; register what is permitted before enabling this.")
+    delivered = 0
+    unavailable = 0
+    for item in items:
+        try:
+            ready = YT.prepare(item)
+        except YT.NoTranscript as exc:
+            # The honest outcome, and the ONLY one for a video whose
+            # captions we could not read. Nothing is delivered, so nothing
+            # downstream can mistake an empty string for a source that
+            # taught us nothing.
+            vid = (item.get("videoId") or "").strip()
+            register_item(
+                conn, str(source_id),
+                title=item.get("videoTitle") or vid or name,
+                url=YT.canonical_url(vid) if YT.VIDEO_ID.match(vid or "") else None,
+                guid=vid or None,
+                status="FULL_TEXT_NOT_AVAILABLE", note=str(exc)[:1000])
+            unavailable += 1
+            continue
+
+        meta = dict(ready["meta"])
+        creator_id = upsert_creator(conn, meta)
+        if creator_id:
+            meta["creator_id"] = creator_id
+
+        # Identity is the videoId, so the row is keyed on the canonical URL
+        # and the id — never on the URL this was found through, which
+        # carried playlist and timestamp parameters on the live run.
+        register_item(conn, str(source_id), title=meta["source_title"],
+                      url=meta["source_url"], guid=ready["video_id"],
+                      status="QUEUED")
+        KI.deliver_to_inbox(f"{ready['video_id']}.md",
+                            ready["markdown"].encode("utf-8"), meta)
+        delivered += 1
+
+    AQ.record_search(conn, "YOUTUBE", f"videos:{','.join(canonical)}",
+                     results=len(items), items_new=delivered,
+                     source_id=str(source_id))
+    conn.execute("update knowledge_sources set last_checked = now() "
+                 " where source_id = %s", (source_id,))
+    detail = f"{delivered} transcript(s) delivered to the inbox"
+    if unavailable:
+        detail += f", {unavailable} with no usable transcript"
+    return {"adapter": "YOUTUBE", "source": name, "entries": len(items),
+            "new": delivered, "delivered": delivered,
+            "unavailable": unavailable, "detail": detail}
 
 
 # ---------------------------------------------------------------------
 # Routing: the adapter comes from the SOURCE, never from this file
 # ---------------------------------------------------------------------
 
-def run_source(conn, source, *, query: str | None = None, transport=None) -> dict:
+def run_source(conn, source, *, query: str | None = None, transport=None,
+               urls: list[str] | None = None) -> dict:
     adapter = (source[4] or "").strip().upper()
     if not adapter:
         raise DiscoveryFailed(
@@ -410,7 +547,7 @@ def run_source(conn, source, *, query: str | None = None, transport=None) -> dic
     if adapter == "WEB_HTTP":
         return discover_web(conn, source, transport=transport)
     if adapter == "YOUTUBE":
-        return discover_video(conn, source, transport=transport)
+        return discover_video(conn, source, transport=transport, urls=urls)
     if adapter in ("PUBMED", "CLINICAL_TRIALS"):
         if not query:
             raise DiscoveryFailed(

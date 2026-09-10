@@ -44,7 +44,8 @@ import urllib.robotparser
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Callable
-from urllib.parse import urlparse
+from urllib.parse import (parse_qsl, urlencode, urlparse, urlsplit,
+                          urlunsplit)
 
 import psycopg
 
@@ -79,18 +80,54 @@ class Response:
 
 
 # transport(url, headers) -> Response. Raises for network-level failure.
-Transport = Callable[[str, dict], Response]
+# (url, headers, *, method, body) -> Response. The keyword-only tail is
+# why a transport written for GET still satisfies it.
+Transport = Callable[..., Response]
 
 
-def urllib_transport(url: str, headers: dict) -> Response:
-    request = urllib.request.Request(url, headers=headers)
+def urllib_transport(url: str, headers: dict, *, method: str = "GET",
+                     body: bytes | None = None) -> Response:
+    """The transport contract: (url, headers, *, method, body) -> Response.
+
+    `method` and `body` are keyword-only and default to a plain GET, so
+    every transport written before POST existed still satisfies the
+    contract. A POST is needed because an actor-run API takes its input in
+    a request body -- and routing that through this same function is the
+    point: there is one place a request leaves this process.
+    """
+    request = urllib.request.Request(url, headers=headers, data=body,
+                                     method=method)
     try:
-        with urllib.request.urlopen(request, timeout=45) as reply:
+        with urllib.request.urlopen(request, timeout=180) as reply:
             return Response(reply.status, dict(reply.headers), reply.read())
     except urllib.error.HTTPError as exc:
         # An HTTP error is a RESPONSE, not a transport failure: 403 and 404
         # are answers, and the caller decides what they mean.
         return Response(exc.code, dict(exc.headers or {}), exc.read() or b"")
+
+
+# Query parameters that carry a credential. `source_fetches.url` is a
+# permanent record read by anyone with database access, and an API that
+# accepts `?token=` will happily let one be written there forever.
+SECRET_PARAMS = ("token", "key", "api_key", "apikey", "access_token",
+                 "secret", "password", "auth")
+
+
+def redact(url: str) -> str:
+    """Strip credential-bearing query values before anything is recorded.
+
+    Not a substitute for sending the credential in a header -- which is
+    what this codebase does -- but a fetch log is exactly the kind of place
+    a secret ends up by accident, and it is cheap to make that impossible
+    for every adapter at once rather than for the one that thought of it.
+    """
+    parts = urlsplit(url)
+    if not parts.query:
+        return url
+    kept = [(k, "REDACTED" if k.lower() in SECRET_PARAMS else v)
+            for k, v in parse_qsl(parts.query, keep_blank_values=True)]
+    return urlunsplit((parts.scheme, parts.netloc, parts.path,
+                       urlencode(kept), parts.fragment))
 
 
 def query_hash(text: str) -> str:
@@ -126,7 +163,7 @@ def record(conn, adapter: str, url: str, outcome: str, *, status=None,
         """insert into source_fetches
              (adapter, host, url, status_code, bytes, outcome, detail)
            values (%s,%s,%s,%s,%s,%s,%s)""",
-        (adapter, host_of(url), url[:2000], status, size, outcome,
+        (adapter, host_of(url), redact(url)[:2000], status, size, outcome,
          (detail or "")[:2000] or None))
 
 
@@ -173,8 +210,19 @@ def throttle(conn, rule: dict, url: str) -> None:
 
 
 def fetch(conn, adapter: str, url: str, *, transport: Transport | None = None,
-          accept: str | None = None) -> Response:
-    """Fetch, or refuse and say why. Every outcome is recorded."""
+          accept: str | None = None, method: str = "GET",
+          body: bytes | None = None, extra_headers: dict | None = None) -> Response:
+    """Fetch, or refuse and say why. Every outcome is recorded.
+
+    `method`, `body` and `extra_headers` exist so an adapter that needs a
+    POST or an `Authorization` header still comes through HERE. The
+    alternative -- an adapter making its own request because the chokepoint
+    only did GETs -- is a second access path with no policy on it (D37).
+
+    Neither the body nor the headers is ever recorded. A request body can
+    carry anything the caller put in it, and headers are where credentials
+    belong; `source_fetches` keeps the URL, the status and the size.
+    """
     rule = policy(conn, adapter)
     transport = transport or urllib_transport
 
@@ -214,11 +262,13 @@ def fetch(conn, adapter: str, url: str, *, transport: Transport | None = None,
     headers = {"User-Agent": USER_AGENT}
     if accept:
         headers["Accept"] = accept
+    if extra_headers:
+        headers.update(extra_headers)
 
     last: Exception | None = None
     for attempt in range(1, MAX_ATTEMPTS + 1):
         try:
-            reply = transport(url, headers)
+            reply = transport(url, headers, method=method, body=body)
         except Exception as exc:  # noqa: BLE001 - network-level
             last = exc
             if attempt == MAX_ATTEMPTS:

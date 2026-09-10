@@ -723,7 +723,9 @@ GPG encryption and an off-site target configured.
 15    CLIENT_NEW workflow                <- BUILT 2026-09-10
 16    Knowledge Factory K02–K11          <- BUILT 2026-09-10 (021, D35–D37)
                                          K07/K08 the pipe, then K09/K10/K11,
-                                         then discovery K02–K06
+                                         then discovery K02–K06.
+                                         K06 now fetches: Apify, real output,
+                                         030 + D46. No-captions path UNVERIFIED.
 17    K14 embedding and hybrid retrieval <- BUILT 2026-09-10 (023, D39)
 18    evaluation layers A–E              <- BUILT 2026-09-10 (024, D40)
 19    K12/K13 controversy, negative knowledge, gaps
@@ -742,7 +744,7 @@ knowledge library is still nearly empty. No real source has been through
 the loop, no adapter has reached its real API, and no corpus has been
 embedded. Do not read the ticks above as a library.
 
-`bash testing/run_all.sh` must pass before every commit. **Twenty-seven
+`bash testing/run_all.sh` must pass before every commit. **Twenty-eight
 suites**, and `testing/run_bare.sh` must pass too — extensions are its
 floor, `test_optional_deps.py` covers the environment variables (V3).
 

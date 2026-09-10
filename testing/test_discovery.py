@@ -55,10 +55,15 @@ class Wire:
     def __init__(self, responses: dict):
         self.responses = responses
         self.asked: list[str] = []
+        # The full call, so a suite can assert the METHOD and that a
+        # credential travelled in a header rather than in the URL.
+        self.calls: list[dict] = []
 
-    def __call__(self, url, headers):
+    def __call__(self, url, headers, *, method="GET", body=None):
         import acquisition as AQ
         self.asked.append(url)
+        self.calls.append({"url": url, "method": method, "body": body,
+                           "headers": dict(headers)})
         if url not in self.responses:
             return AQ.Response(404, {}, b"not found")
         status, body = self.responses[url]
@@ -185,7 +190,7 @@ def main() -> int:
         """A transport that cannot connect at all."""
         asked: list = []
 
-        def __call__(self, url, headers):
+        def __call__(self, url, headers, *, method="GET", body=None):
             self.asked.append(url)
             raise ConnectionError("no route to host")
 
@@ -270,24 +275,42 @@ def main() -> int:
           not list((root / "inbox").glob("*Episode*")))
 
     # ------------------------------------------------------------------
-    print("\nK06: no unauthorized scraping, and that is the answer")
+    print("\nK06: the refusal is the ABSENCE of an authorization, not a hard-coded no")
 
+    # The YOUTUBE adapter now HAS an authorization (migration 030, D46), so
+    # what is worth asserting here is that the refusal is still one row
+    # away — the policy lives in `acquisition_adapters` and nothing about
+    # the refusal is compiled into the adapter. `test_youtube.py` covers
+    # the authorized path in full; this is the registry half.
     video_wire = Wire({})
     video_source = make_source(conn, "channel", "YOUTUBE",
                                "https://video.test/channel")
-    vid = KD.discover_video(conn, source_row(conn, video_source),
-                            transport=video_wire)
-    check("the video adapter refuses rather than scraping",
-          vid["delivered"] == 0, str(vid))
-    check("...and NOTHING was requested — not even robots.txt",
-          video_wire.asked == [], str(video_wire.asked))
-    vitem = conn.execute(
-        "select ingestion_status::text, access_note from source_items "
-        " where item_id=%s", (vid["item_id"],)).fetchone()
-    check("...the item is ACCESS_DENIED, a true statement about our access",
-          vitem[0] == "ACCESS_DENIED", str(vitem[0]))
-    check("...explaining that no authorization is recorded",
-          "authorization" in (vitem[1] or "").lower(), str(vitem[1]))
+    saved_note = conn.execute(
+        "select authorization_note from acquisition_adapters "
+        " where adapter='YOUTUBE'").fetchone()[0]
+    try:
+        conn.execute("update acquisition_adapters set authorization_note=null "
+                     " where adapter='YOUTUBE'")
+        vid = KD.discover_video(conn, source_row(conn, video_source),
+                                transport=video_wire, urls=["https://video.test/x"])
+        check("with no authorization recorded the adapter delivers nothing",
+              vid["delivered"] == 0, str(vid))
+        check("...and NOTHING was requested — not even robots.txt",
+              video_wire.asked == [], str(video_wire.asked))
+        vitem = conn.execute(
+            "select ingestion_status::text, access_note from source_items "
+            " where item_id=%s", (vid["item_id"],)).fetchone()
+        check("...the item is ACCESS_DENIED, a true statement about our access",
+              vitem[0] == "ACCESS_DENIED", str(vitem[0]))
+        check("...explaining that no authorization is recorded",
+              "authorization" in (vitem[1] or "").lower(), str(vitem[1]))
+        conn.execute("delete from source_items where item_id=%s", (vid["item_id"],))
+    finally:
+        # Restored unconditionally. An earlier version left this NULL on a
+        # committed transaction, and every later suite then ran against an
+        # adapter that had quietly lost its authorization.
+        conn.execute("update acquisition_adapters set authorization_note=%s "
+                     " where adapter='YOUTUBE'", (saved_note,))
 
     # ------------------------------------------------------------------
     print("\nK02: expensive searches are not repeated")
