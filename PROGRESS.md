@@ -12,13 +12,13 @@ before 2026-09-09; all of it has now.
 
 | | |
 |---|---|
-| Schema | 12 migrations, 75 tables, 19 views, 51 enums, 202 indexes, 42 triggers, 58 policies, 29 RLS tables |
-| Suites | **11**, green from an empty database three consecutive times, each run followed by a re-run against the used database |
+| Schema | 13 migrations, 76 tables, 20 views, 51 enums, 199 indexes, 44 triggers, 58 policies, 29 RLS tables |
+| Suites | **13**, green from an empty database, each run followed by a re-run, and on the D15 floor with no optional extension available |
 | CI | `.github/workflows/tests.yml` — every push on every branch, **with and without pgvector** |
 | Engines | All seven canonical prompts installed; E6 → E1 Pass A → E7 → E1 Pass B proven **live** |
 | Ontology | 26 domains, 269 concepts seeded from the curriculum, hash-verified |
 | Backup | Restore drill performed 2026-09-10; roles gap found and fixed |
-| Bugs | 46 found and fixed, each with a regression test |
+| Bugs | 48 found and fixed, each with a regression test |
 
 **D5 is ANSWERED and Engine 1 is not to be staged.** Measured on a live
 provider 2026-09-09 (see *D5 ANSWERED* below):
@@ -42,14 +42,19 @@ so a full 8-call new-client cycle lands near **$0.75–0.80** on
 `gemini-3.8-flash`. The free tier (20 requests/day/model) is not viable for
 this system — billing is a prerequisite, not an optimisation.
 
-**Steps 12, 13 and 14 are now BUILT** — K1 ontology seed, C3 normalization
-layer, and Core Intake V1 (exclusions first, `DECISIONS.md` D22). See their
-sections below.
+**Steps 12, 13, 14 and 15 are BUILT**, and step 11's registry half is
+done. The case track now runs end to end in one call: a submitted intake
+reaches the practitioner's review queue through E6 → E1 Pass A →
+normalization → E7 → E1 Pass B → E2 → E3 → E6, on one prompt hash.
 
 **What is NOT done, and should not be assumed:**
-- Step 11 (n8n `RUN_ENGINE` subworkflow) and steps 15–23.
-- Step 15 `CLIENT_NEW` is now the gating piece on the case track: intake →
-  E6 v1 already produces its input, so what remains is orchestration.
+- The **n8n workflow JSON itself**. Both registries it needs now exist —
+  the prompts (`010`) and the control contract (`012`) — and jsonschema and
+  ajv are proven to agree on the stored document. What remains is authoring
+  the subworkflow.
+- Steps 16–23.
+- Engine 5 and the release path. `CLIENT_NEW` deliberately stops at the
+  review queue; nothing yet turns an approval into client-facing output.
 - `scripts/backup.sh` has never run **on the VPS**, under cron, with GPG
   encryption or an off-site target. The drill could not exercise those paths.
 - `STRIP_IDENTITY_FROM_ENGINE_PAYLOADS` is documented and **not enforced**
@@ -244,6 +249,56 @@ Only the shapes that bear safety or data integrity are checked — what step
 15 writes into typed columns and what an engine reads as clinical fact. A
 validate-everything layer would freeze the field registry D22 keeps as
 data.
+
+### Step 15 — `CLIENT_NEW` `BUILT 2026-09-10`
+`scripts/client_new.py`. A submitted intake to the practitioner's queue in
+one call:
+
+```
+intake -> extract -> E6 v1
+       -> E1 Pass A -> normalization -> E7 -> E1 Pass B
+       -> E2 -> E3 -> E6 v2
+       -> practitioner review queue.  STOP.
+```
+
+Three properties are decisions, not transcription, and each is asserted:
+
+- **A fixed pipeline, not a routing loop.** Phase 4 is a sequence; phase 5
+  is the one that routes. `NEXT_ENGINE` is therefore not consulted to
+  choose what runs next — a new client always needs E1, E2 and E3, and
+  following the field would let an engine skip the nutrition plan. The
+  control block still **gates**: a run that did not succeed stops the
+  pipeline before anything downstream runs.
+- **It stops at the queue.** E5 is not part of it (hard rule 9: gates
+  release, not analysis), and E4 does not run because there is no response
+  data yet. An open **HOLD flag does not stop the analysis** — the suite
+  asserts that directly.
+- **A new client is queued whatever the control block says.** Engine 1
+  sets `REVIEW_REQUIRED` on its own analysis, but "the engines did not ask
+  for review" is not a reason to send a first plan to a client unseen.
+
+History is appended, never overwritten. The same submission cannot
+initialize a second case. A sparse intake still reaches the queue with its
+gaps recorded (D22).
+
+### Step 11 — control-contract registry `BUILT 2026-09-10`
+`012_contract_registry.sql` + `scripts/load_contracts.py`. The second half
+of D23: `run_engine.py` validated every control block against a file on the
+working tree, and hard rule 5 has n8n routing on exactly those typed
+fields, so a port with no access to the contract cannot route at all.
+
+**One document, two validators.** Python keeps `jsonschema`; the n8n Code
+node will use `ajv`, which ships inside n8n. Both read the same row, so the
+specification is single-sourced and only the library differs.
+`test_contract_registry.py` runs 26 control blocks through both and asserts
+identical verdicts **and identical blamed fields** — the blame matters as
+much as the verdict, because it is what goes into the repair prompt. CI
+installs `ajv@8` in all three jobs so this is a real gate.
+
+The corpus found something about the contract rather than the code:
+`additionalProperties` is **true**, so an engine emitting a field nobody has
+typed yet is not violating anything. That is D14, and it is now asserted
+rather than assumed.
 
 ### Step 13 — C3 normalization layer `BUILT 2026-09-10`
 `scripts/normalize.py`. Resolves a Pass A `NORMALIZATION_PHRASES` entry
@@ -698,6 +753,25 @@ does not.
     unrecognised status becomes `NOT_ASSESSED` **with a `DISCREPANCY` note
     naming what was declared**, because silently defaulting it would hide
     that someone answered the question badly.
+47. **A phrase with punctuation could not be proposed as a concept, and
+    the phrase in question is D2's own example.** `normalize.py` built a
+    `canonical_key` as `phrase_norm.upper().replace(" ", "_")`, which
+    produced `LARGE_POST-MEAL_GLUCOSE_EXCURSIONS` and was rejected outright
+    by `ck_canonical_key_shape`. C3's suite never hit it because its
+    fixtures contain no punctuation; the first real `CLIENT_NEW` run hit it
+    immediately. Two places create concepts and were using different rules
+    — there is now one, in `scripts/concept_key.py`. Also fixed while
+    there: a phrase yielding no usable key is hashed rather than lost, and
+    a key collision after 80-character truncation disambiguates instead of
+    reusing the existing concept, which was a silent merge (D3).
+48. **`loop_count` is routing depth, not a count of engine calls.**
+    Migration 004 says so on the constraint — "Prevents Engine 4 → 1/2/3 →
+    4 cycling without bound" — and `max_loops` defaults to **3**, which is
+    fewer than `CLIENT_NEW` has engines. Charging a hop per engine made a
+    correct run exhaust its budget at E1 Pass B. One hop is one pass
+    through the engines, charged once on entry, so re-entering the same
+    cycle trips `ck_loop_bound` rather than running the engines again.
+
 
 **Also, and recorded rather than amended away:** commit `c99ebf4` was made
 on a red suite. `run_all.sh` printed `FAILURES PRESENT` and the command
@@ -814,19 +888,22 @@ failed attempt's tokens included in the run total.
 `python3 scripts/measure_engine1.py` costs ~$0.39; do it to re-measure after
 a model change, not to re-confirm a settled result.)*
 
-**Steps 12, 13 and 14 are BUILT** (K1 ontology seed, C3 normalization
-layer, Core Intake V1 — see above). What remains on the case track is
-**step 15, `CLIENT_NEW`**: wiring intake → E6 v1 → E1 Pass A →
-normalization → E7 → E1 Pass B → E2 → E3 → review → E5 as one workflow.
-`scripts/intake.py` produces the E6 input and `scripts/normalize.py`
-resolves Pass A's phrases, so step 15 is orchestration rather than new
-reasoning.
+**Steps 12, 13, 14 and 15 are BUILT**, and step 11's registry half with
+them. `scripts/client_new.py` runs a submitted intake to the practitioner's
+queue in one call.
 
-**Step 11 (n8n `RUN_ENGINE` subworkflow) is the one remaining parallel
-track**, and it is now well-specified because live provider behaviour is
-known. It needs **no n8n credentials**: the workflow is authored as JSON
-and validated against a local n8n instance and the existing fixtures. See
-*Step 11 — feasibility* below.
+**The next exact task is the n8n `RUN_ENGINE` subworkflow JSON.** Both
+registries it needs now exist — the seven prompts (`010`) and the control
+contract (`012`) — so a Code node can read a specification and a schema out
+of PostgreSQL with no copy of this repository, and `jsonschema` and `ajv`
+are proven to agree on the stored document over 26 control blocks. It needs
+**no n8n credentials**: `scripts/local_n8n.sh` installs n8n from npm,
+seeds a `phi_runtime` credential from `.env.local`, imports a workflow and
+executes it headlessly. See *Step 11 — feasibility* below.
+
+**After that, the release path.** `CLIENT_NEW` stops at the review queue by
+design; nothing yet turns a practitioner approval into Engine 5 output.
+That is step 20.
 
 **Cheap now, awkward later:** enforce
 `STRIP_IDENTITY_FROM_ENGINE_PAYLOADS` in `RUN_ENGINE` before real client

@@ -202,6 +202,19 @@ with `SELECT set_client_scope($client_id)` inside the transaction.
 
 **Acceptance:** identical results to the Python reference on the same fixtures; malformed output dead-letters; cost recorded.
 
+**Registry half BUILT.** The port's two blockers are gone: the seven
+specifications are rows (`010`) and the control contract is a row (`012`),
+so a Code node reads both out of PostgreSQL with no copy of this
+repository. `jsonschema` and `ajv` — the validator n8n ships — are proven
+to agree on the stored document over 26 control blocks, verdict **and**
+blamed field, in `test_contract_registry.py`, and CI installs `ajv@8` so
+it is a real gate.
+
+**No n8n credentials are required.** `scripts/local_n8n.sh` installs n8n
+from npm (the container registries are blocked in some environments),
+seeds a `phi_runtime` credential from `.env.local`, imports a workflow and
+runs it headlessly. What remains is authoring `workflows/run_engine.json`.
+
 ## Step 12 — K1 ontology seed *(BUILT 2026-09-10)*
 
 Seed the concept dictionary **before** large-scale extraction. Expand the
@@ -277,7 +290,7 @@ Engines record gaps to `missing_data_reports`. Reporting a gap **never**
 adds a question to intake — aggregate via `v_missing_data_recurrence`, then
 classify deliberately.
 
-## Step 15 — `CLIENT_NEW` workflow
+## Step 15 — `CLIENT_NEW` workflow *(BUILT 2026-09-10)*
 
 ```
 intake → validate → create client → E6 v1
@@ -286,6 +299,21 @@ intake → validate → create client → E6 v1
 ```
 
 E4 is not required before response data exists.
+
+**Built.** `scripts/client_new.py`, and it stops at the review queue —
+Engine 5 is not part of it. Hard rule 9: gates release, not analysis, so
+an open HOLD does not stop the pipeline and nothing client-facing is
+drafted. It is a fixed sequence rather than a routing loop (phase 5 is the
+one that routes), so `NEXT_ENGINE` gates but never chooses; a new client
+always needs E1, E2 and E3.
+
+**Acceptance:** `test_client_new.py` — the phase 4 sequence in order on one
+prompt hash; E4 and E5 never run and no communication row is written; an
+open HOLD does not stop the analysis; a failed engine stops the pipeline
+before anything downstream and queues no review; history is appended, never
+overwritten; a sparse intake still reaches the queue; the same submission
+cannot initialize a second case; one routing hop is spent, not one per
+engine.
 
 ## Step 16 — Knowledge Factory K02–K11
 
@@ -381,11 +409,12 @@ GPG encryption and an off-site target configured.
 10    done: seven canonical prompts + foundation domain seed
 10b   DONE: measured live. 19/19 parts both passes, no degradation,
       $0.386/cycle. D5 stands — do not stage Engine 1.
-11    n8n RUN_ENGINE subworkflow         <- the one remaining parallel track
+11    n8n RUN_ENGINE subworkflow         <- registry half BUILT (012);
+                                         workflow JSON is the next task
 12/13 K1 ontology seed  ||  C3 normalization layer
                                          <- BOTH BUILT 2026-09-10
-14    Core Intake V1                     <- BUILT (009, D22)
-15    CLIENT_NEW workflow
+14    Core Intake V1                     <- BUILT (009, 011, D22)
+15    CLIENT_NEW workflow                <- BUILT 2026-09-10
 16    Knowledge Factory K02–K11
 17    K14 embedding and hybrid retrieval
 18    evaluation layers A–E
@@ -397,6 +426,6 @@ GPG encryption and an off-site target configured.
 24    backup restore drill               <- DONE 2026-09-10 (roles gap found)
 ```
 
-`bash testing/run_all.sh` must pass before every commit. Eleven suites.
+`bash testing/run_all.sh` must pass before every commit. Thirteen suites.
 
 **This layer is frozen.** Do not reopen D16–D21 without instruction.

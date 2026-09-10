@@ -214,12 +214,12 @@ Database is in India; model inference is not. Engine payloads carry
 
 ## State as of 2026-09-10
 
-**Complete and verified** — M0 foundations, M1 schema (12 migrations), M2
+**Complete and verified** — M0 foundations, M1 schema (13 migrations), M2
 engine execution layer, all seven canonical prompts installed, and build
-steps **10b, 12, 13 and 14**.
+steps **10b, 12, 13, 14, 15** and step 11's registry half.
 
-75 tables, 19 views, 51 enums, 202 indexes, 56 check constraints,
-42 triggers, 29 RLS tables, 58 policies. **Eleven test suites**, passing
+76 tables, 20 views, 51 enums, 199 indexes, 60 check constraints,
+44 triggers, 29 RLS tables, 58 policies. **Thirteen test suites**, passing
 from an empty database three consecutive times, idempotent, and verified in
 three capability configurations: full, **no pgvector**, and **no optional
 extension at all**.
@@ -236,14 +236,25 @@ prerequisite.
 
 **Nothing is blocked on input.** `LLM_API_KEY` and the base URL are set.
 
-**Since D23 the prompts are rows, not files.** `prompts/*.md` stays the
-authored form; `engine_prompts` is what `RUN_ENGINE` reads, so a fresh
-deployment must run `scripts/load_prompts.py` after migrating or every
-engine raises `PromptMissing`. Migrating alone is no longer enough.
+**Since D23 the prompts AND the control contract are rows, not files.**
+`prompts/*.md` and `schemas/orchestration/*.json` stay the authored forms;
+`engine_prompts` (`010`) and `orchestration_contracts` (`012`) are what
+`RUN_ENGINE` reads. A fresh deployment must run **both**
+`scripts/load_prompts.py` and `scripts/load_contracts.py` after migrating,
+or every engine raises `PromptMissing` / `ContractMissing`. Migrating alone
+is no longer enough.
 
-**Next:** step 11 (the control-contract registry, then the n8n `RUN_ENGINE`
-subworkflow — no n8n credentials are required, see `PROGRESS.md`) and step
-15 `CLIENT_NEW`, in parallel. See `BUILD_GUIDE.md`.
+**The case track runs end to end.** `scripts/client_new.py` takes a
+submitted intake to the practitioner's review queue: E6 → E1 Pass A →
+normalization → E7 → E1 Pass B → E2 → E3 → E6, on one prompt hash. It
+stops at the queue by design — Engine 5 is gated on a practitioner
+decision, and an open HOLD never stops the analysis (hard rule 9).
+
+**Next:** author `workflows/run_engine.json`, the n8n `RUN_ENGINE`
+subworkflow. Both registries it needs exist, and `jsonschema` and `ajv`
+are proven to agree on the stored contract. **No n8n credentials are
+required** — `scripts/local_n8n.sh` installs n8n from npm and runs a
+workflow headlessly. See `BUILD_GUIDE.md`.
 
 ## Do NOT build
 
