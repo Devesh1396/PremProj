@@ -90,14 +90,22 @@ def find_ajv() -> str | None:
     """
     explicit = os.environ.get("AJV_MODULE_PATH")
     if explicit and (Path(explicit) / "ajv").exists():
-        return explicit
-    candidates = [
-        Path(os.environ.get("N8N_HOME", "")) / "node_modules",
-        Path(os.environ.get("TMPDIR", "/tmp")) / "premproj-n8n" / "node_modules",
-        REPO / "node_modules",
-    ]
-    for base in candidates:
-        if base.name == "node_modules" and (base / "ajv").exists():
+        return str(Path(explicit).resolve())
+
+    # N8N_HOME unset makes Path("") / "node_modules" a RELATIVE path, and a
+    # relative path handed to require() resolves against the requiring
+    # MODULE rather than the working directory -- so it found ajv, passed a
+    # path node could not use, and reported "ajv ran: exit 3". Every
+    # candidate is resolved to an absolute path, and empty roots are
+    # skipped rather than silently becoming the current directory.
+    roots = [os.environ.get("N8N_HOME"),
+             str(Path(os.environ.get("TMPDIR", "/tmp")) / "premproj-n8n"),
+             str(REPO)]
+    for root in roots:
+        if not root:
+            continue
+        base = (Path(root) / "node_modules").resolve()
+        if (base / "ajv").exists():
             return str(base)
     return None
 

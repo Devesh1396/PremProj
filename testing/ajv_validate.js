@@ -23,7 +23,12 @@ function resolveAjv() {
     // AJV_MODULE_PATH points at a node_modules directory containing ajv --
     // an n8n install locally, a plain `npm i ajv` in CI. Falling back to a
     // bare require keeps this usable if ajv is on NODE_PATH.
-    const base = process.env.AJV_MODULE_PATH;
+    // Resolved to an absolute path: require() treats a relative path as
+    // relative to THIS module, not to the working directory, so a relative
+    // AJV_MODULE_PATH fails in a way that looks like ajv being absent.
+    const base = process.env.AJV_MODULE_PATH
+        ? path.resolve(process.env.AJV_MODULE_PATH)
+        : null;
     if (base) {
         return {
             Ajv: require(path.join(base, 'ajv', 'dist', '2020')),

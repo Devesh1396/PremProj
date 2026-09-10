@@ -18,7 +18,7 @@ before 2026-09-09; all of it has now.
 | Engines | All seven canonical prompts installed; E6 → E1 Pass A → E7 → E1 Pass B proven **live** |
 | Ontology | 26 domains, 269 concepts seeded from the curriculum, hash-verified |
 | Backup | Restore drill performed 2026-09-10; roles gap found and fixed |
-| Bugs | 48 found and fixed, each with a regression test |
+| Bugs | 49 found and fixed, each with a regression test |
 
 **D5 is ANSWERED and Engine 1 is not to be staged.** Measured on a live
 provider 2026-09-09 (see *D5 ANSWERED* below):
@@ -771,6 +771,19 @@ does not.
     correct run exhaust its budget at E1 Pass B. One hop is one pass
     through the engines, charged once on entry, so re-entering the same
     cycle trips `ck_loop_bound` rather than running the engines again.
+
+49. **A relative module path made the parity check fail in CI and pass
+    everywhere else.** `find_ajv()` built its first candidate as
+    `Path(os.environ.get("N8N_HOME", "")) / "node_modules"`, and with
+    `N8N_HOME` unset that is the RELATIVE path `node_modules` — which
+    exists in CI, because CI installs ajv into the repository root. Node
+    resolves a relative `require()` against the requiring module rather
+    than the working directory, so the check found ajv, handed node a path
+    it could not use, and reported `ajv ran: exit 3`. Every candidate is
+    resolved to an absolute path now, empty roots are skipped instead of
+    silently becoming the current directory, and `ajv_validate.js` resolves
+    its own argument too. Reproduced locally by installing ajv exactly the
+    way the workflow does, rather than by reading the diff.
 
 
 **Also, and recorded rather than amended away:** commit `c99ebf4` was made
