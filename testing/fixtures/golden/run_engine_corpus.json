@@ -1,0 +1,108 @@
+{
+  "note": "The golden corpus for RUN_ENGINE request parity (D26). One stored corpus, two implementations, byte-identical output. The same pattern that caught the control-contract divergences. Every case exists because it is a way two JSON serializers can disagree, or a way a mode can be got wrong.",
+  "cases": [
+    {
+      "name": "E6 INIT, minimal",
+      "engine": "E6", "mode": "INIT", "pass_label": "SINGLE",
+      "structured_input": {"CASE_VERSION": 1}
+    },
+    {
+      "name": "E6 REBUILD carries handoffs, not control blocks",
+      "engine": "E6", "mode": "REBUILD", "pass_label": "SINGLE",
+      "structured_input": {
+        "CASE_VERSION": 2,
+        "E1_HANDOFF": {"TOP_INTERVENTIONS": "protein at breakfast", "_field_order": ["TOP_INTERVENTIONS"]},
+        "E2_HANDOFF": {"BEHAVIOUR_PLAN": "one change per week"},
+        "E3_HANDOFF": {"MEAL_STRUCTURE": "three meals, no grazing"}
+      }
+    },
+    {
+      "name": "E6 UPDATE expects a delta, not a state",
+      "engine": "E6", "mode": "UPDATE", "pass_label": "SINGLE",
+      "structured_input": {"CASE_VERSION": 3}
+    },
+    {
+      "name": "E7 CASE",
+      "engine": "E7", "mode": "CASE", "pass_label": "SINGLE",
+      "structured_input": {"CASE_VERSION": 1, "CASE_RESEARCH_QUESTIONS": ["hepatic fat without large weight loss"]}
+    },
+    {
+      "name": "E7 FOUNDATION is the knowledge clock, CASE_VERSION 0",
+      "engine": "E7", "mode": "FOUNDATION", "pass_label": "SINGLE",
+      "structured_input": {"CASE_VERSION": 0, "DOMAIN": "A"}
+    },
+    {
+      "name": "E7 UPDATE shares the foundation contract",
+      "engine": "E7", "mode": "UPDATE", "pass_label": "SINGLE",
+      "structured_input": {"CASE_VERSION": 0, "DOMAIN": "A"}
+    },
+    {
+      "name": "E7 INBOX has its own block",
+      "engine": "E7", "mode": "INBOX", "pass_label": "SINGLE",
+      "structured_input": {"CASE_VERSION": 0, "SOURCE_REFERENCE": "a book chapter"}
+    },
+    {
+      "name": "E1 Pass A",
+      "engine": "E1", "mode": null, "pass_label": "A",
+      "structured_input": {"CASE_VERSION": 1, "CANONICAL_STATE": {"PRIMARY_HEALTH_PROBLEM": "metabolic"}}
+    },
+    {
+      "name": "E1 Pass B, with the E7 slot populated",
+      "engine": "E1", "mode": null, "pass_label": "B",
+      "structured_input": {
+        "CASE_VERSION": 1,
+        "E7_HANDOFF": {"HIGHEST_PRIORITY_STRATEGIES": "resistance training", "EVIDENCE_SUMMARY": "moderate"}
+      }
+    },
+    {
+      "name": "non-ASCII: Python escaped these and JavaScript did not",
+      "engine": "E3", "mode": null, "pass_label": "SINGLE",
+      "structured_input": {
+        "CASE_VERSION": 1,
+        "FOOD_LOG": "idli, sambar, filter coffee — ₹150",
+        "NOTE": "Kṛṣṇa; naïve; 30–40 g",
+        "EMOJI": "no emoji in clinical text, but the serializer must not care: ✓"
+      }
+    },
+    {
+      "name": "integral floats: Python wrote 78.0 and JavaScript wrote 78",
+      "engine": "E3", "mode": null, "pass_label": "SINGLE",
+      "structured_input": {
+        "CASE_VERSION": 1,
+        "weight_kg": 78.0, "height_cm": 157.5, "waist_cm": 92.0,
+        "steps": 3200, "ratio": 0.5, "negative": -1.0
+      }
+    },
+    {
+      "name": "empty containers and empty strings",
+      "engine": "E2", "mode": null, "pass_label": "SINGLE",
+      "structured_input": {"CASE_VERSION": 1, "obj": {}, "arr": [], "s": "", "n": null}
+    },
+    {
+      "name": "every JSON escape, plus a forward slash",
+      "engine": "E2", "mode": null, "pass_label": "SINGLE",
+      "structured_input": {
+        "CASE_VERSION": 1,
+        "quote": "he said \"take it with food\"",
+        "newline": "line one\nline two",
+        "tab": "a\tb",
+        "backslash": "C:\\path",
+        "slash": "mg/dL",
+        "control": "bell:\u0007"
+      }
+    },
+    {
+      "name": "deeply nested, mixed types",
+      "engine": "E4", "mode": null, "pass_label": "SINGLE",
+      "structured_input": {
+        "CASE_VERSION": 4,
+        "a": {"b": [{"c": 1}, {"d": [1, 2, {"e": true}]}], "f": null}
+      }
+    },
+    {
+      "name": "large integers stay exact",
+      "engine": "E5", "mode": null, "pass_label": "SINGLE",
+      "structured_input": {"CASE_VERSION": 1, "big": 9007199254740991, "neg": -42}
+    }
+  ]
+}

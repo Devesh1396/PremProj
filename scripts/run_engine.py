@@ -272,18 +272,117 @@ def extract_control(raw: str) -> dict[str, Any] | None:
     return parsed if isinstance(parsed, dict) else None
 
 
-def validate_control(conn: psycopg.Connection, control: dict[str, Any]) -> list[str]:
-    """Contract violations in a control block, as readable strings.
+def _type_names(value: Any) -> str:
+    """A JSON Schema `type` as a stable string, list or not."""
+    if isinstance(value, (list, tuple)):
+        return ", ".join(sorted(str(v) for v in value))
+    return str(value)
 
-    Sorted by path, so the same block produces the same message order every
-    time. jsonschema's iteration order is not guaranteed stable across
-    versions, and an unstable order makes a repair prompt differ between
-    attempts for no reason -- and makes the n8n parity assertion flap.
+
+def format_violation(field: str, keyword: str, detail: Any) -> str:
+    """The ONE wording a contract violation has (D26).
+
+    Deliberately not jsonschema's message, and deliberately not ajv's.
+    Those two libraries phrase the same violation differently --
+
+        jsonschema  "'CASE_VERSION' is a required property"
+        ajv         "must have required property 'CASE_VERSION'"
+
+    -- and this string is not cosmetic. It is persisted to
+    `engine_runs.error_detail` AND it is what `repair_instruction()` sends
+    the model on attempt two. Two implementations disagreeing here means
+    n8n asks the model to fix something in different words than the
+    reference does, on the one retry that matters, with nothing to notice.
+
+    So the format is ours, both sides build it from their own library's
+    STRUCTURED error data, and the parity suite proves they agree.
     """
-    return sorted(
-        f"{'/'.join(str(p) for p in e.absolute_path) or '(root)'}: {e.message}"
-        for e in validator(conn).iter_errors(control)
-    )
+    if keyword == "required":
+        reason = "required property missing"
+    elif keyword == "enum":
+        reason = "not one of " + ", ".join(sorted(str(v) for v in detail))
+    elif keyword == "type":
+        reason = f"expected type {_type_names(detail)}"
+    elif keyword == "const":
+        reason = f"must be {json.dumps(detail)}"
+    elif keyword == "minLength":
+        reason = ("must not be empty" if detail == 1
+                  else f"shorter than {detail} characters")
+    elif keyword == "additionalProperties":
+        reason = "not permitted by the contract"
+    else:
+        reason = str(keyword)
+    return f"{field}: {reason}"
+
+
+def validate_control(conn: psycopg.Connection, control: dict[str, Any]) -> list[str]:
+    """Contract violations in a control block, in the shared wording.
+
+    Sorted and de-duplicated, so the same block produces the same message
+    list every time. Neither library guarantees iteration order, and an
+    unstable order makes a repair prompt differ between attempts for no
+    reason -- and makes the parity assertion flap.
+    """
+    violations = set()
+    for err in validator(conn).iter_errors(control):
+        keyword = err.validator
+        if keyword in ("if", "then", "else", "allOf", "anyOf", "oneOf", "not"):
+            # Applicator keywords are containers. They name no field, and
+            # their child errors carry the real blame.
+            continue
+        if keyword == "required":
+            field = err.message.split("'")[1]
+        elif keyword == "additionalProperties":
+            parts = err.message.split("'")
+            field = parts[1] if len(parts) > 1 else "(root)"
+        elif err.absolute_path:
+            field = str(list(err.absolute_path)[0])
+        else:
+            field = "(root)"
+        violations.add(format_violation(field, keyword, err.validator_value))
+    return sorted(violations)
+
+
+def _canonical(value: Any) -> Any:
+    """Normalize the two things Python and JavaScript serialize differently.
+
+    Measured, not guessed: over a corpus covering ASCII, non-ASCII, nested
+    structures, empty containers, big integers and every JSON escape,
+    `json.dumps(..., indent=2, ensure_ascii=False)` and
+    `JSON.stringify(..., null, 2)` agree byte for byte on everything except
+    INTEGRAL FLOATS. Python writes 78.0; JavaScript writes 78, because JSON
+    has one number type and JS cannot tell them apart once parsed.
+
+    So integral floats become ints here. A weight of 78.0 kg and a weight
+    of 78 kg are the same measurement, and byte-identical requests are
+    worth more than a trailing zero -- the prompt hash plus the request IS
+    the call, and two serializers that "mean the same thing" produce
+    different model behaviour with nothing to notice.
+
+    2**53 is JavaScript's exact-integer limit. Above it the conversion
+    would not survive the round trip, so it is left alone and the parity
+    test is what would catch it.
+    """
+    if isinstance(value, bool):
+        return value                      # bool is an int in Python
+    if isinstance(value, float) and value.is_integer() and abs(value) < 2 ** 53:
+        return int(value)
+    if isinstance(value, dict):
+        return {k: _canonical(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_canonical(v) for v in value]
+    return value
+
+
+def canonical_json(value: Any) -> str:
+    """The serialization the model request is defined by (D26).
+
+    `ensure_ascii=False` deliberately. Escaping "idli, sambar" or a rupee
+    sign into backslash-u sequences costs tokens, makes the prompt less
+    legible to the model, and is the other place Python and JavaScript
+    disagree.
+    """
+    return json.dumps(_canonical(value), indent=2, ensure_ascii=False)
 
 
 @contextlib.contextmanager
@@ -320,9 +419,9 @@ def build_user_prompt(envelope: dict[str, Any], structured_input: dict[str, Any]
     request.
     """
     return (f"<{ENVELOPE_TAG}>\n"
-            f"{json.dumps(envelope, indent=2)}\n"
+            f"{canonical_json(envelope)}\n"
             f"</{ENVELOPE_TAG}>\n\n"
-            f"{json.dumps(structured_input, indent=2)}")
+            f"{canonical_json(structured_input)}")
 
 
 def repair_instruction(errors: list[str]) -> str:

@@ -522,6 +522,52 @@ hashes — but every tool that touched it misbehaved. `docker-compose.yml`
 already gets this right via `POSTGRES_INITDB_ARGS`; a hand-built cluster
 does not.
 
+## Before the first full synthetic case: what E7 will and will not show
+
+Written **before** the run, so the result is not misread.
+
+**Engine 7 will return little or nothing, and that is correct.** The
+knowledge library is empty of the things E7 retrieves. K1 seeded the
+concept dictionary — 269 concepts — and nothing else:
+
+| | |
+|---|---|
+| concepts | 269 (K1 seed) |
+| strategies | 5 — **test fixtures**, not knowledge |
+| evidence records | 3 — **test fixtures** |
+| claims | 0 |
+| implementation patterns | 0 |
+
+Step 16 (Knowledge Factory K02–K11) builds strategies, claims and evidence.
+Step 17 (K14) makes them retrievable by embedding and hybrid search.
+Neither exists yet.
+
+**So Engine 1 Pass B will reason from an empty retrieval set.** Pass B is
+still worth running and its output is still worth reading — but it is
+reading its own Pass A picture with an empty E7 slot, not a library.
+
+What the first full case therefore **does** tell us:
+
+- whether the pipeline flows end to end on a live provider
+- whether Engine 1 produces a coherent 19-part report
+- whether Engine 2 and Engine 3 build on Pass B rather than restating it
+- whether the substantive handoffs propagate (D24) with real model output
+  rather than fixtures
+- what a real cycle costs
+
+What it **does not** tell us:
+
+- whether the retrieved knowledge is any good. There is none to retrieve.
+- whether E7's case retrieval works. An empty result from an empty library
+  is indistinguishable from a broken retriever until step 16 puts something
+  in it.
+
+**An empty `RESEARCH_PRACTICE_CASE_HANDOFF` is not a bug report.** The
+block must still be present and well-formed — D24 requires that, and a
+missing one still dead-letters — but its strategy and evidence fields
+being thin is the expected state of the system today.
+
+
 ## Bugs found and fixed during build
 1. **`norm_phrase` trailing whitespace.** Trimming before punctuation
    stripping left a trailing space on any phrase ending in punctuation

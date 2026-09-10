@@ -961,6 +961,81 @@ connection per engine call, on a 2 vCPU box.
 
 ---
 
+## D26 — n8n parity is byte-identical, and the wording of a violation is ours
+**SETTLED**
+
+The n8n port mirrors `scripts/run_engine.py`. "Behaviourally equivalent" is
+not the bar: **the prompt hash plus the request IS the call**, and two
+serializers that mean the same thing produce different model behaviour with
+nothing downstream to notice.
+
+**One stored corpus, two implementations, identical output** — the third
+use of the pattern the contract registry established, and the third time it
+found something.
+
+### The two ways Python and JavaScript actually disagreed
+
+Measured over a corpus covering ASCII, non-ASCII, nesting, empty
+containers, big integers and every JSON escape. Everything agreed except:
+
+| | |
+|---|---|
+| non-ASCII | Python escaped to `\uXXXX` by default; JavaScript did not |
+| integral floats | Python wrote `78.0`; JavaScript wrote `78` |
+
+`canonical_json()` fixes both. `ensure_ascii=False` is an improvement on
+its own merits — escaping "idli, sambar" or a rupee sign costs tokens and
+hides the text from the model. Integral floats become ints because JSON has
+one number type and JavaScript cannot tell `78.0` from `78` once parsed; a
+weight of 78.0 kg and a weight of 78 kg are the same measurement, and
+byte-identical requests are worth more than a trailing zero.
+
+### The wording of a contract violation is defined here, not inherited
+
+```
+jsonschema  "'CASE_VERSION' is a required property"
+ajv         "must have required property 'CASE_VERSION'"
+```
+
+That string is **not cosmetic**. It is persisted to
+`engine_runs.error_detail`, and `repair_instruction()` sends it to the
+model on attempt two. Two implementations disagreeing means n8n asks the
+model to fix something in different words than the reference does, on the
+one retry that matters.
+
+So `format_violation(field, keyword, detail)` defines the wording, both
+sides build it from their own library's **structured** error data, and the
+parity suite proves they agree. Applicator keywords (`if`, `then`,
+`allOf`, …) are skipped on both sides: they are containers, they name no
+field, and their child errors carry the real blame.
+
+### The JavaScript under test is extracted from the workflow
+
+`testing/n8n_parse_response.js` reads the Code-node source out of
+`workflows/run_engine.json` at run time. A copy would drift from the
+workflow it claims to test, and parity would then be proving that two test
+helpers agree.
+
+### What the corpus covers
+
+Valid execution; an invalid control block three ways; a missing substantive
+handoff; a handoff block present but empty; **the wrong block for the
+mode** (an `UPDATE` that returned only a state); a fenced control block; a
+handoff whose value lines look like keys; an empty response; E6 INIT /
+REBUILD / UPDATE; E7 CASE / FOUNDATION / UPDATE / INBOX; E1 Pass A and Pass
+B; token and cost accounting.
+
+*Rejected:* comparing verdicts and blamed fields only, as
+`test_contract_registry.py` does for the schema. That is right for "is this
+control block valid"; it is not enough once the message text reaches a
+model and a database column.
+
+*Rejected:* executing the whole workflow through a live provider to prove
+parity. Deterministic comparison covers it, and paid calls prove nothing
+extra.
+
+---
+
 ## OPEN
 
 **O1 — Intake form. `RESOLVED FOR V1` — see D22.** Core Intake V1 is built:

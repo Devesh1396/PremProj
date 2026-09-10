@@ -29,6 +29,19 @@
 
 set -euo pipefail
 
+# PINNED. `npm install n8n` unpinned picked up 2.35.7 on 2026-09-10 and would
+# pick up something else tomorrow. Workflow JSON is version-sensitive -- node
+# `typeVersion` values and the CLI surface both move across majors, and 2.x
+# already dropped `execute --file` -- so a parity result proven against an
+# unpinned install proves nothing reproducible.
+#
+# Raise this deliberately, re-run the parity suite, and record the result.
+# Do NOT let it float.
+N8N_VERSION="${N8N_VERSION:-2.35.7}"
+
+# The VPS runs its own n8n and this pin does not change it. If the two differ
+# across a major, a workflow proven here may not import there. See
+# docs/OPERATIONS.md "n8n version" for how to check.
 N8N_HOME="${N8N_HOME:-${TMPDIR:-/tmp}/premproj-n8n}"
 N8N_BIN="$N8N_HOME/node_modules/.bin/n8n"
 
@@ -53,14 +66,27 @@ install)
     mkdir -p "$N8N_HOME"
     cd "$N8N_HOME"
     [ -f package.json ] || npm init -y >/dev/null
-    echo "installing n8n into $N8N_HOME (this takes several minutes)"
-    npm install n8n --no-audit --no-fund
-    "$N8N_BIN" --version
+    echo "installing n8n@$N8N_VERSION into $N8N_HOME (several minutes)"
+    npm install "n8n@$N8N_VERSION" --no-audit --no-fund
+    installed="$("$N8N_BIN" --version)"
+    echo "n8n $installed"
+    if [ "$installed" != "$N8N_VERSION" ]; then
+        echo "expected n8n $N8N_VERSION, got $installed -- the pin did not hold" >&2
+        exit 1
+    fi
     ;;
 
 version)
     [ -x "$N8N_BIN" ] || { echo "n8n not installed. Run: bash scripts/local_n8n.sh install" >&2; exit 1; }
-    "$N8N_BIN" --version
+    installed="$("$N8N_BIN" --version)"
+    echo "$installed"
+    # Loud, because a drifted local install silently invalidates every
+    # parity result the suite reports.
+    [ "$installed" = "$N8N_VERSION" ] || {
+        echo "WARNING: pinned to $N8N_VERSION but $installed is installed." >&2
+        echo "Reinstall, or change N8N_VERSION deliberately and re-run parity." >&2
+        exit 1
+    }
     ;;
 
 seed-credentials)

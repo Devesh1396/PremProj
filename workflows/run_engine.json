@@ -1,0 +1,476 @@
+[
+  {
+    "id": "premprojrunengine01",
+    "name": "RUN_ENGINE",
+    "meta": {
+      "description": "The n8n port of scripts/run_engine.py. Mirrors the reference: three separate outputs (human text, substantive handoff, control block), the same runtime envelope, the same three registries, the same retry/repair/dead-letter path, the same cost accounting, and transaction-local client scope on every write (D25). Built and proven against n8n 2.35.7 -- see docs/OPERATIONS.md 'n8n version' before deploying."
+    },
+    "nodes": [
+      {
+        "parameters": {
+          "workflowInputs": {
+            "values": [
+              {
+                "name": "ENGINE_ID"
+              },
+              {
+                "name": "MODE"
+              },
+              {
+                "name": "PASS"
+              },
+              {
+                "name": "CLIENT_ID"
+              },
+              {
+                "name": "CASE_VERSION_ID"
+              },
+              {
+                "name": "CYCLE_ID"
+              },
+              {
+                "name": "MODEL_ROLE"
+              },
+              {
+                "name": "STRUCTURED_INPUT"
+              },
+              {
+                "name": "RUN_CONTEXT"
+              }
+            ]
+          }
+        },
+        "id": "a0000000-0000-4000-8000-000000000001",
+        "name": "Inputs",
+        "type": "n8n-nodes-base.executeWorkflowTrigger",
+        "typeVersion": 1.1,
+        "position": [
+          0,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "operation": "executeQuery",
+          "query": "SELECT prompt_file, prompt_hash, content FROM engine_prompts WHERE engine = $1::engine_id AND active",
+          "options": {
+            "queryReplacement": "={{ $json.ENGINE_ID }}"
+          }
+        },
+        "id": "a0000000-0000-4000-8000-000000000002",
+        "name": "Prompt registry",
+        "type": "n8n-nodes-base.postgres",
+        "typeVersion": 2.5,
+        "position": [
+          220,
+          0
+        ],
+        "credentials": {
+          "postgres": {
+            "id": "premprojphiruntime01",
+            "name": "phi_runtime (local)"
+          }
+        },
+        "notes": "010 / D23. No active row means PromptMissing: RUN_ENGINE never falls back to a stub (hard rule 7). The IF node below enforces that rather than letting an empty result flow on."
+      },
+      {
+        "parameters": {
+          "operation": "executeQuery",
+          "query": "SELECT tag, required FROM engine_handoffs WHERE engine = $1::engine_id AND mode = $2 AND active ORDER BY required DESC, tag",
+          "options": {
+            "queryReplacement": "={{ $('Inputs').item.json.ENGINE_ID }},{{ $('Inputs').item.json.MODE }}"
+          }
+        },
+        "id": "a0000000-0000-4000-8000-000000000003",
+        "name": "Handoff registry",
+        "type": "n8n-nodes-base.postgres",
+        "typeVersion": 2.5,
+        "position": [
+          440,
+          0
+        ],
+        "credentials": {
+          "postgres": {
+            "id": "premprojphiruntime01",
+            "name": "phi_runtime (local)"
+          }
+        },
+        "notes": "013 / D24. Which substantive block this engine owes in this mode. Zero rows is HandoffMissing, not 'expect nothing' -- an unregistered mode would otherwise pass every check while producing no reasoning."
+      },
+      {
+        "parameters": {
+          "operation": "executeQuery",
+          "query": "SELECT document, document_hash FROM orchestration_contracts WHERE schema_version = 'control_contract.v1' AND active",
+          "options": {}
+        },
+        "id": "a0000000-0000-4000-8000-000000000004",
+        "name": "Contract registry",
+        "type": "n8n-nodes-base.postgres",
+        "typeVersion": 2.5,
+        "position": [
+          660,
+          0
+        ],
+        "credentials": {
+          "postgres": {
+            "id": "premprojphiruntime01",
+            "name": "phi_runtime (local)"
+          }
+        },
+        "notes": "012 / D23. The JSON Schema the control block is validated against. ajv compiles THIS document; the Python reference compiles the same row with jsonschema, and test_contract_registry.py proves they agree."
+      },
+      {
+        "parameters": {
+          "jsCode": "// Build the model request. BYTE-IDENTICAL to the Python reference's\n// build_user_prompt() -- see workflows/build_request.js and D26. The\n// prompt hash plus this string IS the call.\nconst inputs = $('Inputs').first().json;\nconst prompt = $('Prompt registry').all();\nconst handoffs = $('Handoff registry').all();\nconst contract = $('Contract registry').all();\n\nif (prompt.length === 0) {\n  throw new Error(`PromptMissing: no active prompt for ${inputs.ENGINE_ID}. RUN_ENGINE will not fall back to a stub.`);\n}\nif (handoffs.length === 0) {\n  throw new Error(`HandoffMissing: no handoff registered for ${inputs.ENGINE_ID}/${inputs.MODE}. RUN_ENGINE will not treat a run as successful without knowing what reasoning it was supposed to produce.`);\n}\nif (contract.length === 0) {\n  throw new Error('ContractMissing: no active control contract. RUN_ENGINE will not validate a control block against nothing.');\n}\n\nconst ENVELOPE_TAG = 'RUNTIME_INVOCATION';\nconst expected = handoffs.map((h) => ({ tag: h.json.tag, required: h.json.required }));\n\n// Key order is part of the byte contract.\nconst envelope = {\n  ENGINE: inputs.ENGINE_ID,\n  MODE: inputs.MODE,\n  PASS: inputs.PASS || 'SINGLE',\n  EXPECTED_HANDOFF_BLOCKS: expected.map((h) => h.tag),\n  REQUIRED_HANDOFF_BLOCKS: expected.filter((h) => h.required).map((h) => h.tag),\n  CONTROL_BLOCK_REQUIRED: true,\n};\n\nconst canonicalJson = (v) => JSON.stringify(v, null, 2);\nconst userPrompt = `<${ENVELOPE_TAG}>\\n${canonicalJson(envelope)}\\n</${ENVELOPE_TAG}>\\n\\n${canonicalJson(inputs.STRUCTURED_INPUT)}`;\n\nreturn [{ json: {\n  run_id: crypto.randomUUID(),\n  system_prompt: prompt[0].json.content,\n  prompt_file: prompt[0].json.prompt_file,\n  prompt_hash: prompt[0].json.prompt_hash,\n  user_prompt: userPrompt,\n  expected_handoffs: expected,\n  contract: contract[0].json.document,\n  attempt: 1,\n  totals: { input_tokens: 0, output_tokens: 0, duration_ms: 0 },\n} }];"
+        },
+        "id": "a0000000-0000-4000-8000-000000000005",
+        "name": "Build request",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          880,
+          0
+        ],
+        "notes": "Byte-identical to scripts/run_engine.py build_user_prompt(). testing/test_n8n_parity.py compares both over a stored corpus covering non-ASCII, integral floats, empty containers and every JSON escape."
+      },
+      {
+        "parameters": {
+          "operation": "executeQuery",
+          "query": "SELECT set_client_scope($1::uuid);\nINSERT INTO engine_runs (run_id, client_id, case_version_id, cycle_id, engine, pass, prompt_file, prompt_hash, schema_version, model_role, model_name, model_params, status, started_at) VALUES ($2::uuid, $1::uuid, $3::uuid, $4::uuid, $5::engine_id, $6::engine_pass, $7, $8, 'control_contract.v1', $9, $10, $11::jsonb, 'RUNNING', now())",
+          "options": {
+            "queryReplacement": "={{ $('Inputs').item.json.CLIENT_ID }},{{ $json.run_id }},{{ $('Inputs').item.json.CASE_VERSION_ID }},{{ $('Inputs').item.json.CYCLE_ID }},{{ $('Inputs').item.json.ENGINE_ID }},{{ $('Inputs').item.json.PASS || 'SINGLE' }},{{ $json.prompt_file }},{{ $json.prompt_hash }},{{ $('Inputs').item.json.MODEL_ROLE }},{{ $json.model_name }},{{ JSON.stringify($('Inputs').item.json.RUN_CONTEXT || {}) }}"
+          }
+        },
+        "id": "a0000000-0000-4000-8000-000000000006",
+        "name": "Open run",
+        "type": "n8n-nodes-base.postgres",
+        "typeVersion": 2.5,
+        "position": [
+          1100,
+          0
+        ],
+        "credentials": {
+          "postgres": {
+            "id": "premprojphiruntime01",
+            "name": "phi_runtime (local)"
+          }
+        },
+        "notes": "D25. set_client_scope FIRST, in the SAME transaction as the write. n8n pools connections, and scope is transaction-local precisely so a pooled connection cannot carry Client A's context into Client B's query. A NULL client is a knowledge-clock run and migration 014 permits it."
+      },
+      {
+        "parameters": {
+          "method": "POST",
+          "url": "={{ $env.LLM_BASE_URL.replace(/\\/$/, '') }}/chat/completions",
+          "sendHeaders": true,
+          "headerParameters": {
+            "parameters": [
+              {
+                "name": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "name": "Authorization",
+                "value": "=Bearer {{ $env.LLM_API_KEY }}"
+              }
+            ]
+          },
+          "sendBody": true,
+          "specifyBody": "json",
+          "jsonBody": "={{ JSON.stringify({ model: $('Build request').item.json.model_name, messages: [{ role: 'system', content: $('Build request').item.json.system_prompt }, { role: 'user', content: $('Build request').item.json.user_prompt }], temperature: 0.2 }) }}",
+          "options": {
+            "timeout": 300000,
+            "retry": {
+              "retry": {
+                "maxTries": 6,
+                "waitBetweenTries": 2000
+              }
+            }
+          }
+        },
+        "id": "a0000000-0000-4000-8000-000000000007",
+        "name": "Call provider",
+        "type": "n8n-nodes-base.httpRequest",
+        "typeVersion": 4.2,
+        "position": [
+          1320,
+          0
+        ],
+        "onError": "continueErrorOutput",
+        "notes": "Mirrors openai_compatible_provider. Transport retries have their own budget (6 tries, exponential) so one overloaded-provider window cannot spend the repair attempts that exist for an invalid control block."
+      },
+      {
+        "parameters": {
+          "jsCode": "// Parse the response into THREE separate things (D24): human output,\n// substantive handoff, control block. They are never interchangeable.\nconst build = $('Build request').first().json;\nconst payload = $json;\nconst choice = (payload.choices || [])[0] || {};\n// content is ABSENT, not empty, when a reasoning model spends its whole\n// budget thinking. Return '' and fail honestly at extraction.\nconst raw = (choice.message || {}).content || '';\nconst usage = payload.usage || {};\nconst promptTokens = usage.prompt_tokens || 0;\n// REASONING TOKENS ARE BILLED AS OUTPUT AND ARE NOT IN completion_tokens.\nconst billedOutput = Math.max(usage.completion_tokens || 0, (usage.total_tokens || 0) - promptTokens);\n\nconst CONTROL_TAG = 'CONTROL_BLOCK';\nconst HANDOFF_KEY = /^([A-Z][A-Z0-9_]{2,}):[ \\t]*(.*)$/;\n\nfunction parseHandoffBlock(body) {\n  const fields = {}; const order = []; const preamble = [];\n  let current = null;\n  for (const line of body.split('\\n')) {\n    const m = HANDOFF_KEY.exec(line);\n    if (m) {\n      current = m[1];\n      const first = m[2].trim();\n      if (current in fields) fields[current] = `${fields[current]}\\n${first}`.trim();\n      else { fields[current] = first; order.push(current); }\n      continue;\n    }\n    if (current === null) { if (line.trim()) preamble.push(line); continue; }\n    fields[current] = fields[current] ? `${fields[current]}\\n${line}`.trim() : line.trim();\n  }\n  fields._field_order = order;\n  fields._raw = body;\n  if (preamble.length) fields._preamble = preamble.join('\\n');\n  return fields;\n}\n\nfunction extractBlock(text, tag) {\n  const open = `<${tag}>`; const close = `</${tag}>`;\n  if (!text.includes(open) || !text.includes(close)) return null;\n  let body = text.split(open)[1].split(close)[0];\n  const stripped = body.trim();\n  if (stripped.startsWith('```')) body = stripped.split('\\n').slice(1).join('\\n').replace(/```$/, '');\n  return body;\n}\n\nlet control = null;\nconst controlBody = extractBlock(raw, CONTROL_TAG);\nif (controlBody !== null) { try { control = JSON.parse(controlBody.trim()); } catch (e) { control = null; } }\nif (control !== null && typeof control !== 'object') control = null;\n\nconst handoffs = {};\nfor (const h of build.expected_handoffs) {\n  const body = extractBlock(raw, h.tag);\n  if (body === null) continue;\n  const parsed = parseHandoffBlock(body);\n  if (Object.keys(parsed).filter((k) => !k.startsWith('_')).length === 0) continue;\n  handoffs[h.tag] = parsed;\n}\n\nconst errors = [];\nif (control === null) errors.push(`no parseable <${CONTROL_TAG}> block in response`);\nfor (const h of build.expected_handoffs) {\n  if (h.required && !(h.tag in handoffs)) {\n    errors.push(`no parseable <${h.tag}> block in response. The control block routes; this is the reasoning the next engine needs, and a response without it is not a completed run.`);\n  }\n}\n\n// The human report is what precedes the FIRST machine block, whichever\n// that is -- not just the control tag, or every handoff would land in it.\nconst boundaries = [CONTROL_TAG, ...build.expected_handoffs.map((h) => h.tag)]\n  .map((t) => raw.indexOf(`<${t}>`)).filter((i) => i >= 0);\nconst first = boundaries.length ? Math.min(...boundaries) : -1;\nconst humanOutput = (first >= 0 ? raw.slice(0, first) : raw).trim();\n\nconst primaryTag = (build.expected_handoffs.find((h) => h.required && h.tag in handoffs)\n  || { tag: Object.keys(handoffs)[0] }).tag || null;\nconst secondary = {};\nfor (const [tag, body] of Object.entries(handoffs)) if (tag !== primaryTag) secondary[tag] = body;\n\nreturn [{ json: {\n  raw,\n  control,\n  handoffs,\n  errors,\n  human_output: humanOutput,\n  structured: primaryTag ? handoffs[primaryTag] : {},\n  primary_tag: primaryTag,\n  secondary_handoffs: secondary,\n  input_tokens: promptTokens,\n  output_tokens: billedOutput,\n} }];"
+        },
+        "id": "a0000000-0000-4000-8000-000000000008",
+        "name": "Parse three outputs",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1540,
+          0
+        ],
+        "notes": "D24. The control block routes; the handoff is the reasoning. Line-oriented KEY: parsing with a key anchored at column zero, and nothing discarded -- _raw keeps the block verbatim, _preamble keeps text before the first key. Mirrors parse_handoff_block() in the reference."
+      },
+      {
+        "parameters": {
+          "jsCode": "// Validate the control block against the STORED contract with ajv --\n// the same document the Python reference hands to jsonschema.\n// NODE_FUNCTION_ALLOW_EXTERNAL must include ajv,ajv-formats.\n//\n// The MESSAGE WORDING is ours, not ajv's (D26). This string is persisted\n// to engine_runs.error_detail and is what the repair prompt sends the\n// model on attempt two; ajv and jsonschema phrase the same violation\n// differently, so both build the shared format from their own library's\n// structured error data instead.\nconst Ajv = require('ajv/dist/2020');\nconst addFormats = require('ajv-formats');\nconst build = $('Build request').first().json;\nconst parsed = $json;\n\nconst typeNames = (v) => (Array.isArray(v)\n  ? v.map(String).sort().join(', ')\n  : String(v));\n\nfunction formatViolation(field, keyword, detail) {\n  let reason;\n  if (keyword === 'required') reason = 'required property missing';\n  else if (keyword === 'enum') reason = 'not one of ' + detail.map(String).sort().join(', ');\n  else if (keyword === 'type') reason = `expected type ${typeNames(detail)}`;\n  else if (keyword === 'const') reason = `must be ${JSON.stringify(detail)}`;\n  else if (keyword === 'minLength') reason = detail === 1 ? 'must not be empty' : `shorter than ${detail} characters`;\n  else if (keyword === 'additionalProperties') reason = 'not permitted by the contract';\n  else reason = String(keyword);\n  return `${field}: ${reason}`;\n}\n\nlet errors = [...parsed.errors];\nif (parsed.control !== null) {\n  const ajv = new Ajv({ allErrors: true, strict: false });\n  addFormats(ajv);\n  const validate = ajv.compile(build.contract);\n  if (!validate(parsed.control)) {\n    const CONTAINERS = new Set(['if', 'then', 'else', 'allOf', 'anyOf', 'oneOf', 'not']);\n    for (const e of validate.errors || []) {\n      if (CONTAINERS.has(e.keyword)) continue;\n      let field; let detail;\n      if (e.keyword === 'required') { field = e.params.missingProperty; detail = null; }\n      else if (e.keyword === 'additionalProperties') { field = e.params.additionalProperty; detail = null; }\n      else {\n        field = (e.instancePath || '').replace(/^\\//, '').split('/')[0] || '(root)';\n        if (e.keyword === 'enum') detail = e.params.allowedValues;\n        else if (e.keyword === 'type') detail = e.params.type;\n        else if (e.keyword === 'const') detail = e.params.allowedValue;\n        else if (e.keyword === 'minLength') detail = e.params.limit;\n        else detail = null;\n      }\n      errors.push(formatViolation(field, e.keyword, detail));\n    }\n  }\n}\nerrors = [...new Set(errors)].sort();\n\nreturn [{ json: { ...parsed, errors, valid: errors.length === 0 } }];"
+        },
+        "id": "a0000000-0000-4000-8000-000000000009",
+        "name": "Validate control",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1760,
+          0
+        ],
+        "notes": "012 / D23. ajv over the stored document; test_contract_registry.py proves ajv and jsonschema reach identical verdicts AND blame identical fields over 26 control blocks."
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "version": 2
+            },
+            "conditions": [
+              {
+                "id": "valid",
+                "operator": {
+                  "type": "boolean",
+                  "operation": "true",
+                  "singleValue": true
+                },
+                "leftValue": "={{ $json.valid }}"
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "id": "a0000000-0000-4000-8000-00000000000a",
+        "name": "Complete?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2.2,
+        "position": [
+          1980,
+          0
+        ],
+        "notes": "A run is complete only with a valid control block AND every required handoff. A valid control block is not evidence that an engine did its work (D24). The false branch goes to repair, then dead-letter."
+      },
+      {
+        "parameters": {
+          "operation": "executeQuery",
+          "query": "SELECT set_client_scope($1::uuid);\nUPDATE engine_runs SET status='SUCCEEDED', attempts=$2, completed_at=now(), input_tokens=$3, output_tokens=$4, duration_ms=$5 WHERE run_id=$6::uuid;\nINSERT INTO engine_outputs (run_id, human_output, structured, control, schema_valid, handoff_tag, handoff_mode, secondary_handoffs) VALUES ($6::uuid, $7, $8::jsonb, $9::jsonb, true, $10, $11, $12::jsonb)",
+          "options": {
+            "queryReplacement": "={{ $('Inputs').item.json.CLIENT_ID }},{{ $('Build request').item.json.attempt }},{{ $json.input_tokens }},{{ $json.output_tokens }},{{ $('Build request').item.json.totals.duration_ms }},{{ $('Build request').item.json.run_id }},{{ $json.human_output }},{{ JSON.stringify($json.structured) }},{{ JSON.stringify($json.control) }},{{ $json.primary_tag }},{{ $('Inputs').item.json.MODE }},{{ JSON.stringify($json.secondary_handoffs) }}"
+          }
+        },
+        "id": "a0000000-0000-4000-8000-00000000000b",
+        "name": "Record success",
+        "type": "n8n-nodes-base.postgres",
+        "typeVersion": 2.5,
+        "position": [
+          2200,
+          -120
+        ],
+        "credentials": {
+          "postgres": {
+            "id": "premprojphiruntime01",
+            "name": "phi_runtime (local)"
+          }
+        },
+        "notes": "D25 scope, and both writes in ONE transaction: a run marked SUCCEEDED with no output row is a lie the next reader would believe."
+      },
+      {
+        "parameters": {
+          "operation": "executeQuery",
+          "query": "SELECT set_client_scope($1::uuid);\nUPDATE engine_runs SET status='DEAD_LETTER', attempts=$2, completed_at=now(), input_tokens=$3, output_tokens=$4, duration_ms=$5, error_class=$6::failure_type, error_detail=$7 WHERE run_id=$8::uuid;\nINSERT INTO dead_letter_jobs (job_type, entity_type, entity_id, failure_reason, raw_payload, attempts) VALUES ($9, 'engine_run', $8, $7, $10::jsonb, $2)",
+          "options": {
+            "queryReplacement": "={{ $('Inputs').item.json.CLIENT_ID }},{{ $('Build request').item.json.attempt }},{{ $json.input_tokens }},{{ $json.output_tokens }},{{ $('Build request').item.json.totals.duration_ms }},SCHEMA_INVALID,{{ $json.errors.join('; ').slice(0, 2000) }},{{ $('Build request').item.json.run_id }},RUN_ENGINE_{{ $('Inputs').item.json.ENGINE_ID }},{{ JSON.stringify({ raw: $json.raw.slice(0, 8000) }) }}"
+          }
+        },
+        "id": "a0000000-0000-4000-8000-00000000000c",
+        "name": "Dead letter",
+        "type": "n8n-nodes-base.postgres",
+        "typeVersion": 2.5,
+        "position": [
+          2200,
+          120
+        ],
+        "credentials": {
+          "postgres": {
+            "id": "premprojphiruntime01",
+            "name": "phi_runtime (local)"
+          }
+        },
+        "notes": "Malformed output never reaches the case or knowledge tables. No engine_outputs row is written for a dead-lettered run -- the reference asserts that and so does the parity suite."
+      },
+      {
+        "parameters": {
+          "jsCode": "// The normalized result the caller receives, matching EngineResult.\nconst parsed = $json;\nconst build = $('Build request').first().json;\nconst succeeded = parsed.valid === true;\nreturn [{ json: {\n  run_id: build.run_id,\n  status: succeeded ? 'SUCCEEDED' : 'DEAD_LETTER',\n  control: succeeded ? parsed.control : null,\n  human_output: succeeded ? parsed.human_output : parsed.raw,\n  structured: succeeded ? parsed.structured : null,\n  handoff_tag: succeeded ? parsed.primary_tag : null,\n  handoff_mode: $('Inputs').first().json.MODE,\n  secondary_handoffs: succeeded ? parsed.secondary_handoffs : {},\n  attempts: build.attempt,\n  error: succeeded ? null : parsed.errors.join('; '),\n} }];"
+        },
+        "id": "a0000000-0000-4000-8000-00000000000d",
+        "name": "Result",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          2420,
+          0
+        ],
+        "notes": "Same shape as EngineResult in the reference, so a calling workflow reads the same fields the Python caller does."
+      }
+    ],
+    "connections": {
+      "Inputs": {
+        "main": [
+          [
+            {
+              "node": "Prompt registry",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Prompt registry": {
+        "main": [
+          [
+            {
+              "node": "Handoff registry",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Handoff registry": {
+        "main": [
+          [
+            {
+              "node": "Contract registry",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Contract registry": {
+        "main": [
+          [
+            {
+              "node": "Build request",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Build request": {
+        "main": [
+          [
+            {
+              "node": "Open run",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Open run": {
+        "main": [
+          [
+            {
+              "node": "Call provider",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Call provider": {
+        "main": [
+          [
+            {
+              "node": "Parse three outputs",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Parse three outputs",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Parse three outputs": {
+        "main": [
+          [
+            {
+              "node": "Validate control",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Validate control": {
+        "main": [
+          [
+            {
+              "node": "Complete?",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Complete?": {
+        "main": [
+          [
+            {
+              "node": "Record success",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Dead letter",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Record success": {
+        "main": [
+          [
+            {
+              "node": "Result",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Dead letter": {
+        "main": [
+          [
+            {
+              "node": "Result",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "settings": {
+      "executionOrder": "v1"
+    }
+  }
+]

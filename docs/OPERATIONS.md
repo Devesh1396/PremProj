@@ -118,6 +118,39 @@ docker compose exec postgres psql -U phi_admin -d phi
 
 ---
 
+## n8n version
+
+**Pinned locally, unknown on the VPS, and that gap is a deployment risk.**
+
+`scripts/local_n8n.sh` pins `N8N_VERSION` (2.35.7 as of 2026-09-10) because
+workflow JSON is version-sensitive: node `typeVersion` values move across
+releases, and 2.x already dropped `n8n execute --file`, which is why
+workflows in this repo carry a stable `id` and are imported before being
+run.
+
+**Nothing in this repository records what the VPS runs**, and the VPS has
+had n8n installed since before this build started — so it may well be on
+1.x. A workflow proven against 2.35.7 may not import on a 1.x instance.
+
+Check it on the VPS, once, and record the answer here:
+
+```bash
+docker ps --format '{{.Names}}\t{{.Image}}' | grep -i n8n
+docker exec <n8n-container> n8n --version
+```
+
+Then pick, deliberately:
+
+| The VPS is | Do |
+|---|---|
+| the same major (2.x) | pin `N8N_VERSION` to the VPS's exact version and re-run the parity suite |
+| 1.x | either upgrade the VPS to the pinned version, or re-target the workflow at 1.x node `typeVersion`s and re-prove parity there |
+
+Do not assume they match. The failure mode is a workflow that passes every
+local test and refuses to import on the machine it was built for.
+
+---
+
 ## Resource allocation
 
 2 vCPU is the binding constraint, not memory. Most work here is

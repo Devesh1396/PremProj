@@ -129,6 +129,12 @@ jobs:
         # what parity means.
         run: npm install --no-audit --no-fund --no-save ajv@8 ajv-formats@3
 
+      - name: Node version (the n8n parity suite needs it)
+        # test_n8n_parity.py runs the WORKFLOW'S OWN Code-node source over
+        # the golden corpus. Without Node it skips, and a skipped parity
+        # check is how a claim quietly stops being tested.
+        run: node --version
+
       - name: Apply migrations
         run: python3 scripts/migrate.py
 
@@ -209,6 +215,12 @@ jobs:
         # what parity means.
         run: npm install --no-audit --no-fund --no-save ajv@8 ajv-formats@3
 
+      - name: Node version (the n8n parity suite needs it)
+        # test_n8n_parity.py runs the WORKFLOW'S OWN Code-node source over
+        # the golden corpus. Without Node it skips, and a skipped parity
+        # check is how a claim quietly stops being tested.
+        run: node --version
+
       - name: Apply migrations without pgvector
         run: python3 scripts/migrate.py
 
@@ -275,6 +287,12 @@ jobs:
         # that, so a drift here is a failure rather than a silent change of
         # what parity means.
         run: npm install --no-audit --no-fund --no-save ajv@8 ajv-formats@3
+
+      - name: Node version (the n8n parity suite needs it)
+        # test_n8n_parity.py runs the WORKFLOW'S OWN Code-node source over
+        # the golden corpus. Without Node it skips, and a skipped parity
+        # check is how a claim quietly stops being tested.
+        run: node --version
 
       - name: Remove the contrib extensions from the server
         # There is no PostgreSQL image without pg_trgm and btree_gin -- they
