@@ -153,11 +153,22 @@ lose the entire project.
 ```
 
 What it does:
+- `pg_dumpall --roles-only --no-role-passwords` — **the roles**
 - `pg_dump -Fc` (custom format, compressed, restorable selectively)
-- GPG-encrypts to `BACKUP_GPG_RECIPIENT`
+- GPG-encrypts both to `BACKUP_GPG_RECIPIENT`
 - Copies off the VPS to `BACKUP_REMOTE_TARGET`
 - Prunes local copies past `BACKUP_RETENTION_DAYS`
 - **Exits non-zero on failure** so cron mail surfaces it
+
+**Two files, and they travel together.** `pg_dump` dumps one database;
+roles are cluster-wide and are *not* in it. A database dump on its own
+restores the data and none of the access controls — measured on the
+2026-09-10 drill: 298 errors, every one of the 52 RLS policies among them.
+Keep the `.roles.sql` beside its `.dump`.
+
+The roles file carries **no passwords** by design, so a leaked backup is
+client data to protect rather than client data plus the keys to it.
+Passwords come from `.env` at restore time, exactly as at first install.
 
 A backup that stays on the same VPS is not a backup. If the VPS is lost,
 so is the dump.
@@ -170,12 +181,29 @@ An untested backup is not a backup. Run this drill after the first
 successful nightly dump, and again after any schema change that matters.
 
 ```bash
-# 1. Decrypt
-gpg --decrypt backups/phi-2026-09-09.dump.gpg > /tmp/restore.dump
+# 1. Decrypt BOTH files
+gpg --decrypt backups/phi-2026-09-09.dump.gpg      > /tmp/restore.dump
+gpg --decrypt backups/phi-2026-09-09.roles.sql.gpg > /tmp/restore.roles.sql
 
-# 2. Restore into a SCRATCH database, never over the live one
-docker compose exec postgres createdb -U phi_admin phi_restore_test
+# 2. Restore into a SCRATCH database, never over the live one.
+#    ENCODING MUST MATCH. A database created with default initdb settings
+#    can come up SQL_ASCII, and then psycopg returns text columns as BYTES:
+#    migrate.py decides applied migrations are pending and dies on a
+#    duplicate key, and set_role_passwords.py raises a TypeError. The data
+#    is intact underneath, but every tool that touches it misbehaves.
+#    scripts/migrate.py now refuses to run on a non-UTF8 database.
+docker compose exec postgres psql -U phi_admin -d postgres -c \
+  "CREATE DATABASE phi_restore_test OWNER phi_admin \
+     ENCODING 'UTF8' LC_COLLATE 'C' LC_CTYPE 'C' TEMPLATE template0;"
+
+# 2a. ROLES FIRST, on a machine that does not already have them.
+#     Skipped on the live VPS where they exist; REQUIRED on a rebuild.
+#     Without this every GRANT and every CREATE POLICY fails and you get a
+#     database with all the data and none of the access controls.
+docker compose exec -T postgres psql -U phi_admin -d postgres < /tmp/restore.roles.sql
+
 docker compose exec -T postgres pg_restore -U phi_admin -d phi_restore_test < /tmp/restore.dump
+# pg_restore must exit 0 and print NOTHING. Errors here are not cosmetic.
 
 # 3. Verify it is actually usable, not merely present
 docker compose exec postgres psql -U phi_admin -d phi_restore_test -c "
@@ -191,12 +219,32 @@ docker compose exec postgres psql -U phi_admin -d phi_restore_test -c "
     FROM pg_class WHERE relname IN ('client_labs','case_events');
 "
 
-# 5. Clean up
+# 5. Set the role passwords from .env, as at first install
+DATABASE_URL=... python3 scripts/set_role_passwords.py
+
+# 6. THE REAL TEST: is it usable, or merely present?
+#    Counts prove nothing about whether triggers, constraints and policies
+#    survived. Run the suite against the restored database.
+DATABASE_URL=postgresql://phi_admin:...@host:port/phi_restore_test \
+  bash testing/run_all.sh
+# All eight suites must pass, and migrations must report "Up to date"
+# rather than trying to re-apply.
+
+# 7. Clean up
 docker compose exec postgres dropdb -U phi_admin phi_restore_test
-rm /tmp/restore.dump
+rm /tmp/restore.dump /tmp/restore.roles.sql
 ```
 
 Record the date of the last successful restore drill in `PROGRESS.md`.
+
+### Rehearsing a full rebuild
+
+The drill above restores onto a machine that still has its roles. The
+disaster it is insuring against does not. To rehearse that, restore onto a
+cluster where `phi_runtime` and `phi_practitioner` do **not** exist and
+follow step 2a. If `pg_restore` reports errors mentioning a role that does
+not exist, the roles file was not applied first — the data will land and
+the access controls will not.
 
 ---
 
