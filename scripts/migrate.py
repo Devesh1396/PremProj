@@ -68,6 +68,39 @@ def main() -> int:
         return 1
 
     with psycopg.connect(dsn(), autocommit=True) as conn:
+        # Encoding first, before anything reads a row.
+        #
+        # On a SQL_ASCII database psycopg returns name and text columns as
+        # BYTES, not str. schema_migrations lookups then miss every time, so
+        # this runner decides applied migrations are pending and dies on a
+        # duplicate key -- a baffling error whose real cause is three layers
+        # away. Measured on the 2026-09-10 restore drill: a recovery cluster
+        # built with default initdb settings came up SQL_ASCII and produced
+        # exactly that, plus a TypeError in set_role_passwords.py.
+        #
+        # It also matters on its own terms: this schema stores clinical text,
+        # Indian food and place names, and practitioner prose. SQL_ASCII does
+        # not validate encoding, so length(), upper(), collation and
+        # full-text search all quietly misbehave on multibyte text.
+        encoding = conn.execute(
+            "SELECT pg_encoding_to_char(encoding) FROM pg_database "
+            "WHERE datname = current_database()").fetchone()[0]
+        # The encoding NAME itself arrives as bytes on the very databases
+        # this check exists to catch, so decode before comparing or printing.
+        if isinstance(encoding, (bytes, bytearray)):
+            encoding = encoding.decode("ascii", "replace")
+        if encoding != "UTF8":
+            print(
+                f"FATAL: database encoding is {encoding}, expected UTF8.\n"
+                "     Recreate it with the same settings the deployment uses:\n"
+                "       CREATE DATABASE phi OWNER phi_admin\n"
+                "         ENCODING 'UTF8' LC_COLLATE 'C' LC_CTYPE 'C'\n"
+                "         TEMPLATE template0;\n"
+                "     docker-compose.yml does this via POSTGRES_INITDB_ARGS.\n"
+                "     See the restore procedure in docs/OPERATIONS.md."
+            )
+            return 4
+
         conn.execute(BOOTSTRAP)
         applied = {
             row[0]: row[1]

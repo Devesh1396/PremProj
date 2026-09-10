@@ -314,11 +314,23 @@ certification and not a meeting. No `COMPLETE` status exists.
 De-identified aggregation into `practice_strategy_outcomes`. Minimum cohort
 5. Never merged with evidence.
 
-## Step 24 — Backup drill
+## Step 24 — Backup drill *(drill performed 2026-09-10)*
 
 `scripts/backup.sh` on cron, then **restore into a scratch database and
-verify**. Record the drill date in `PROGRESS.md`. An untested backup is not
-a backup.
+verify**. An untested backup is not a backup.
+
+Performed 2026-09-10 and it earned itself immediately: the dump contained
+no roles, so restoring onto a fresh machine produced a database with all
+the data and none of the access controls (52 policies and 246 grants
+failed). `backup.sh` now dumps roles alongside the database, and the
+restore procedure in `docs/OPERATIONS.md` applies them first.
+
+Verification is the suite, not row counts: all eight suites must pass
+against the restored database. Encoding must match UTF8 — `migrate.py`
+refuses otherwise.
+
+**Still unproven:** the script has never run on the VPS under cron with
+GPG encryption and an off-site target configured.
 
 ---
 
@@ -343,7 +355,7 @@ a backup.
 21    CLIENT_FOLLOWUP and E4
 22    Wave-1 foundation build
 23    practice intelligence
-24    backup restore drill               <- do this early, not last
+24    backup restore drill               <- DONE 2026-09-10 (roles gap found)
 ```
 
 `bash testing/run_all.sh` must pass before every commit. Eight suites.

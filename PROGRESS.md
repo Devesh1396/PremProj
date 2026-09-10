@@ -168,6 +168,53 @@ low muscle activity:
 That gap is the entire value of the concept layer, and it is now asserted
 by a test rather than assumed.
 
+### Step 24 — restore drill `PERFORMED 2026-09-10`
+The first one ever run. `scripts/backup.sh` had been written and never
+executed; an untested backup is not a backup.
+
+Drill A — restore onto the live cluster, into a scratch database:
+- `pg_restore` exit 0, **zero errors**
+- all 70 tables compared **row by row** with content hashes, not counts:
+  49 non-empty identical, 21 empty identical, **0 mismatched**
+- 52 policies, 26 RLS tables, 26 FORCE RLS preserved
+- **all eight suites pass against the restored database**, and
+  `migrate.py` reports "Up to date" rather than re-applying
+
+Drill B — restore onto a **fresh cluster with no phi roles**, which is what
+losing the VPS actually looks like. This is where the drill earned itself:
+
+```
+pg_restore exit=1   1,438 error lines
+  259 x role "phi_runtime" does not exist
+   39 x role "phi_practitioner" does not exist
+  → 52 CREATE POLICY failed, 246 GRANTs failed
+  → database restored with ALL the data and NONE of the access controls
+```
+
+`pg_dump` dumps one database; roles are cluster-wide and are not in it. The
+tables look populated, so `pg_restore`'s exit code is easy to miss.
+
+It **fails safe, not open** — verified, not assumed: RLS stays enabled and
+FORCED with zero policies, so a re-created `phi_runtime` gets
+`permission denied`, not rows. The danger is operational, not a leak: the
+runtime cannot connect, and the fix under pressure is to hand-grant
+permissions, which is how the security model gets dismantled.
+
+Fixed: `backup.sh` now dumps roles alongside the database
+(`pg_dumpall --roles-only --no-role-passwords` — no credentials in the
+backup, so a leaked dump is client data rather than client data plus the
+keys to it). Re-run end to end: roles first, then the dump, onto a fresh
+cluster — **zero errors, 52 policies, all eight suites pass.**
+
+Also proven: **encoding must match.** The recovery cluster came up
+`SQL_ASCII` under default `initdb` settings and psycopg then returned text
+columns as **bytes**, so `migrate.py` thought applied migrations were
+pending and died on a duplicate key, and `set_role_passwords.py` raised a
+TypeError. Client data was intact underneath — byte-identical, matching
+hashes — but every tool that touched it misbehaved. `docker-compose.yml`
+already gets this right via `POSTGRES_INITDB_ARGS`; a hand-built cluster
+does not.
+
 ## Bugs found and fixed during build
 1. **`norm_phrase` trailing whitespace.** Trimming before punctuation
    stripping left a trailing space on any phrase ending in punctuation
@@ -336,6 +383,18 @@ by a test rather than assumed.
     script**, so only the CI step caught it — the first thing CI found that
     a local run could not. The suite now exercises `print_report`'s exit
     code directly, on a complete cycle and on one missing Pass B.
+36. **The backup did not include the roles.** `pg_dump` dumps one database;
+    roles are cluster-wide. Restoring onto a machine that does not have
+    them failed 52 CREATE POLICY and 246 GRANT statements while the data
+    landed fine — a database with all the PHI and none of the access
+    controls. Found by the 2026-09-10 restore drill, which is the only
+    thing that could have found it. `backup.sh` now dumps roles too.
+37. **A non-UTF8 database broke the tooling in a way that pointed nowhere
+    near the cause.** On SQL_ASCII, psycopg returns text columns as bytes;
+    `schema_migrations` lookups miss, so `migrate.py` treats applied
+    migrations as pending and dies on a duplicate primary key.
+    `migrate.py` now checks the encoding first and refuses with a message
+    naming the real problem and the fix.
 34. **Reasoning tokens were generated, billed, and invisible.** The live
     provider returns `prompt_tokens` 8, `completion_tokens` 1,
     `total_tokens` 75 — 66 tokens produced and charged that
@@ -658,8 +717,13 @@ Two Engine 7 items for the practitioner, neither blocking:
   must start narrow
 - `006` is schema only. No inbox UI, no ingestion pipeline, no acquisition
   adapters. It exists so those can be built without a retrofit.
-- **Restore drill still not performed.** Single most likely way to lose
-  this project; about ten minutes.
+- Restore drill **performed 2026-09-10** (see above). Re-run it after any
+  migration that changes roles, policies or grants.
+- `scripts/backup.sh` has still never run **on the VPS**, under cron, with
+  GPG encryption or an off-site target configured. The drill exercised it
+  in `direct` mode against a development database with both
+  `BACKUP_GPG_RECIPIENT` and `BACKUP_REMOTE_TARGET` unset, so the encrypt
+  and rsync paths remain unproven.
 - `EMBEDDING_DIM` is hard-coded to 1536 in `002_concepts.sql`; changing it
   needs a migration and a full re-embed
 - `norm_phrase` backs STORED generated columns; changing it later requires
