@@ -183,7 +183,18 @@ def main() -> int:
     ).fetchone()[0]
     check("confusable relation auto-mirrored", mirrored == 1, f"got {mirrored}")
 
-    pairs = conn.execute("select concept_a, concept_b from v_confusable_pairs").fetchall()
+    # Scoped to THIS pair. The claim is that the view collapses the two
+    # mirrored directions into one row -- not that the database contains
+    # exactly one confusable pair in total, which is a different and much
+    # weaker thing to know and which stops being true the moment anything
+    # else seeds a pair. K1 generates confusable pairs from sibling
+    # structure by design, so a global count here would fail on a seeded
+    # ontology while the behaviour under test was still correct.
+    keys = ["VISCERAL_ADIPOSE_TISSUE", "SUBCUTANEOUS_ADIPOSE_TISSUE"]
+    pairs = conn.execute(
+        """select concept_a, concept_b from v_confusable_pairs
+            where concept_a = any(%s) and concept_b = any(%s)""",
+        (keys, keys)).fetchall()
     check("v_confusable_pairs deduplicates direction", len(pairs) == 1, str(pairs))
 
     # ------------------------------------------------------------------
