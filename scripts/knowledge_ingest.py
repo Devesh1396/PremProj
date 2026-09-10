@@ -263,19 +263,38 @@ def open_envelope(conn, path: Path, digest: str, meta: dict) -> tuple[str, Recei
         receipt.notes.append(f"rights {rights!r} is not a known context; recorded as PUBLIC")
         rights = "PUBLIC"
 
+    # §56: the same raw source, processed again. A monitored page keeps its
+    # URL and changes its content, so a second envelope for one URL is a
+    # NEW VERSION, not a collision -- and uq_envelope_url_version is what
+    # says so. Without this, the first time a discovered page changed, K07
+    # would crash on a unique violation.
+    source_url = meta.get("source_url")
+    version = 1
+    if source_url:
+        prior = conn.execute(
+            "select max(source_version) from source_envelopes "
+            " where source_url = %s", (source_url,)).fetchone()[0]
+        if prior:
+            version = prior + 1
+            receipt.notes.append(
+                f"version {version} of this URL — the source changed since it "
+                "was last ingested, and neither version is lost (§56).")
+
     envelope_id = conn.execute(
         """insert into source_envelopes
              (source_kind, source_role, source_title, source_date, source_url,
               file_type, rights, rights_note, personal_note, topics,
-              send_to_e7, status, ingestion_provider, processing_version)
-           values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'RECEIVED','KNOWLEDGE_INBOX',%s)
+              send_to_e7, status, ingestion_provider, processing_version,
+              source_version)
+           values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'RECEIVED','KNOWLEDGE_INBOX',%s,%s)
            returning envelope_id""",
         (kind, meta.get("source_role", role).upper() if meta.get("source_role") else role,
          meta.get("source_title") or path.stem,
          meta.get("source_date"), meta.get("source_url"),
          path.suffix.lower().lstrip("."), rights, meta.get("rights_note"),
          meta.get("personal_note"), meta.get("topics"),
-         bool(meta.get("send_to_e7", True)), PROCESSING_VERSION)).fetchone()[0]
+         bool(meta.get("send_to_e7", True)), PROCESSING_VERSION,
+         version)).fetchone()[0]
     receipt.envelope_id = str(envelope_id)
 
     if dup is not None:
@@ -414,17 +433,44 @@ def normalize(conn, envelope_id: str, raw_path: Path, receipt: Receipt) -> None:
          "Ingested from knowledge/inbox. Adding a source kind is a data edit "
          "(D19); nothing here is keyed on a creator.")).fetchone()[0]
 
-    item_id = conn.execute(
-        """insert into source_items
-             (source_id, title, url, content_hash, ingestion_status, access_note)
-           values (%s,%s,%s,%s,'NORMALIZED',%s)
-           on conflict (content_hash) where content_hash is not null
-           do update set ingestion_status='NORMALIZED', last_seen=now()
-           returning item_id""",
-        (source_id, title or raw_path.stem, url, digest,
-         None if rights == "PUBLIC" else
-         f"rights: {rights}. Internal learning only; never reproduced in "
-         "client output (§52).")).fetchone()[0]
+    access_note = (None if rights == "PUBLIC" else
+                   f"rights: {rights}. Internal learning only; never reproduced "
+                   "in client output (§52).")
+
+    # ONE item, whose status progresses. Discovery (K02-K06) registers an
+    # item when it FINDS something and hands the content to this pipeline,
+    # so by the time normalization runs the row may already exist --
+    # DISCOVERED or QUEUED, carrying the url. Inserting a second row for it
+    # violates uq_item_url, and the two rows would be the same thing
+    # counted twice: found, and then read.
+    existing = None
+    if url:
+        existing = conn.execute(
+            "select item_id from source_items where url = %s", (url,)).fetchone()
+    if existing is None and digest:
+        existing = conn.execute(
+            "select item_id from source_items where content_hash = %s",
+            (digest,)).fetchone()
+
+    if existing is not None:
+        item_id = existing[0]
+        conn.execute(
+            """update source_items
+                  set source_id = coalesce(source_id, %s),
+                      title = coalesce(nullif(title, ''), %s),
+                      content_hash = coalesce(content_hash, %s),
+                      ingestion_status = 'NORMALIZED',
+                      access_note = coalesce(%s, access_note),
+                      last_seen = now()
+                where item_id = %s""",
+            (source_id, title or raw_path.stem, digest, access_note, item_id))
+    else:
+        item_id = conn.execute(
+            """insert into source_items
+                 (source_id, title, url, content_hash, ingestion_status, access_note)
+               values (%s,%s,%s,%s,'NORMALIZED',%s) returning item_id""",
+            (source_id, title or raw_path.stem, url, digest, access_note)
+        ).fetchone()[0]
 
     if source_date:
         conn.execute("update source_items set publication_date=%s where item_id=%s",
@@ -469,6 +515,34 @@ def normalize(conn, envelope_id: str, raw_path: Path, receipt: Receipt) -> None:
 # ---------------------------------------------------------------------
 # The run
 # ---------------------------------------------------------------------
+
+def deliver_to_inbox(name: str, data: bytes, meta: dict | None = None) -> Path:
+    """Put discovered content where the inbox pipeline will find it.
+
+    Discovery does NOT ingest. K07 and K08 already turn content into an
+    envelope, a preserved original and heading-located chunks; a second
+    path would be a second normalizer, a second dedup rule and a second
+    place for rights handling to be forgotten. So an adapter DELIVERS to
+    the inbox and the existing pipeline does the rest — which is also the
+    honest description of what discovery is: another way things arrive.
+
+    The filename is sanitised because it comes from a feed title or a URL,
+    and neither is a promise about the filesystem.
+    """
+    INBOX.mkdir(parents=True, exist_ok=True)
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip("-.")[:120] or "discovered"
+    path = INBOX / safe
+    counter = 1
+    while path.exists():
+        stem, dot, suffix = safe.partition(".")
+        path = INBOX / f"{stem}-{counter}{dot}{suffix}"
+        counter += 1
+    path.write_bytes(data)
+    if meta:
+        (INBOX / (path.stem + ".meta.json")).write_text(
+            json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
+    return path
+
 
 def inbox_files() -> list[Path]:
     if not INBOX.exists():

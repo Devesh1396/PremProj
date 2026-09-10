@@ -1680,6 +1680,102 @@ an invisible one.
 
 ---
 
+## D37 — Discovery finds; it does not ingest. And the access policy is a registry row
+**SETTLED 2026-09-10**
+
+K02–K06 add five ways for something to arrive. They add **no** ways for
+something to be processed: every adapter ends at
+`knowledge_ingest.deliver_to_inbox()` and K07/K08 take it from there.
+
+Two ingestion paths would be two normalizers, two dedup rules and two
+places for rights handling to be forgotten — and the second one always
+learns about §52 later than the first. "Discovery is another way things
+arrive at the inbox" is not a simplification; it is the correct
+description.
+
+### The policy is data, checked at one chokepoint
+
+Three sentences of the specification are policy:
+
+| | |
+|---|---|
+| K03 | "Not indiscriminate scraping. Respect access restrictions." |
+| K06 | "Do not build brittle unauthorized scraping as a core dependency." |
+| §49 | acquisition is provider-independent and the adapter is replaceable |
+
+A policy inside an adapter is one the next adapter reinterprets. It lives
+in `acquisition_adapters` (migration `021`) — `allowed_hosts`,
+`respect_robots`, `requires_authorization`, `min_interval_seconds`,
+`repeat_after_hours` — and `acquisition.fetch()` is the only place a
+request is made. Adding an adapter is an INSERT (hard rule 13); what it may
+do is a column, not an argument someone remembered to pass.
+
+**An unregistered adapter fetches nothing.** No row means no policy, and
+this layer will not act on behalf of one.
+
+### Refusing is an outcome, and it is recorded
+
+`source_fetches` records every request **and every refusal, with the
+reason**. "robots.txt disallowed this" and "no authorization is recorded"
+are findings about our access. A discovery layer that logged them nowhere
+would be indistinguishable from one that was quietly scraping.
+
+A `robots.txt` that **errors or cannot be read is a refusal**. "Respect
+access restrictions" cannot mean "respect them when they are conveniently
+available". A 404 is the one honest "no restriction stated".
+
+### K06 has no scraper to be brittle
+
+`YOUTUBE` is registered with `requires_authorization = true` and no
+authorization note, so the chokepoint refuses before anything is requested
+— not even `robots.txt` — and the item is recorded `ACCESS_DENIED`. That
+is a **true statement about our access**, not a failure. The day an
+authorization exists it becomes a registry note and the same path fetches.
+
+K05 is the same shape at a smaller scale: an episode with no published
+transcript is recorded `FULL_TEXT_NOT_AVAILABLE`, so it is not
+rediscovered every run and its content is not manufactured from a title and
+a blurb.
+
+### One item, whose status progresses
+
+Discovery registers a `source_items` row when it *finds* something;
+normalization used to insert another when it *read* it, and the two
+collided on `uq_item_url`. They are one item at two stages —
+`DISCOVERED` → `QUEUED` → `NORMALIZED` — so the normalizer now reconciles
+by URL and then by content hash.
+
+The same seam produced a second, worse bug: a monitored page keeps its URL
+and changes its content, which hit `uq_envelope_url_version`. §56 says the
+same raw source processed again is a **new version** and neither is lost,
+so `open_envelope` now bumps `source_version` and the receipt says it did.
+Both were reachable only once discovery existed, and neither was
+hypothetical.
+
+### What has NOT been verified, and it matters
+
+**No adapter in this build has ever spoken to its real API.** The build
+environment's egress proxy blocks `eutils.ncbi.nlm.nih.gov`,
+`api.crossref.org` and `pubmed.ncbi.nlm.nih.gov` — all three answered
+`000`. The suite drives the **real** adapters through the **real**
+chokepoint with only `transport()` replaced, which proves the policy, the
+query history, the cursor, the refusal paths, the parsing and the handoff.
+It proves nothing about whether PubMed's JSON is shaped the way this code
+reads it.
+
+That is a weaker claim than anything else in this build and `PROGRESS.md`
+labels it as such. The first live run of `PUBMED` should be treated as
+unverified code, not as a regression if it fails.
+
+*Rejected:* a feed library. A feed is a documented format and this reads
+five fields from it; a dependency would be a larger surface than the
+parsing it replaces.
+
+*Rejected:* letting discovery normalize HTML itself, since it already has
+the bytes. That is the second normalizer this decision exists to prevent.
+
+---
+
 ## OPEN
 
 **O1 — Intake form. `RESOLVED FOR V1` — see D22.** Core Intake V1 is built:

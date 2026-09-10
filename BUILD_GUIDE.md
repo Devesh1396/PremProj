@@ -435,9 +435,21 @@ note `ck_provenance_required` demands. A strategy with no canonical
 concepts becomes an OPEN gap rather than being linked to `PROPOSED`
 concepts (D8).
 
-**Next in this step:** discovery — K02 PubMed, K03 web, K04 RSS, K05/K06
-transcripts. They add input to the pipe that now exists end to end. **Do
-not begin mass ingestion** until one real source has run the whole loop.
+**K02–K06 BUILT.** `scripts/knowledge_discover.py` plus the chokepoint in
+`scripts/acquisition.py` and the registry in migration `021` (D37).
+Discovery finds; it does not ingest — every adapter ends at
+`deliver_to_inbox()`. The access policy is registry data checked in one
+place, every refusal is recorded with its reason, `YOUTUBE` refuses before
+requesting anything because K06 says not to build the scraper, and a
+podcast with no published transcript is marked rather than invented.
+
+**Not network-verified.** The build environment's proxy blocks every
+biomedical API, so the suite stubs the transport and drives the real
+adapters through the real chokepoint. Policy, cursor, query history,
+refusals, parsing and handoff are proven; the wire format is not.
+
+**Next:** step 17, K14 embedding and hybrid retrieval. **Do not begin mass
+ingestion** until one real source has run the whole loop.
 
 `MODEL_EXTRACTION` on the cheapest capable model — highest volume.
 Use the **Batch API** where the provider offers it: the knowledge clock is

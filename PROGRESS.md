@@ -26,8 +26,8 @@ not inspected by eye.**
 
 | | |
 |---|---|
-| Schema | 21 migrations, 78 tables, 24 views, 51 enums, 211 indexes, 45 triggers, 60 policies, 30 RLS tables |
-| Suites | **19**, green from an empty database, each run followed by a re-run, and on the D15 floor with no optional extension available |
+| Schema | 22 migrations, 78 tables, 24 views, 51 enums, 211 indexes, 45 triggers, 60 policies, 30 RLS tables |
+| Suites | **20**, green from an empty database, each run followed by a re-run, and on the D15 floor with no optional extension available |
 | CI | `.github/workflows/tests.yml` — every push on every branch, **with and without pgvector** |
 | Engines | All seven canonical prompts installed; E6 → E1 Pass A → E7 → E1 Pass B proven **live** |
 | Ontology | 26 domains, 269 concepts seeded from the curriculum, hash-verified |
@@ -99,9 +99,18 @@ normalized → delta analysis → evidence researched → strategy decided
 | K10 | `knowledge_research.py` — E7 `EVIDENCE` → independent evidence + the claim's reading |
 | K11 | `knowledge_synthesize.py` — E7 `SYNTHESIS` → four decisions, dedup done first |
 
+**Discovery (K02–K06) is built too** — `knowledge_discover.py` and the
+`acquisition.py` chokepoint. Five ways to arrive, no new way to process.
+
 **What is NOT done, and should not be assumed:**
-- Discovery: **K02** PubMed, **K03** web, **K04** RSS, **K05/K06**
-  transcripts. They add input to a pipe that now exists end to end.
+- **No discovery adapter has ever reached its real API.** The build
+  environment's egress proxy blocks `eutils.ncbi.nlm.nih.gov`,
+  `api.crossref.org` and `pubmed.ncbi.nlm.nih.gov`; all three returned
+  `000`. The suite drives the real adapters with the transport stubbed, so
+  the policy, the cursor, the query history, the refusal paths, the parsing
+  and the handoff are verified — and **the wire format is not**. This is a
+  weaker claim than anything else in this build. Treat the first live
+  `PUBMED` run as unverified code rather than as a regression.
 - **No real source has run the loop yet** — only fixtures and synthetic
   documents. Do not begin mass ingestion; one real source first, then the
   20-video pilot.

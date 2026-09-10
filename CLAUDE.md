@@ -26,7 +26,7 @@ finished it must keep working on n8n + PostgreSQL + an LLM API alone.
 
 | File | When |
 |---|---|
-| `docs/DECISIONS.md` | **Before proposing any structural change.** 36 settled decisions with rationale and rejected alternatives. |
+| `docs/DECISIONS.md` | **Before proposing any structural change.** 37 settled decisions with rationale and rejected alternatives. |
 | `docs/MASTER_SPEC.md` | The 40-phase build specification plus amendments. |
 | `BUILD_PLAN.md` | Milestones, dependencies, acceptance criteria. |
 | `PROGRESS.md` | What actually works, tests passed, bugs fixed, next exact task. |
@@ -287,8 +287,8 @@ run as `phi_runtime` at all (D25). See `PROGRESS.md` *Deployed to the VPS*.
 layer, all seven canonical prompts installed, and build steps **10b and
 11–15**. Step 11 is **frozen**: changes to it are bug fixes only.
 
-21 migrations, 80 tables, 28 views, 51 enums, 211 indexes, 66 check
-constraints, 45 triggers, 30 RLS tables, 60 policies. **Nineteen test
+22 migrations, 84 tables, 29 views, 51 enums, 211 indexes, 66 check
+constraints, 45 triggers, 30 RLS tables, 60 policies. **Twenty test
 suites**, passing from an empty database, idempotent on a re-run, and
 verified in three capability configurations: full, **no pgvector**, and
 **no optional extension at all**.
@@ -379,13 +379,39 @@ a fabricated price corrupts every total built on it. `load_prices.py` names
 the gap on every run and `v_unpriced_spend` counts what has been spent
 without one.
 
-**Step 16: K07–K11 are built. Discovery (K02–K06) is next.** One source
-now runs the whole loop: `knowledge_ingest.py` (inbox → heading-located
+**Step 16: K02–K11 are ALL built.** One source runs the whole loop: `knowledge_ingest.py` (inbox → heading-located
 chunks, deterministic, no model call) → `knowledge_extract.py` (E7 INBOX →
 Claim Cards + concept normalization + §54 delta) → `knowledge_research.py`
 (E7 EVIDENCE → independent evidence + the claim's reading) →
 `knowledge_synthesize.py` (E7 SYNTHESIS → CREATE / UPDATE / MERGE /
-NO_CHANGE).
+NO_CHANGE). `knowledge_discover.py` adds five ways for something to
+**arrive**, and no way for anything to be processed.
+
+**Discovery finds; it does not ingest (D37).** Every adapter ends at
+`deliver_to_inbox()` and K07/K08 take it from there — a second ingestion
+path would be a second normalizer, a second dedup rule and a second place
+to forget §52. The access policy lives in `acquisition_adapters` and is
+checked at ONE chokepoint, `acquisition.fetch()`: `allowed_hosts`,
+`respect_robots`, `requires_authorization`, intervals and repeat windows.
+**An unregistered adapter fetches nothing.** Every request *and every
+refusal* is recorded in `source_fetches` with its reason — a layer that
+logged refusals nowhere would look exactly like one that was quietly
+scraping. A `robots.txt` that errors or cannot be read is a **refusal**; a
+404 is the one honest "no restriction stated".
+
+**`YOUTUBE` has no scraper (K06).** It is registered
+`requires_authorization` with no note, so nothing is requested — not even
+`robots.txt` — and the item is `ACCESS_DENIED`, which is true about our
+access rather than a failure. K05 is the same shape: no published
+transcript means `FULL_TEXT_NOT_AVAILABLE`, never content invented from a
+title and a blurb.
+
+**No adapter has ever spoken to its real API.** The build environment's
+proxy blocks `eutils.ncbi.nlm.nih.gov`, `api.crossref.org` and
+`pubmed.ncbi.nlm.nih.gov` — all answered `000`. The suite drives the real
+adapters through the real chokepoint with only the transport replaced, so
+the policy, cursor, history, refusals and handoff are proven and the wire
+format is **not**. Treat the first live `PUBMED` run as unverified code.
 
 **E7 now has six modes** — `CASE` is client work; `FOUNDATION`, `UPDATE`,
 `INBOX`, `EVIDENCE` and `SYNTHESIS` are knowledge-clock work with no client

@@ -29,7 +29,7 @@ echo "=== price registry ==="
 # the rate card is rows too -- otherwise the production path records
 # UNPRICED for a call the reference implementation prices.
 python3 scripts/load_prices.py | tail -6 || fail=1
-for t in concept_layer knowledge_layer client_layer run_engine case_events knowledge_inbox prompt_contracts contract_registry n8n_parity n8n_sql measurement intake client_new handoff_flow normalization ontology_seed knowledge_factory embeddings; do
+for t in concept_layer knowledge_layer client_layer run_engine case_events knowledge_inbox prompt_contracts contract_registry n8n_parity n8n_sql measurement intake client_new handoff_flow normalization ontology_seed knowledge_factory embeddings discovery; do
   echo
   echo "=== $t ==="
   out=$(python3 "testing/test_$t.py" 2>&1); rc=$?
