@@ -30,6 +30,8 @@ sys.path.insert(0, str(REPO / "scripts"))
 import psycopg
 import run_engine as RE
 import knowledge_extract as KX
+import knowledge_research as KR
+import knowledge_synthesize as KS
 
 FAILS: list[str] = []
 PREFIX = "kftest-"
@@ -70,6 +72,13 @@ def clear(conn) -> None:
         "  and item_id is null")
     conn.execute("delete from concept_proposals where raw_phrase like %s",
                  ("SENT-%",))
+    conn.execute("delete from knowledge_gaps where question like 'Strategy %'")
+    conn.execute(
+        "delete from strategies where name like %s or canonical_key like %s",
+        (PREFIX + "%", "KFTEST_%"))
+    conn.execute(
+        "delete from strategies where name like %s", ("SENT-E7-SYNTHESIS-%",))
+    conn.execute("delete from claims where claim_text like %s", (PREFIX + "%",))
 
 
 def drop(inbox: Path, name: str, body: str, meta: dict | None = None) -> Path:
@@ -471,6 +480,212 @@ def main() -> int:
           "held out" in (conn.execute(
               "select failure_reason from source_envelopes where envelope_id=%s",
               (e4.envelope_id,)).fetchone()[0] or ""))
+
+    # ==================================================================
+    # K10 — evidence analysis (D36)
+    # ==================================================================
+    print("\nK10: high-value claims are researched, trivial ones are not")
+
+    claim_row = conn.execute(
+        "select claim_id, claim_text, claim_type, target, mechanism, context, "
+        "       extraction_confidence from claims where claim_id=%s", (claim[0],)
+    ).fetchone()
+    check("the extracted claim is on the research list",
+          claim_row[2] in KR.RESEARCH_TYPES, str(claim_row[2]))
+
+    # A claim type NOT on the list must not be queued. The rule is a budget
+    # decision and it has to be visible, not implicit in a model's taste.
+    trivial = conn.execute(
+        "insert into claims (item_id, claim_text, claim_type) "
+        "values (%s,%s,'DEFINITIONAL') returning claim_id",
+        (claim[5], PREFIX + "a definition")).fetchone()[0]
+    queued = {str(r[0]) for r in KR.queue(conn, 50)}
+    check("a DEFINITIONAL claim is NOT deep-researched", str(trivial) not in queued)
+    check("...and the claim that matters IS", str(claim[0]) in queued)
+
+    out10 = KR.research_one(conn, claim_row)
+    check("evidence records are written", out10["evidence"] >= 1, str(out10))
+
+    ev = conn.execute(
+        "select e.citation, e.design::text, e.item_id, e.applicability "
+        "  from evidence_records e order by e.created_at desc limit 1").fetchone()
+    check("...with a citation and a study design", ev[0] and ev[1], str(ev[:2]))
+
+    # D10, the whole point of this stage.
+    check("evidence is NOT linked to the discovery envelope",
+          conn.execute(
+              "select count(*) from envelope_derived_records "
+              " where envelope_id=%s and derived_kind='EVIDENCE'",
+              (ingested.envelope_id,)).fetchone()[0] == 0)
+    check("a study with no DOI, PMID or URL gets NO source_item rather than "
+          "an invented one", ev[2] is None, str(ev[2]))
+
+    researched = conn.execute(
+        "select independent_evidence_findings, areas_overstated, "
+        "       current_interpretation from claims where claim_id=%s",
+        (claim[0],)).fetchone()
+    check("the claim gains an independent reading", researched[0] is not None)
+    check("...including where the claim is OVERSTATED (§12)",
+          researched[1] is not None, str(researched[1]))
+
+    check("a researched claim leaves the queue",
+          str(claim[0]) not in {str(r[0]) for r in KR.queue(conn, 50)})
+
+    run10 = conn.execute(
+        "select engine, engine_mode, client_id from engine_runs where run_id=%s",
+        (out10["run_id"],)).fetchone()
+    check("K10 runs E7 EVIDENCE with no client",
+          run10 == ("E7", "EVIDENCE", None), str(run10))
+
+    # Finding nothing must be recorded AS a finding, or the claim loops.
+    def evidence_provider(evidence_json, assessment_json):
+        def provider(system_prompt, user_prompt, params):
+            return (
+                "report\n<RESEARCH_PRACTICE_EVIDENCE>\n"
+                "MODE: EVIDENCE\nCLAIM_REFERENCE: x\n"
+                f"EVIDENCE_JSON:\n{evidence_json}\n"
+                f"CLAIM_ASSESSMENT_JSON:\n{assessment_json}\n"
+                "</RESEARCH_PRACTICE_EVIDENCE>\n"
+                '<CONTROL_BLOCK>\n{"CASE_VERSION": 0, "ENGINE_RUN_STATUS": '
+                '"SUCCEEDED"}\n</CONTROL_BLOCK>\n'), 10, 10
+        return provider
+
+    empty_claim = conn.execute(
+        "select claim_id, claim_text, claim_type, target, mechanism, context, "
+        "       extraction_confidence from claims where claim_id=%s", (trivial,)
+    ).fetchone()
+    original = RE.select_provider
+    RE.select_provider = lambda: (evidence_provider("[]", '{"evidence_confidence": "INSUFFICIENT"}'), "fixture")
+    try:
+        out_empty = KR.research_one(conn, empty_claim)
+    finally:
+        RE.select_provider = original
+    check("finding no evidence writes none", out_empty["evidence"] == 0, str(out_empty))
+    finding = conn.execute(
+        "select independent_evidence_findings from claims where claim_id=%s",
+        (trivial,)).fetchone()[0]
+    check("...and is recorded AS a finding, so the claim does not loop",
+          finding is not None and "No independent evidence" in finding, str(finding))
+
+    # ==================================================================
+    # K11 — strategy synthesis (D36)
+    # ==================================================================
+    print("\nK11: CREATE / UPDATE / MERGE / NO CHANGE, never a silent duplicate")
+
+    conn.execute("delete from knowledge_gaps where question like 'Strategy %'")
+    to_synth = conn.execute(
+        """select c.claim_id, c.claim_text, c.claim_type, c.target, c.mechanism,
+                  c.context, c.independent_evidence_findings,
+                  c.current_interpretation, c.areas_supported,
+                  c.areas_overstated, c.areas_uncertain
+             from claims c where c.claim_id=%s""", (claim[0],)).fetchone()
+
+    out11 = KS.synthesize_one(conn, to_synth)
+    check("a decision is applied", sum(out11["outcomes"].values()) >= 1, str(out11))
+    created = conn.execute(
+        "select s.strategy_id, s.name, s.knowledge_status::text, s.provenance_note "
+        "  from strategies s join strategy_claims sc "
+        "    on sc.strategy_id = s.strategy_id where sc.claim_id=%s",
+        (claim[0],)).fetchone()
+    check("the strategy is linked to the claim it rests on", created is not None)
+    check("...and lands at AI_DISCOVERED_CANDIDATE, never promoted (D11)",
+          created is not None and created[2] == "AI_DISCOVERED_CANDIDATE",
+          str(created[2] if created else None))
+    check("...with no provenance note, because a candidate needs none",
+          created is not None and created[3] is None)
+
+    run11 = conn.execute(
+        "select engine, engine_mode, client_id from engine_runs where run_id=%s",
+        (out11["run_id"],)).fetchone()
+    check("K11 runs E7 SYNTHESIS with no client",
+          run11 == ("E7", "SYNTHESIS", None), str(run11))
+
+    # §R13: a strategy nothing can retrieve is a gap the library must see.
+    gap = conn.execute(
+        "select severity::text, question from knowledge_gaps "
+        " where status='OPEN' and question like %s",
+        (f"%{created[0]}%",)).fetchone()
+    check("a strategy with no canonical concepts is recorded as an OPEN gap",
+          gap is not None and gap[0] == "HIGH", str(gap[0] if gap else None))
+    check("...naming why nothing will retrieve it",
+          gap is not None and "nothing will retrieve it" in gap[1])
+
+    # NEVER SILENTLY DUPLICATE. The model proposing CREATE is not authority.
+    strategies_before = conn.execute("select count(*) from strategies").fetchone()[0]
+    conn.execute("delete from strategy_claims where claim_id=%s", (claim[0],))
+    out11b = KS.synthesize_one(conn, to_synth)
+    check("a second CREATE of the same name does NOT create a second card",
+          conn.execute("select count(*) from strategies").fetchone()[0]
+          == strategies_before, str(out11b))
+    check("...it is converted to an UPDATE and the override is recorded",
+          out11b["outcomes"]["UPDATE"] >= 1 and out11b["outcomes"]["CREATE"] == 0,
+          str(out11b["outcomes"]))
+
+    # The four decisions and no fifth.
+    def synth_provider(decisions_json):
+        def provider(system_prompt, user_prompt, params):
+            return ("report\n<RESEARCH_PRACTICE_SYNTHESIS>\n"
+                    f"MODE: SYNTHESIS\nSYNTHESIS_JSON:\n{decisions_json}\n"
+                    "</RESEARCH_PRACTICE_SYNTHESIS>\n"
+                    '<CONTROL_BLOCK>\n{"CASE_VERSION": 0, "ENGINE_RUN_STATUS": '
+                    '"SUCCEEDED"}\n</CONTROL_BLOCK>\n'), 10, 10
+        return provider
+
+    def with_synth(decisions_json, row):
+        original = RE.select_provider
+        RE.select_provider = lambda: (synth_provider(decisions_json), "fixture")
+        try:
+            return KS.synthesize_one(conn, row)
+        finally:
+            RE.select_provider = original
+
+    conn.execute("delete from strategy_claims where claim_id=%s", (claim[0],))
+    try:
+        with_synth('[{"decision": "PROMOTE", "rationale": "x"}]', to_synth)
+        check("a fifth decision is refused", False, "no error raised")
+    except KS.SynthesisFailed as exc:
+        check("a fifth decision is refused — there are exactly four (§R13)",
+              "not one of the four decisions" in str(exc), str(exc)[:100])
+
+    conn.execute("delete from strategy_claims where claim_id=%s", (claim[0],))
+    out_nc = with_synth('[{"decision": "NO_CHANGE", "rationale": "already covered"}]',
+                        to_synth)
+    check("NO_CHANGE is a decision, and writes no strategy",
+          out_nc["outcomes"]["NO_CHANGE"] == 1
+          and out_nc["outcomes"]["CREATE"] == 0, str(out_nc["outcomes"]))
+    check("...and the claim is marked so it does not come back around",
+          "NO_CHANGE" in (conn.execute(
+              "select current_interpretation from claims where claim_id=%s",
+              (claim[0],)).fetchone()[0] or ""))
+
+    # A MERGE deprecates a strategy, and D11 will not allow that unexplained.
+    other = conn.execute(
+        "insert into strategies (name, canonical_key, knowledge_status) "
+        "values (%s,%s,'AI_DISCOVERED_CANDIDATE') returning strategy_id",
+        (PREFIX + "loser", "KFTEST_MERGE_LOSER")).fetchone()[0]
+    conn.execute("delete from strategy_claims where claim_id=%s", (claim[0],))
+    try:
+        with_synth(json.dumps([{"decision": "MERGE", "strategy_id": str(other),
+                                "merge_into": str(created[0])}]), to_synth)
+        check("a MERGE with no rationale is refused", False, "no error raised")
+    except KS.SynthesisFailed as exc:
+        check("a MERGE with no rationale is refused — DEPRECATED needs a "
+              "provenance note (D11)", "provenance note" in str(exc), str(exc)[:100])
+
+    conn.execute("delete from strategy_claims where claim_id=%s", (claim[0],))
+    with_synth(json.dumps([{"decision": "MERGE", "strategy_id": str(other),
+                            "merge_into": str(created[0]),
+                            "rationale": "same intervention, different words"}]),
+               to_synth)
+    merged = conn.execute(
+        "select knowledge_status::text, provenance_note from strategies "
+        " where strategy_id=%s", (other,)).fetchone()
+    check("the merged-away strategy is DEPRECATED", merged[0] == "DEPRECATED",
+          str(merged[0]))
+    check("...with the merge rationale as its provenance note",
+          merged[1] and "same intervention" in merged[1], str(merged[1]))
+
+    conn.execute("delete from strategies where strategy_id=%s", (other,))
 
     clear(conn)
     shutil.rmtree(root, ignore_errors=True)

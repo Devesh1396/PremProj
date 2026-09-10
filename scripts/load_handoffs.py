@@ -108,6 +108,23 @@ HANDOFFS: dict[tuple[str, str], list[tuple[str, bool, str, str]]] = {
          "from. Required, because a run that extracted nothing emits "
          "CLAIMS_JSON: [] -- an empty array is an answer, an absent block "
          "is a failed run.")],
+
+    # K10. One claim in, independent evidence out -- and what that evidence
+    # does to the claim. Separate from the source's own citation, which is
+    # a fact about the creator and not evidence (D10).
+    ("E7", "EVIDENCE"): [(
+        "RESEARCH_PRACTICE_EVIDENCE", True, "engine7 §R12",
+        "The evidence records themselves plus the claim assessment. §R8 "
+        "reported EVIDENCE_RECORDS_ADDED as a count and carried none of "
+        "them, so nothing downstream could tell a supported claim from an "
+        "overstated one.")],
+
+    # K11. CREATE / UPDATE / MERGE / NO_CHANGE, one per candidate.
+    ("E7", "SYNTHESIS"): [(
+        "RESEARCH_PRACTICE_SYNTHESIS", True, "engine7 §R13",
+        "The synthesis DECISIONS. NO_CHANGE is a decision and a common, "
+        "good one; a block that only ever carried creations would make "
+        "'never silently duplicate' unenforceable.")],
 }
 
 # Which (engine, mode) pairs are KNOWLEDGE-CLOCK work rather than client
@@ -122,6 +139,8 @@ CLOCK_MODES: set[tuple[str, str]] = {
     ("E7", "FOUNDATION"),
     ("E7", "UPDATE"),
     ("E7", "INBOX"),
+    ("E7", "EVIDENCE"),
+    ("E7", "SYNTHESIS"),
 }
 
 

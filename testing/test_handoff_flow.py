@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -111,12 +112,22 @@ def main() -> int:
           and rebuild["CASE_MEMORY_DELTA"] is False, str(rebuild))
     check("E7 CASE and FOUNDATION are different blocks",
           LH.expected(conn, "E7", "CASE") != LH.expected(conn, "E7", "FOUNDATION"))
-    # §3262: ENGINE7_MODE is FOUNDATION | UPDATE | CASE | INBOX. All four,
-    # or RUN_ENGINE is not generic -- it just fails later for two of them.
-    check("all four E7 modes are registered",
-          {m for (e, m) in LH.HANDOFFS if e == "E7"}
-          == {"FOUNDATION", "UPDATE", "CASE", "INBOX"},
-          str(sorted(m for (e, m) in LH.HANDOFFS if e == "E7")))
+    # Every mode §88 declares must be registered, or RUN_ENGINE is not
+    # generic -- it just fails later for the ones nobody registered. The
+    # expected set is READ OUT OF THE PROMPT rather than written here: a
+    # hand-written copy is the other half of a comparison I would also have
+    # written, and it went stale the moment §88 gained a mode (V2).
+    import load_prompts as LP  # noqa: PLC0415 - local to this assertion
+    _, e7_text, _ = LP.active(conn, "E7")
+    row = next(line for line in e7_text.splitlines()
+               if line.startswith("| `ENGINE7_MODE`"))
+    declared = set(re.findall(r'`"([A-Z_]+)"`', row))
+    check("§88 declares a non-trivial set of E7 modes",
+          len(declared) >= 4, str(sorted(declared)))
+    check("every mode §88 declares is registered",
+          {m for (e, m) in LH.HANDOFFS if e == "E7"} == declared,
+          f"registered {sorted(m for (e, m) in LH.HANDOFFS if e == 'E7')} "
+          f"vs §88 {sorted(declared)}")
     check("UPDATE shares the foundation contract: it builds the library",
           LH.expected(conn, "E7", "UPDATE")
           == LH.expected(conn, "E7", "FOUNDATION"))

@@ -26,7 +26,7 @@ finished it must keep working on n8n + PostgreSQL + an LLM API alone.
 
 | File | When |
 |---|---|
-| `docs/DECISIONS.md` | **Before proposing any structural change.** 35 settled decisions with rationale and rejected alternatives. |
+| `docs/DECISIONS.md` | **Before proposing any structural change.** 36 settled decisions with rationale and rejected alternatives. |
 | `docs/MASTER_SPEC.md` | The 40-phase build specification plus amendments. |
 | `BUILD_PLAN.md` | Milestones, dependencies, acceptance criteria. |
 | `PROGRESS.md` | What actually works, tests passed, bugs fixed, next exact task. |
@@ -71,7 +71,11 @@ They are master reasoning specifications. Technical formatting fixes only.
 
 Engine 7 is a **four-layer merge** — Addendum A, Part I §1–§87 (the client's
 text, verbatim), Parts II/III §R1–§R9 (retained original operating detail),
-and §88. It is not redundant. See `DECISIONS.md` D16 before consolidating
+and §88. It is not redundant. **§R10–§R13 are build-added output
+contracts** on top of that merge — the INBOX information gain, the Claim
+Cards, the evidence analysis and the synthesis decisions — each because a
+stage of the Knowledge Factory had a count to report and no block to carry
+the substance (D35, D36). See `DECISIONS.md` D16 before consolidating
 anything: the client's revision carries no handoff XML tags, so §R8/§R9 are
 what let output reach Engines 1–4 at all.
 
@@ -283,7 +287,7 @@ run as `phi_runtime` at all (D25). See `PROGRESS.md` *Deployed to the VPS*.
 layer, all seven canonical prompts installed, and build steps **10b and
 11–15**. Step 11 is **frozen**: changes to it are bug fixes only.
 
-20 migrations, 79 tables, 27 views, 51 enums, 211 indexes, 66 check
+21 migrations, 80 tables, 28 views, 51 enums, 211 indexes, 66 check
 constraints, 45 triggers, 30 RLS tables, 60 policies. **Nineteen test
 suites**, passing from an empty database, idempotent on a re-run, and
 verified in three capability configurations: full, **no pgvector**, and
@@ -375,13 +379,40 @@ a fabricated price corrupts every total built on it. `load_prices.py` names
 the gap on every run and `v_unpriced_spend` counts what has been spent
 without one.
 
-**Next:** step 16, the Knowledge Factory. **K07, K08 and K09 are built.**
-`knowledge_ingest.py` takes a file from `knowledge/inbox/` to
-heading-located chunks deterministically with no model call;
-`knowledge_extract.py` runs E7 INBOX over those chunks and writes Claim
-Cards, normalizes the concepts they mention, and records a §54 delta.
-**K10 evidence analysis and K11 strategy synthesis are next**, then
-discovery K02–K06.
+**Step 16: K07–K11 are built. Discovery (K02–K06) is next.** One source
+now runs the whole loop: `knowledge_ingest.py` (inbox → heading-located
+chunks, deterministic, no model call) → `knowledge_extract.py` (E7 INBOX →
+Claim Cards + concept normalization + §54 delta) → `knowledge_research.py`
+(E7 EVIDENCE → independent evidence + the claim's reading) →
+`knowledge_synthesize.py` (E7 SYNTHESIS → CREATE / UPDATE / MERGE /
+NO_CHANGE).
+
+**E7 now has six modes** — `CASE` is client work; `FOUNDATION`, `UPDATE`,
+`INBOX`, `EVIDENCE` and `SYNTHESIS` are knowledge-clock work with no client
+and `CASE_VERSION` 0. The client/clock rule lives in
+`engine_handoffs.client_required`, so **adding a mode is an INSERT** — do
+not put a mode list in a trigger again (migration `020` removed the one
+`015` had).
+
+**K10: the source's own citation is never the input (D36).**
+`evidence_referenced_by_source` is deliberately not sent to an EVIDENCE
+run — what a creator cited is a fact about the creator (§12), and feeding
+it in turns independent research into an echo. Evidence never links to the
+discovery envelope, and a study with no DOI/PMID/URL gets **no
+`source_items` row** rather than an invented one. Triage is deterministic
+and written down: `SAFETY` and `INTERVENTION_EFFECT` are researched, the
+rest are not.
+
+**K11: dedup is deterministic and happens BEFORE the call.** Candidates
+come from concept overlap, then `pg_trgm` name similarity; only those are
+sent. **A model returning `CREATE` is a proposal, not authority** — every
+CREATE is re-checked against the live library and a collision becomes an
+UPDATE. Four decisions, never a fifth. Everything created is
+`AI_DISCOVERED_CANDIDATE`; the only status K11 may set beyond that is
+`DEPRECATED` on a MERGE, where the rationale becomes the provenance note
+`ck_provenance_required` demands. A strategy with no canonical concepts is
+recorded as an OPEN gap, never linked to `PROPOSED` concepts to make the
+count look right (D8).
 
 **K09 may not create an evidence record or a strategy (D35).**
 `evidence_referenced_by_source` is what the SOURCE cited — text, and it
@@ -396,10 +427,10 @@ because `parse_handoff_block` already handles continuation lines — so K09
 needed **no change to frozen step 11**, to `run_engine.py`, or to either
 parity suite. Check the constraint before working around it.
 
-Until K11 runs, Engine 7 retrieves from a library with claims but no
-strategies and Pass B reasons from a near-empty retrieval set — that is
-expected, not a bug, and `PROGRESS.md` says so before the first full case
-is run.
+Until real sources are ingested the library is nearly empty, so Engine 7
+retrieves little and Pass B reasons from a thin retrieval set — that is
+expected, not a bug. **Do not begin mass ingestion**: one source through
+the complete loop first, then the 20-video pilot.
 
 **n8n is pinned to 2.11.4, the version the VPS runs (D32).** The pin
 follows the VPS; it is **never** raised to keep current. Re-pinning found

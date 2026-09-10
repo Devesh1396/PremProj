@@ -536,6 +536,74 @@ def fixture_handoffs(engine: str, mode: str, params: dict) -> dict[str, str]:
                 "REPROCESSING_OF:"
                 ),
             }
+        if mode == "EVIDENCE":
+            # §R12. Independent evidence for ONE claim, plus what it does to
+            # the claim. The sentinel citation is deliberately unmistakable:
+            # a fixture that emitted a plausible-looking DOI would be
+            # indistinguishable from the fabrication §R12 forbids.
+            evidence = json.dumps([{
+                "citation": s("EVIDENCE-CITATION"),
+                "doi": None, "pmid": None, "url": None,
+                "publication_year": 2024,
+                "design": "RCT",
+                "population": s("EVIDENCE-POPULATION"),
+                "sample_size": 120,
+                "intervention": s("EVIDENCE-INTERVENTION"),
+                "comparator": s("EVIDENCE-COMPARATOR"),
+                "exposure": None,
+                "duration": "12 weeks",
+                "outcomes": s("EVIDENCE-OUTCOME"),
+                "results_summary": s("EVIDENCE-RESULT"),
+                "magnitude_summary": s("EVIDENCE-MAGNITUDE"),
+                "limitations": s("EVIDENCE-LIMITATION"),
+                "applicability": s("EVIDENCE-APPLICABILITY"),
+                "funding_conflict_notes": s("EVIDENCE-FUNDING"),
+                "relationship": "PARTIALLY_SUPPORTS",
+            }], indent=2)
+            assessment = json.dumps({
+                "independent_evidence_findings": s("ASSESS-FINDINGS"),
+                "current_interpretation": s("ASSESS-INTERPRETATION"),
+                "areas_supported": s("ASSESS-SUPPORTED"),
+                "areas_overstated": s("ASSESS-OVERSTATED"),
+                "areas_uncertain": s("ASSESS-UNCERTAIN"),
+                "evidence_confidence": "MODERATE",
+                "safety_relevant": False,
+            }, indent=2)
+            return {"RESEARCH_PRACTICE_EVIDENCE": (
+                f"MODE: {mode}\n"
+                f"CLAIM_REFERENCE: {params.get('claim_id', 'unknown')}\n"
+                f"EVIDENCE_JSON:\n{evidence}\n"
+                f"CLAIM_ASSESSMENT_JSON:\n{assessment}"
+            )}
+
+        if mode == "SYNTHESIS":
+            # §R13. One decision per candidate. CREATE, because a fixture
+            # that only ever said NO_CHANGE would exercise none of the
+            # writing path -- the dedup and the merge cases get their own
+            # scripted providers in the suite.
+            decisions = json.dumps([{
+                "decision": "CREATE",
+                "name": s("STRATEGY-NAME"),
+                "summary": s("STRATEGY-SUMMARY"),
+                "intervention_category": s("STRATEGY-CATEGORY"),
+                "mechanism": s("STRATEGY-MECHANISM"),
+                "practical_implementation": s("STRATEGY-IMPLEMENTATION"),
+                "dose_or_exposure": s("STRATEGY-DOSE"),
+                "expected_effect_direction": "IMPROVES",
+                "expected_magnitude_summary": s("STRATEGY-MAGNITUDE"),
+                "evidence_summary": s("STRATEGY-EVIDENCE-SUMMARY"),
+                "evidence_confidence": "LIMITED",
+                "limitations": s("STRATEGY-LIMITATION"),
+                "outcomes_to_track": s("STRATEGY-OUTCOME"),
+                "rationale": s("STRATEGY-RATIONALE"),
+                "claim_ids": params.get("claim_ids", []),
+                "evidence_ids": [],
+                "concepts": [{"phrase": s("STRATEGY-CONCEPT"), "role": "TARGETS"}],
+            }], indent=2)
+            return {"RESEARCH_PRACTICE_SYNTHESIS": (
+                f"MODE: {mode}\nSYNTHESIS_JSON:\n{decisions}"
+            )}
+
         # FOUNDATION and UPDATE share the foundation contract (§R8): an
         # UPDATE is a smaller foundation pass, not a different output.
         tag = ("RESEARCH_PRACTICE_CASE_HANDOFF" if mode == "CASE"

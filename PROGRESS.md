@@ -26,8 +26,8 @@ not inspected by eye.**
 
 | | |
 |---|---|
-| Schema | 18 migrations, 78 tables, 24 views, 51 enums, 211 indexes, 45 triggers, 60 policies, 30 RLS tables |
-| Suites | **17**, green from an empty database, each run followed by a re-run, and on the D15 floor with no optional extension available |
+| Schema | 21 migrations, 78 tables, 24 views, 51 enums, 211 indexes, 45 triggers, 60 policies, 30 RLS tables |
+| Suites | **19**, green from an empty database, each run followed by a re-run, and on the D15 floor with no optional extension available |
 | CI | `.github/workflows/tests.yml` — every push on every branch, **with and without pgvector** |
 | Engines | All seven canonical prompts installed; E6 → E1 Pass A → E7 → E1 Pass B proven **live** |
 | Ontology | 26 domains, 269 concepts seeded from the curriculum, hash-verified |
@@ -83,17 +83,28 @@ structurally complete report whose evidence citations are thin or absent.
 Read that as the library being empty, never as Engine 7 or Pass B being
 broken, and do not "fix" it by loosening a floor or a gate.
 
-**Step 16 is under way.** K07 (Knowledge Inbox) and K08 (content
-normalizer) are built and tested: `scripts/knowledge_ingest.py` turns a
-file dropped into `knowledge/inbox/` into a `source_envelope`, an immutable
-content-addressed original, a `source_document` and heading-located
-`knowledge_chunks`, with an A9 receipt. No model is called — both stages
-are deterministic, so the path is testable with no provider and no cost.
+**Step 16: K07–K11 are built and tested.** One source runs the complete
+loop, on the fixture provider, with every boundary asserted:
+
+```
+inbox → raw preserved → normalized → claims extracted → concepts
+normalized → delta analysis → evidence researched → strategy decided
+                                        (CREATE / UPDATE / MERGE / NO_CHANGE)
+```
+
+| | |
+|---|---|
+| K07 + K08 | `knowledge_ingest.py` — deterministic, **no model call** |
+| K09 | `knowledge_extract.py` — E7 `INBOX` → Claim Cards, concepts, §54 delta |
+| K10 | `knowledge_research.py` — E7 `EVIDENCE` → independent evidence + the claim's reading |
+| K11 | `knowledge_synthesize.py` — E7 `SYNTHESIS` → four decisions, dedup done first |
 
 **What is NOT done, and should not be assumed:**
-- The rest of step 16: **K09** claim extraction, **K10** evidence analysis,
-  **K11** strategy synthesis, and discovery **K02–K06**. The library stays
-  empty of claims and strategies until K09 and K11 run.
+- Discovery: **K02** PubMed, **K03** web, **K04** RSS, **K05/K06**
+  transcripts. They add input to a pipe that now exists end to end.
+- **No real source has run the loop yet** — only fixtures and synthetic
+  documents. Do not begin mass ingestion; one real source first, then the
+  20-video pilot.
 - Steps 17–23.
 - Engine 5 and the release path. `CLIENT_NEW` deliberately stops at the
   review queue; nothing yet turns an approval into client-facing output.

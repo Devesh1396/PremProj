@@ -1589,6 +1589,97 @@ block is a failed run, and those must not look the same.
 
 ---
 
+## D36 — K10 and K11 get their own E7 modes, and the dedup is not the model's job
+**SETTLED 2026-09-10**
+
+Two new Engine 7 modes, `EVIDENCE` and `SYNTHESIS`, each with its own
+required handoff (§R12, §R13). Adding them was **data**: `ENGINE7_MODE` is
+not in `control_contract.v1.json`, so no contract version moved; §88 is
+build-owned and its enum row grew; and migration `020` had already put the
+client/clock rule in `engine_handoffs.client_required`, so registering a
+knowledge-clock mode is an INSERT.
+
+*Rejected:* running K10 and K11 inside `UPDATE`. §R8 calls an UPDATE "a
+smaller foundation pass" and its handoff wants `DOMAIN`, `SUBDOMAINS`,
+`PHYSIOLOGY_TARGETS` — required output for a single-claim research call
+that has none of them. A mode is what an engine was asked to do, and these
+are different questions.
+
+### K10 — "do not deep-research trivial claims" is the design, not a caveat
+
+Every researched claim is a model call. A library that researches every
+mechanism aside a creator makes will spend its budget on the cheapest
+claims in it. So the queue is triaged **deterministically, before anything
+is called**, and the rule is written down where it can be argued with:
+`SAFETY` and `INTERVENTION_EFFECT` are researched, everything else is not.
+Impact, not uncertainty (hard rule 3) — a SAFETY claim is researched even
+when it looks obvious, a `DEFINITIONAL` one is not even when it looks
+interesting.
+
+**The source's own citation is not the input.**
+`evidence_referenced_by_source` is deliberately **not sent** to the
+EVIDENCE run. What a creator cited is a fact about the creator (§12);
+feeding it in as the starting point turns independent research into an
+echo, and D10 is exactly the line it would cross. Evidence records never
+link to the discovery envelope, and a study with no DOI, PMID or URL gets
+**no `source_items` row at all** — inventing one would put an unverifiable
+citation in the same table as retrievable sources, where nothing could tell
+them apart.
+
+**Finding nothing is a finding.** An empty `EVIDENCE_JSON` writes no
+records and still records the conclusion on the claim, because a NULL there
+would put the claim straight back on the queue and pay for it again.
+
+### K11 — deterministic dedup before the call, and the veto after it
+
+`BUILD_GUIDE` predicts the failure: *"If cost per new card climbs with
+library size, deterministic dedup is not filtering enough before the LLM
+call."* So candidates are found by concept overlap first — exact, cheap,
+and works with no optional extension — then by `pg_trgm` name similarity
+where it exists, and **only those candidates are sent**. Asking a model "is
+this already in the library?" with the whole library attached is the cost
+curve that warning describes.
+
+**"Never silently duplicate" is enforced, not requested.** A model
+returning `CREATE` is a proposal. Every `CREATE` is re-checked against the
+live library immediately before insertion, and a collision is **converted
+to an UPDATE** with the override written into the rationale. The model
+proposes; `knowledge_synthesize.py` decides.
+
+There are exactly four decisions. A fifth is a malformed run, not a
+nuance — a run returning `PROMOTE` fails rather than being interpreted.
+
+### What K11 may set, and the one thing it may not
+
+Everything created lands at `AI_DISCOVERED_CANDIDATE`, which
+`ck_provenance_required` lets exist without a provenance note. The only
+status K11 may set beyond that is `DEPRECATED`, on the losing side of a
+MERGE — and the constraint refuses that without a note, so **the merge
+rationale becomes the provenance note**. A MERGE with no rationale fails in
+this file, saying why, rather than at the constraint saying "check
+constraint violated" (D11).
+
+### A strategy nothing can retrieve is a gap, not a success
+
+§R13: *a strategy with no concepts is a strategy nothing will ever
+retrieve.* An unmatched phrase becomes a `PROPOSED` concept and the
+normalizer returns **no id** for it, deliberately — `PROPOSED` is what
+keeps a machine-invented concept out of retrieval until something promotes
+it (D8). So a strategy built from all-new phrases is real and not yet
+findable.
+
+That is recorded as an **OPEN `HIGH` gap** naming the strategy and the
+phrases that resolved to nothing, on the create path and the update path
+alike. Hard rule 11: zero identified gaps never means finished, and a gap
+the library cannot see is one nobody will ever close.
+
+*Rejected:* linking the `PROPOSED` concepts into `strategy_concepts` so the
+count looks right. That is the retrieval spine; putting unpromoted concepts
+in it is precisely what D8 prevents, and it would trade a visible gap for
+an invisible one.
+
+---
+
 ## OPEN
 
 **O1 — Intake form. `RESOLVED FOR V1` — see D22.** Core Intake V1 is built:

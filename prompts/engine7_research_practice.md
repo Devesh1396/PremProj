@@ -8,7 +8,7 @@
 >   summarised or reworded; heading levels adjusted only so the parts nest correctly.
 > - **Part II, §R1–§R3** — operating detail retained verbatim from the earlier master
 >   specification because the runtime depends on it and Part I does not restate it.
-> - **Part III, §R4–§R10 and §88** — the required output contract: self-audits, human-readable
+> - **Part III, §R4–§R13 and §88** — the required output contract: self-audits, human-readable
 >   formats, the three machine-readable handoff blocks, and the orchestration control block.
 > - **Appendix D** — the foundation domain curriculum, retained verbatim. Reference data for
 >   foundation building and the ontology seed, not a per-call instruction.
@@ -3354,6 +3354,145 @@ evidence it.
 
 ---
 
+## R12. MACHINE-READABLE EVIDENCE ANALYSIS <RESEARCH_PRACTICE_EVIDENCE>
+
+*Added by the build. §17 puts EXISTING EVIDENCE RETRIEVAL and NEW EVIDENCE
+SEARCH between a claim and any strategy, and §5 keeps claim strength
+separate from claim truth. §R8's foundation block reports
+`EVIDENCE_RECORDS_ADDED` as a count; nothing carried the records
+themselves.*
+
+Emitted in **EVIDENCE** mode. The input is ONE claim. The output is the
+independent evidence found for it, and what that evidence does to the
+claim.
+
+<RESEARCH_PRACTICE_EVIDENCE>
+MODE:
+CLAIM_REFERENCE:
+EVIDENCE_JSON:
+CLAIM_ASSESSMENT_JSON:
+</RESEARCH_PRACTICE_EVIDENCE>
+
+### `EVIDENCE_JSON` — an array of evidence records
+
+Strict JSON. Each object is one study or guideline, **independent of the
+source that made the claim**:
+
+| field | |
+|---|---|
+| `citation` | **Required.** Enough to find it: authors, year, title, journal. |
+| `doi` / `pmid` / `url` | Whichever identifiers are known. Omit rather than guess; a fabricated DOI is worse than none, because it looks checkable. |
+| `publication_year` | Integer. |
+| `design` | One of `SYSTEMATIC_REVIEW`, `META_ANALYSIS`, `RCT`, `CONTROLLED_TRIAL`, `CROSSOVER`, `PROSPECTIVE_COHORT`, `RETROSPECTIVE_COHORT`, `CASE_CONTROL`, `CROSS_SECTIONAL`, `CASE_SERIES`, `MECHANISTIC`, `ANIMAL`, `IN_VITRO`, `GUIDELINE`, `CONSENSUS`, `OTHER`. |
+| `population`, `sample_size` | Who was studied, and how many. |
+| `intervention`, `comparator`, `exposure`, `duration` | What was compared with what, for how long. |
+| `outcomes`, `results_summary`, `magnitude_summary` | What was measured and what happened, with the numbers as reported. |
+| `limitations` | The study's own, and yours. |
+| `applicability` | To whom this transfers, and to whom it does not. Say so explicitly for vegetarian Indian adults where the study population differs. |
+| `funding_conflict_notes` | Funding and conflicts where known. |
+| `relationship` | What this evidence does to the claim: `SUPPORTS`, `PARTIALLY_SUPPORTS`, `LIMITS`, `CONFLICTS`, `NEUTRAL`, `CONTEXTUALIZES`. |
+
+### The evidence is not the source's citation
+
+§17: *the source of the idea and the source of the scientific evidence
+must remain distinguishable.* The claim already records what the source
+cited, in `evidence_referenced_by_source`. **That is not evidence and it is
+not the input to this mode.** A creator citing a study is a fact about the
+creator. Finding that study, reading what it actually measured, and
+recording it — that is evidence, and it may well contradict the claim that
+led you to it.
+
+If independent evidence cannot be found, emit `EVIDENCE_JSON: []` and say
+so in the assessment. **An empty array is a finding.** Manufacturing a
+plausible citation to avoid returning nothing is the single worst thing
+this mode can do.
+
+### `CLAIM_ASSESSMENT_JSON` — what the evidence does to the claim
+
+Strict JSON, one object:
+
+| field | |
+|---|---|
+| `independent_evidence_findings` | What the independent evidence shows, in its own terms. |
+| `current_interpretation` | The honest current reading, given all of it. |
+| `areas_supported` | Where the claim holds. |
+| `areas_overstated` | Where the claim goes beyond what the evidence carries. This field existing is the point; leaving it empty because the creator is respected is §12. |
+| `areas_uncertain` | What is genuinely unresolved. |
+| `evidence_confidence` | `STRONG`, `MODERATE`, `LIMITED`, `MECHANISTIC_ONLY`, `CONFLICTING`, `INSUFFICIENT` or `UNKNOWN`. |
+| `safety_relevant` | Boolean. True if this claim touches medication interaction, contraindication or an adverse effect. |
+
+**No strategy is created here**, and nothing is promoted. This mode reads
+evidence and reports what it says.
+
+---
+
+## R13. MACHINE-READABLE STRATEGY SYNTHESIS <RESEARCH_PRACTICE_SYNTHESIS>
+
+*Added by the build. §17 ends at STRATEGY SYNTHESIS and §39 keeps Claim
+Cards separate from Strategy Cards; §R8 reports `STRATEGIES_CREATED`,
+`STRATEGIES_UPDATED` and `STRATEGIES_MERGED` as counts and carried no
+decisions.*
+
+Emitted in **SYNTHESIS** mode. The input is a set of claims, their evidence,
+and **the existing strategies that deterministic matching already found to
+be similar**. The output is one decision per candidate.
+
+<RESEARCH_PRACTICE_SYNTHESIS>
+MODE:
+SYNTHESIS_JSON:
+</RESEARCH_PRACTICE_SYNTHESIS>
+
+### Four decisions, and never a fifth
+
+Strict JSON array. Every object carries a `decision`:
+
+| decision | when | required fields |
+|---|---|---|
+| `NO_CHANGE` | the library already says this | `rationale` |
+| `UPDATE` | an existing strategy gains something | `strategy_id`, the fields to change, `rationale` |
+| `MERGE` | two existing strategies are the same thing | `strategy_id`, `merge_into`, `rationale` |
+| `CREATE` | genuinely new | the Strategy Card fields, `rationale` |
+
+**Never silently duplicate.** `CREATE` is the decision of last resort: if
+any candidate strategy in the input covers this, the answer is `UPDATE` or
+`NO_CHANGE`. A library that grows a near-duplicate every time a creator
+rephrases an idea retrieves worse the more it knows.
+
+`NO_CHANGE` is a good outcome and should be common. §54's information gain
+is often zero and reporting that honestly is worth more than a card.
+
+### A created strategy is a candidate
+
+Everything created here is `AI_DISCOVERED_CANDIDATE`. Nothing in this block
+promotes anything, assigns `VERIFIED`, or sets an evidence confidence the
+evidence does not carry. §7 and the provenance rules apply unchanged: a
+strategy past candidate status cannot exist without a provenance note, and
+this mode does not write one.
+
+### Strategy Card fields on `CREATE`
+
+`name`, `summary`, `intervention_category`, `mechanism`,
+`practical_implementation`, `dose_or_exposure`, `frequency`, `duration`,
+`timeframe`, `expected_effect_direction`, `expected_magnitude_summary`,
+`evidence_summary`, `evidence_confidence`, `limitations`,
+`adverse_effects`, `interactions`, `contraindication_context`,
+`cost_context`, `complexity`, `adherence_context`, `geography_context`,
+`seasonality_context`, `alternatives`, `outcomes_to_track`.
+
+Plus the links that make it retrievable:
+
+| | |
+|---|---|
+| `claim_ids` | The claims this strategy rests on. |
+| `evidence_ids` | The evidence records, each with its `relationship`. |
+| `concepts` | `[{ "phrase": "...", "role": "TARGETS" \| "INDICATED_FOR" \| "POPULATION" \| "MECHANISM" \| "CONTRAINDICATED" \| "REQUIRES_CONTEXT" }]`. The retrieval spine. A strategy with no concepts is a strategy nothing will ever retrieve. |
+
+Leave a field out rather than filling it with a guess. An empty
+`dose_or_exposure` is a gap the library can see; an invented one is a
+recommendation.
+
+---
+
 ## 88. ORCHESTRATION CONTROL BLOCK — REQUIRED
 
 *Added by the build. The runtime cannot route without this.*
@@ -3380,7 +3519,7 @@ absent values typed as nullable.
 
 | Field | Type | How to determine it |
 |---|---|---|
-| `ENGINE7_MODE` | enum | `"FOUNDATION"` \| `"UPDATE"` \| `"CASE"` \| `"INBOX"`. Required. Determines which table below applies. `INBOX` is a manually added source processed through the Knowledge Inbox (§44–§55). |
+| `ENGINE7_MODE` | enum | `"FOUNDATION"` \| `"UPDATE"` \| `"CASE"` \| `"INBOX"` \| `"EVIDENCE"` \| `"SYNTHESIS"`. Required. Determines which table below applies. `INBOX` is a manually added source processed through the Knowledge Inbox (§44–§55); `EVIDENCE` researches ONE claim (§R12) and `SYNTHESIS` turns claims and their evidence into strategy decisions (§R13). All of EVIDENCE, SYNTHESIS, FOUNDATION, UPDATE and INBOX are knowledge-clock work: no client, `CASE_VERSION` 0. |
 | `CASE_VERSION` | integer | Echo the value supplied in the input. **In foundation, update and inbox mode emit `0`** — the contract requires this field on every run. |
 | `ENGINE_RUN_STATUS` | enum | `SUCCEEDED` \| `PARTIAL` \| `FAILED` \| `INSUFFICIENT_INPUT`. |
 | `ERROR_STATE` | string \| null | `null` unless `ENGINE_RUN_STATUS` is `FAILED`. |

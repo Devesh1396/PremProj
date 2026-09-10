@@ -87,13 +87,24 @@ def main() -> int:
     # so an INBOX run had no substantive output contract at all. These
     # assertions exist because a merge accident once mis-stated the ranges,
     # so they move together with the header rather than being relaxed.
-    check("header states Part III is R4-R10 plus 88",
-          "Part III, §R4–§R10 and §88" in e7)
+    # The header names the range Part III covers, and the build keeps
+    # extending it -- R10 for the INBOX handoff, R11 for the Claim Cards,
+    # R12 and R13 for evidence and synthesis. So the assertion is that the
+    # header AGREES WITH THE FILE, not that either equals a number written
+    # here. A hard-coded maximum is the other half of a comparison this
+    # file would also be writing, and it went stale three times (V2).
+    r_secs = re.findall(r"^## (R\d+)\.", e7, re.M)
+    numbers = [int(x[1:]) for x in r_secs]
+    check("R sections are contiguous from R1 with no gaps or repeats",
+          numbers == list(range(1, len(numbers) + 1)), str(r_secs))
+    check("there are enough of them to be Part III at all",
+          len(numbers) >= 10, str(len(numbers)))
+    last = f"R{numbers[-1]}" if numbers else "R?"
+    check(f"the header's stated range ends at the last section ({last})",
+          f"§R4–§{last} and §88" in e7,
+          next((line for line in e7.splitlines() if "Part III" in line), "no header line"))
     check("header does not claim R1-R4", "§R1–§R4" not in e7)
     check("header does not claim R5-R9", "§R5–§R9" not in e7)
-    r_secs = re.findall(r"^## (R\d+)\.", e7, re.M)
-    check("R sections run R1..R11 exactly",
-          r_secs == [f"R{i}" for i in range(1, 12)], str(r_secs))
     check("control block points at R2 for the dimensions, not R3",
           "§R3 domain-depth" not in e7 and "§R2 domain-depth" in e7)
 

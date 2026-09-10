@@ -66,12 +66,12 @@
   },
   {
     "file": "engine7_research_practice.md",
-    "words": 12238,
-    "chars": 88514,
+    "words": 13212,
+    "chars": 95418,
     "sections": 88,
     "has_control_tag": true,
     "has_handoff_open_tag": true,
     "has_handoff_close_tag": true,
-    "sha256": "1dc49f264d0eeb5043ce559fc5a26d51cbda444d90f1a7ede44b09095870f755"
+    "sha256": "d8d09acef29f86bf9576b0fc26a061e6b48a640250a3f0cf49cb98a6e0dcbd7d"
   }
 ]

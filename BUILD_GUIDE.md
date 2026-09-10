@@ -415,8 +415,29 @@ Boundaries, all asserted: no evidence record, no strategy, no
 `POTENTIAL_NEW_STRATEGY` verdict, `discovery_only` provenance (D10), and a
 held-out source is `SKIPPED` rather than extracted (A3).
 
-**Next in this step:** K10 evidence analysis, then K11 strategy synthesis
-with deterministic dedup before any LLM merge call.
+**K10 BUILT.** `scripts/knowledge_research.py`, E7 in the new `EVIDENCE`
+mode (§R12). Triage is deterministic and written down — `SAFETY` and
+`INTERVENTION_EFFECT` only — because "do not deep-research trivial claims"
+is a budget decision that must be visible rather than left to a model's
+sense of importance. The source's own citation is **not** the input (D10,
+D36), evidence never links to the discovery envelope, and a study with no
+retrievable identifier gets no `source_items` row rather than an invented
+one. Finding nothing is recorded as a finding, so a claim cannot loop.
+
+**K11 BUILT.** `scripts/knowledge_synthesize.py`, E7 in the new `SYNTHESIS`
+mode (§R13). Candidates are found **deterministically before the call** —
+concept overlap, then `pg_trgm` name similarity — which is the cost curve
+this step's note warns about. `CREATE` from the model is a proposal:
+every one is re-checked against the live library and a collision is
+converted to an `UPDATE`. Four decisions, never a fifth. Everything created
+is `AI_DISCOVERED_CANDIDATE`; a `MERGE`'s rationale becomes the provenance
+note `ck_provenance_required` demands. A strategy with no canonical
+concepts becomes an OPEN gap rather than being linked to `PROPOSED`
+concepts (D8).
+
+**Next in this step:** discovery — K02 PubMed, K03 web, K04 RSS, K05/K06
+transcripts. They add input to the pipe that now exists end to end. **Do
+not begin mass ingestion** until one real source has run the whole loop.
 
 `MODEL_EXTRACTION` on the cheapest capable model — highest volume.
 Use the **Batch API** where the provider offers it: the knowledge clock is
