@@ -23,7 +23,13 @@ echo "=== handoff registry ==="
 # against the registered prompts, so a renamed tag fails here rather than
 # registering a block no engine will ever emit.
 python3 scripts/load_handoffs.py | tail -12 || fail=1
-for t in concept_layer knowledge_layer client_layer run_engine case_events knowledge_inbox prompt_contracts contract_registry n8n_parity measurement intake client_new handoff_flow normalization ontology_seed; do
+echo
+echo "=== price registry ==="
+# D30: the fourth registry. n8n cannot read config/model_prices.json, so
+# the rate card is rows too -- otherwise the production path records
+# UNPRICED for a call the reference implementation prices.
+python3 scripts/load_prices.py | tail -6 || fail=1
+for t in concept_layer knowledge_layer client_layer run_engine case_events knowledge_inbox prompt_contracts contract_registry n8n_parity n8n_sql measurement intake client_new handoff_flow normalization ontology_seed; do
   echo
   echo "=== $t ==="
   out=$(python3 "testing/test_$t.py" 2>&1); rc=$?

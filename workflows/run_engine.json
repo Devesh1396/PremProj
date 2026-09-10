@@ -54,7 +54,7 @@
           "operation": "executeQuery",
           "query": "SELECT prompt_file, prompt_hash, content FROM engine_prompts WHERE engine = $1::engine_id AND active",
           "options": {
-            "queryReplacement": "={{ $json.ENGINE_ID }}"
+            "queryReplacement": "={{ [$json.ENGINE_ID] }}"
           }
         },
         "id": "a0000000-0000-4000-8000-000000000002",
@@ -78,7 +78,7 @@
           "operation": "executeQuery",
           "query": "SELECT tag, required FROM engine_handoffs WHERE engine = $1::engine_id AND mode = $2 AND active ORDER BY required DESC, tag",
           "options": {
-            "queryReplacement": "={{ $('Inputs').item.json.ENGINE_ID }},{{ $('Inputs').item.json.MODE }}"
+            "queryReplacement": "={{ [$('Inputs').item.json.ENGINE_ID, $('Inputs').item.json.MODE] }}"
           }
         },
         "id": "a0000000-0000-4000-8000-000000000003",
@@ -136,9 +136,9 @@
       {
         "parameters": {
           "operation": "executeQuery",
-          "query": "SELECT set_client_scope($1::uuid);\nINSERT INTO engine_runs (run_id, client_id, case_version_id, cycle_id, engine, pass, prompt_file, prompt_hash, schema_version, model_role, model_name, model_params, status, started_at) VALUES ($2::uuid, $1::uuid, $3::uuid, $4::uuid, $5::engine_id, $6::engine_pass, $7, $8, 'control_contract.v1', $9, $10, $11::jsonb, 'RUNNING', now())",
+          "query": "SELECT set_client_scope($1::uuid);\nINSERT INTO engine_runs (run_id, client_id, case_version_id, cycle_id, engine, pass, engine_mode, prompt_file, prompt_hash, schema_version, model_role, model_name, model_params, status, started_at) VALUES ($2::uuid, $1::uuid, $3::uuid, $4::uuid, $5::engine_id, $6::engine_pass, $7, $8, $9, 'control_contract.v1', $10, $11, $12::jsonb, 'RUNNING', now())",
           "options": {
-            "queryReplacement": "={{ $('Inputs').item.json.CLIENT_ID }},{{ $json.run_id }},{{ $('Inputs').item.json.CASE_VERSION_ID }},{{ $('Inputs').item.json.CYCLE_ID }},{{ $('Inputs').item.json.ENGINE_ID }},{{ $('Inputs').item.json.PASS || 'SINGLE' }},{{ $json.prompt_file }},{{ $json.prompt_hash }},{{ $('Inputs').item.json.MODEL_ROLE }},{{ $json.model_name }},{{ JSON.stringify($('Inputs').item.json.RUN_CONTEXT || {}) }}"
+            "queryReplacement": "={{ [$('Inputs').item.json.CLIENT_ID ?? null, $json.run_id, $('Inputs').item.json.CASE_VERSION_ID ?? null, $('Inputs').item.json.CYCLE_ID ?? null, $('Inputs').item.json.ENGINE_ID, $('Inputs').item.json.PASS ?? 'SINGLE', $('Inputs').item.json.MODE, $json.prompt_file, $json.prompt_hash, $('Inputs').item.json.MODEL_ROLE, $json.model_name, JSON.stringify($('Inputs').item.json.RUN_CONTEXT ?? {})] }}"
           }
         },
         "id": "a0000000-0000-4000-8000-000000000006",
@@ -155,48 +155,45 @@
             "name": "phi_runtime (local)"
           }
         },
-        "notes": "D25. set_client_scope FIRST, in the SAME transaction as the write. n8n pools connections, and scope is transaction-local precisely so a pooled connection cannot carry Client A's context into Client B's query. A NULL client is a knowledge-clock run and migration 014 permits it."
+        "notes": "Opens the run INSIDE a transaction that sets client scope (D25), and records engine_mode on the run itself so trg_engine_run_coherent can check client/mode coherence BEFORE the row exists (D27). An E7 CASE run with no client, or a knowledge-clock run carrying one, is rejected here rather than discovered later."
       },
       {
         "parameters": {
-          "method": "POST",
-          "url": "={{ $env.LLM_BASE_URL.replace(/\\/$/, '') }}/chat/completions",
-          "sendHeaders": true,
-          "headerParameters": {
-            "parameters": [
-              {
-                "name": "Content-Type",
-                "value": "application/json"
-              },
-              {
-                "name": "Authorization",
-                "value": "=Bearer {{ $env.LLM_API_KEY }}"
-              }
-            ]
-          },
-          "sendBody": true,
-          "specifyBody": "json",
-          "jsonBody": "={{ JSON.stringify({ model: $('Build request').item.json.model_name, messages: [{ role: 'system', content: $('Build request').item.json.system_prompt }, { role: 'user', content: $('Build request').item.json.user_prompt }], temperature: 0.2 }) }}",
-          "options": {
-            "timeout": 300000,
-            "retry": {
-              "retry": {
-                "maxTries": 6,
-                "waitBetweenTries": 2000
-              }
-            }
-          }
+          "jsCode": "// The provider call, WITH THE SAME TRANSPORT RETRY as the reference.\n//\n// This was an httpRequest node configured with six retries at a fixed\n// 2000 ms while its own note described exponential backoff. Python does\n// exponential + jitter + Retry-After, and the difference matters most\n// exactly where it is least visible: Step 16's Knowledge Factory, at\n// KNOWLEDGE_MAX_CONCURRENCY 3, on a 2 vCPU box. Fixed-interval retries\n// from concurrent workers return at the same instant and re-overload a\n// provider that is already shedding load.\n//\n// So the call is made here rather than by the HTTP node, because n8n's\n// retry cannot express these semantics. Mirrors _call_provider().\nconst build = $('Build request').first().json;\n\nconst MAX_TRANSPORT_ATTEMPTS = Number($env.LLM_TRANSPORT_MAX_ATTEMPTS || 6);\nconst BACKOFF_BASE = Number($env.LLM_TRANSPORT_BACKOFF_BASE || 2);\nconst BACKOFF_CAP = 60;\n// A 503 or 429 means the same request will very likely succeed shortly. A\n// 400 or 401 means it will not, ever -- retrying that spends wall-clock\n// and, on a metered endpoint, money. Anything unrecognised is permanent:\n// a retry loop that fires on unknown errors is how a bad request becomes\n// a bill.\nconst RETRYABLE = new Set([408, 409, 425, 429, 500, 502, 503, 504]);\n\nconst sleep = (seconds) => new Promise((r) => setTimeout(r, seconds * 1000));\n\nfunction retryAfterSeconds(headers) {\n  // Only the delta-seconds form, as in the reference. The HTTP-date form\n  // is legal but needs clock-skew handling to be safe, and an unparseable\n  // value falls back to our own backoff rather than to zero.\n  if (!headers) return null;\n  const raw = typeof headers.get === 'function' ? headers.get('Retry-After') : headers['Retry-After'];\n  const value = Number.parseFloat(raw);\n  return Number.isFinite(value) ? Math.max(0, value) : null;\n}\n\nconst url = `${String($env.LLM_BASE_URL || '').replace(/\\/$/, '')}/chat/completions`;\nconst body = JSON.stringify({\n  model: build.model_name,\n  messages: [\n    { role: 'system', content: build.system_prompt },\n    { role: 'user', content: build.user_prompt },\n  ],\n  temperature: 0.2,\n});\n\n// Every PHYSICAL attempt is recorded, failures included: a retry invisible\n// in the cost table makes the measurement understate what a call really\n// costs, and D5 is a decision made on those numbers.\nconst attempts = [];\nlet lastError = null;\nlet payload = null;\nlet durationMs = 0;\n\nfor (let attempt = 1; attempt <= MAX_TRANSPORT_ATTEMPTS; attempt += 1) {\n  const started = Date.now();\n  let response = null;\n  let failure = null;\n  try {\n    response = await fetch(url, {\n      method: 'POST',\n      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${$env.LLM_API_KEY}` },\n      body,\n    });\n    if (!response.ok) {\n      failure = { status: response.status, headers: response.headers, name: `HTTPError${response.status}` };\n    }\n  } catch (err) {\n    // Network-level: DNS, connection refused, timeout. Retryable, as in\n    // the reference, which treats URLError/TimeoutError/ConnectionError\n    // the same way.\n    failure = { status: null, headers: null, name: err.name || 'NetworkError' };\n  }\n\n  const elapsed = Date.now() - started;\n\n  if (failure === null) {\n    payload = await response.json();\n    durationMs = elapsed;\n    attempts.push({ ok: true, ms: elapsed, error_class: null });\n    break;\n  }\n\n  attempts.push({ ok: false, ms: elapsed, error_class: failure.name });\n  lastError = failure;\n\n  const retryable = failure.status === null || RETRYABLE.has(failure.status);\n  if (!retryable || attempt === MAX_TRANSPORT_ATTEMPTS) break;\n\n  // Exponential, capped, jittered so concurrent knowledge-batch calls do\n  // not all return at the same instant. A Retry-After from the provider\n  // wins: it knows when it will be back and we do not.\n  let delay = Math.min(BACKOFF_CAP, BACKOFF_BASE ** attempt);\n  delay *= 0.5 + Math.random();\n  const asked = retryAfterSeconds(failure.headers);\n  await sleep(Math.min(BACKOFF_CAP, asked === null ? delay : asked));\n}\n\nreturn [{ json: {\n  provider_failed: payload === null,\n  error_class: payload === null ? (lastError ? lastError.name : 'NoResponse') : null,\n  transport_attempts: attempts,\n  duration_ms: durationMs,\n  ...(payload || { choices: [], usage: {} }),\n} }];"
         },
         "id": "a0000000-0000-4000-8000-000000000007",
         "name": "Call provider",
-        "type": "n8n-nodes-base.httpRequest",
-        "typeVersion": 4.2,
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
         "position": [
           1320,
           0
         ],
-        "onError": "continueErrorOutput",
-        "notes": "Mirrors openai_compatible_provider. Transport retries have their own budget (6 tries, exponential) so one overloaded-provider window cannot spend the repair attempts that exist for an invalid control block."
+        "notes": "Mirrors _call_provider(): exponential backoff capped at 60s, jittered, Retry-After honoured, retryable statuses only, bounded attempts, every physical attempt recorded. The HTTP node's own retry is a fixed interval and cannot express this (D27)."
+      },
+      {
+        "parameters": {
+          "operation": "executeQuery",
+          "query": "SELECT set_client_scope($1::uuid);\nINSERT INTO cost_events (operation, model_role, model_name, entity_type, entity_id, run_id, workflow, input_tokens, output_tokens, cost_usd, price_source, duration_ms, success, error_class)\nSELECT 'ENGINE_RUN', $2, $3, 'client', $4, $5::uuid, $6,\n       (a->>'in_tok')::int, (a->>'out_tok')::int,\n       p.cost_usd, p.price_source,\n       (a->>'ms')::int, (a->>'ok')::boolean, a->>'error_class'\n  FROM jsonb_array_elements($7::jsonb) a\n  CROSS JOIN LATERAL price_call($3, (a->>'in_tok')::int, (a->>'out_tok')::int,\n                                $8::numeric, $9::numeric) p",
+          "options": {
+            "queryReplacement": "={{ [$('Inputs').item.json.CLIENT_ID ?? null, $('Inputs').item.json.MODEL_ROLE, $('Build request').item.json.model_name, $('Inputs').item.json.CLIENT_ID ?? null, $('Build request').item.json.run_id, 'RUN_ENGINE_' + $('Inputs').item.json.ENGINE_ID, JSON.stringify($json.transport_attempts), $env.LLM_PRICE_INPUT_PER_MTOK || null, $env.LLM_PRICE_OUTPUT_PER_MTOK || null] }}"
+          }
+        },
+        "id": "a0000000-0000-4000-8000-00000000000e",
+        "name": "Record attempts",
+        "type": "n8n-nodes-base.postgres",
+        "typeVersion": 2.5,
+        "position": [
+          1430,
+          0
+        ],
+        "credentials": {
+          "postgres": {
+            "id": "premprojphiruntime01",
+            "name": "phi_runtime (local)"
+          }
+        },
+        "notes": "One cost_events row per PHYSICAL attempt, failures included -- a retry invisible in the cost table makes every measurement understate what a call costs, and D5 was decided on those numbers. Prices via the SQL price_call() over the model_prices registry (D30), because n8n cannot read config/model_prices.json."
       },
       {
         "parameters": {
@@ -263,7 +260,7 @@
           "operation": "executeQuery",
           "query": "SELECT set_client_scope($1::uuid);\nUPDATE engine_runs SET status='SUCCEEDED', attempts=$2, completed_at=now(), input_tokens=$3, output_tokens=$4, duration_ms=$5 WHERE run_id=$6::uuid;\nINSERT INTO engine_outputs (run_id, human_output, structured, control, schema_valid, handoff_tag, handoff_mode, secondary_handoffs) VALUES ($6::uuid, $7, $8::jsonb, $9::jsonb, true, $10, $11, $12::jsonb)",
           "options": {
-            "queryReplacement": "={{ $('Inputs').item.json.CLIENT_ID }},{{ $('Build request').item.json.attempt }},{{ $json.input_tokens }},{{ $json.output_tokens }},{{ $('Build request').item.json.totals.duration_ms }},{{ $('Build request').item.json.run_id }},{{ $json.human_output }},{{ JSON.stringify($json.structured) }},{{ JSON.stringify($json.control) }},{{ $json.primary_tag }},{{ $('Inputs').item.json.MODE }},{{ JSON.stringify($json.secondary_handoffs) }}"
+            "queryReplacement": "={{ [$('Inputs').item.json.CLIENT_ID ?? null, $('Build request').item.json.attempt, $json.input_tokens, $json.output_tokens, $('Build request').item.json.totals.duration_ms, $('Build request').item.json.run_id, $json.human_output, JSON.stringify($json.structured), JSON.stringify($json.control), $json.primary_tag, $('Inputs').item.json.MODE, JSON.stringify($json.secondary_handoffs)] }}"
           }
         },
         "id": "a0000000-0000-4000-8000-00000000000b",
@@ -285,9 +282,9 @@
       {
         "parameters": {
           "operation": "executeQuery",
-          "query": "SELECT set_client_scope($1::uuid);\nUPDATE engine_runs SET status='DEAD_LETTER', attempts=$2, completed_at=now(), input_tokens=$3, output_tokens=$4, duration_ms=$5, error_class=$6::failure_type, error_detail=$7 WHERE run_id=$8::uuid;\nINSERT INTO dead_letter_jobs (job_type, entity_type, entity_id, failure_reason, raw_payload, attempts) VALUES ($9, 'engine_run', $8, $7, $10::jsonb, $2)",
+          "query": "SELECT set_client_scope($1::uuid);\nUPDATE engine_runs SET status='DEAD_LETTER', attempts=$2, completed_at=now(), input_tokens=$3, output_tokens=$4, duration_ms=$5, error_class=$6, error_detail=$7 WHERE run_id=$8::uuid;\nINSERT INTO dead_letter_jobs (job_type, entity_type, entity_id, client_id, failure_reason, raw_payload, attempts) VALUES ($9, 'engine_run', $8, $1::uuid, $7, $10::jsonb, $2)",
           "options": {
-            "queryReplacement": "={{ $('Inputs').item.json.CLIENT_ID }},{{ $('Build request').item.json.attempt }},{{ $json.input_tokens }},{{ $json.output_tokens }},{{ $('Build request').item.json.totals.duration_ms }},SCHEMA_INVALID,{{ $json.errors.join('; ').slice(0, 2000) }},{{ $('Build request').item.json.run_id }},RUN_ENGINE_{{ $('Inputs').item.json.ENGINE_ID }},{{ JSON.stringify({ raw: $json.raw.slice(0, 8000) }) }}"
+            "queryReplacement": "={{ [$('Inputs').item.json.CLIENT_ID ?? null, $('Build request').item.json.attempt, $json.input_tokens, $json.output_tokens, $('Build request').item.json.totals.duration_ms, ($('Call provider').item.json.provider_failed ? 'PROVIDER_ERROR' : 'SCHEMA_INVALID'), $json.errors.join('; ').slice(0, 2000), $('Build request').item.json.run_id, 'RUN_ENGINE_' + $('Inputs').item.json.ENGINE_ID, JSON.stringify({ raw: $json.raw.slice(0, 8000) })] }}"
           }
         },
         "id": "a0000000-0000-4000-8000-00000000000c",
@@ -304,7 +301,7 @@
             "name": "phi_runtime (local)"
           }
         },
-        "notes": "Malformed output never reaches the case or knowledge tables. No engine_outputs row is written for a dead-lettered run -- the reference asserts that and so does the parity suite."
+        "notes": "raw_payload carries up to 8,000 characters of the failed response, which for a case run is labs, conditions and medications. It is kept -- debugging a dead letter without it is guesswork -- and it is SCOPED: client_id makes RLS apply to it like any other client row (D28). A knowledge-clock failure carries no client and stays global."
       },
       {
         "parameters": {
@@ -392,14 +389,7 @@
         "main": [
           [
             {
-              "node": "Parse three outputs",
-              "type": "main",
-              "index": 0
-            }
-          ],
-          [
-            {
-              "node": "Parse three outputs",
+              "node": "Record attempts",
               "type": "main",
               "index": 0
             }
@@ -462,6 +452,17 @@
           [
             {
               "node": "Result",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Record attempts": {
+        "main": [
+          [
+            {
+              "node": "Parse three outputs",
               "type": "main",
               "index": 0
             }

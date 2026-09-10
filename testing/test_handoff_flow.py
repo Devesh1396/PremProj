@@ -428,16 +428,21 @@ def main() -> int:
         provider, provider_mode = RE.select_provider()
         check("the LIVE provider is the one under test",
               provider is RE.openai_compatible_provider and provider_mode == "live")
-        for engine, mode, role in (("E6", "INIT", "MODEL_ANALYSIS"),
-                                   ("E6", "REBUILD", "MODEL_ANALYSIS"),
-                                   ("E7", "CASE", "MODEL_RESEARCH"),
-                                   ("E7", "UPDATE", "MODEL_RESEARCH"),
-                                   ("E7", "INBOX", "MODEL_RESEARCH"),
-                                   ("E1", None, "MODEL_ANALYSIS")):
+        # A knowledge-clock mode carries NO client and a case mode must have
+        # one (015). Passing a client to E7 UPDATE is now rejected before
+        # the insert, so the table says which shape each case is.
+        for engine, mode, role, scoped in (
+                ("E6", "INIT", "MODEL_ANALYSIS", True),
+                ("E6", "REBUILD", "MODEL_ANALYSIS", True),
+                ("E7", "CASE", "MODEL_RESEARCH", True),
+                ("E7", "UPDATE", "MODEL_RESEARCH", False),
+                ("E7", "INBOX", "MODEL_RESEARCH", False),
+                ("E1", None, "MODEL_ANALYSIS", True)):
             captured.clear()
             result = RE.run_engine(conn, RE.EngineRequest(
-                engine=engine, mode=mode, model_role=role, client_id=client,
-                structured_input={"CASE_VERSION": 1}))
+                engine=engine, mode=mode, model_role=role,
+                client_id=client if scoped else None,
+                structured_input={"CASE_VERSION": 1 if scoped else 0}))
             expected_mode = mode or "SINGLE"
             check(f"{engine}/{expected_mode}: the request reached the provider",
                   bool(captured) and result.status == "SUCCEEDED",

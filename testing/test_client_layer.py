@@ -151,9 +151,9 @@ def main() -> int:
     forked_hash = hashlib.sha256((prompt_text + "\n(shortened)").encode()).hexdigest()
 
     pass_a = conn.execute(
-        """insert into engine_runs (client_id, case_version_id, cycle_id, engine, pass,
+        """insert into engine_runs (client_id, case_version_id, cycle_id, engine, pass, engine_mode,
                                     prompt_file, prompt_hash, model_role, status)
-           values (%s,%s,%s,'E1','A','engine1_prevention.md',%s,'MODEL_ANALYSIS','SUCCEEDED')
+           values (%s,%s,%s,'E1','A','SINGLE','engine1_prevention.md',%s,'MODEL_ANALYSIS','SUCCEEDED')
            returning run_id""",
         (client, v2, cycle, good_hash),
     ).fetchone()[0]
@@ -161,18 +161,18 @@ def main() -> int:
 
     expect_error(
         conn,
-        """insert into engine_runs (client_id, case_version_id, cycle_id, engine, pass,
+        """insert into engine_runs (client_id, case_version_id, cycle_id, engine, pass, engine_mode,
                                     prompt_file, prompt_hash, model_role)
-           values (%s,%s,%s,'E1','B','engine1_pass_b_lite.md',%s,'MODEL_ANALYSIS')""",
+           values (%s,%s,%s,'E1','B','SINGLE','engine1_pass_b_lite.md',%s,'MODEL_ANALYSIS')""",
         (client, v2, cycle, forked_hash),
         "Pass B with a forked prompt rejected",
         "identical master Engine 1 specification",
     )
 
     pass_b = conn.execute(
-        """insert into engine_runs (client_id, case_version_id, cycle_id, engine, pass,
+        """insert into engine_runs (client_id, case_version_id, cycle_id, engine, pass, engine_mode,
                                     prompt_file, prompt_hash, model_role, status)
-           values (%s,%s,%s,'E1','B','engine1_prevention.md',%s,'MODEL_ANALYSIS','SUCCEEDED')
+           values (%s,%s,%s,'E1','B','SINGLE','engine1_prevention.md',%s,'MODEL_ANALYSIS','SUCCEEDED')
            returning run_id""",
         (client, v2, cycle, good_hash),
     ).fetchone()[0]
@@ -184,8 +184,9 @@ def main() -> int:
 
     expect_error(
         conn,
-        """insert into engine_runs (client_id, engine, pass, prompt_file, prompt_hash, model_role)
-           values (%s,'E3','A','engine3_nutrition.md','abc','MODEL_ANALYSIS')""",
+        """insert into engine_runs (client_id, engine, pass, engine_mode,
+                                    prompt_file, prompt_hash, model_role)
+           values (%s,'E3','A','SINGLE','engine3_nutrition.md','abc','MODEL_ANALYSIS')""",
         (client,),
         "pass label rejected on a non-E1 engine",
         "ck_pass_only_for_e1",

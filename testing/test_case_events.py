@@ -662,14 +662,144 @@ def main() -> int:
               pooled.execute("select count(*) from engine_outputs where run_id=%s",
                              (clock.run_id,)).fetchone()[0] == 1)
 
-        # The cost of tolerating NULL: a CASE run that lost its client would
-        # file as a knowledge-clock run. Only E7 has clock modes.
-        check("no non-E7 run is missing its client",
+        # 015. The four shapes a run's client and mode can disagree in.
+        # 014's guard only caught one of them and permitted an E7 CASE run
+        # with no client, which is a case with no case.
+        print("\n  client/mode coherence is enforced BEFORE the insert (015)")
+        for label, engine, mode, client, role in (
+                ("E7 CASE with no client", "E7", "CASE", None, "MODEL_RESEARCH"),
+                ("E7 FOUNDATION with a client", "E7", "FOUNDATION", a, "MODEL_RESEARCH"),
+                ("E7 UPDATE with a client", "E7", "UPDATE", a, "MODEL_RESEARCH"),
+                ("E7 INBOX with a client", "E7", "INBOX", a, "MODEL_RESEARCH"),
+                ("E1 with no client", "E1", None, None, "MODEL_ANALYSIS"),
+                ("E6 INIT with no client", "E6", "INIT", None, "MODEL_ANALYSIS")):
+            try:
+                RE_SCOPE.run_engine(pooled, RE_SCOPE.EngineRequest(
+                    engine=engine, mode=mode, client_id=client, model_role=role,
+                    structured_input={"CASE_VERSION": 1 if client else 0}))
+                check(f"{label} is rejected", False, "the insert was accepted")
+            except psycopg.errors.CheckViolation as exc:
+                check(f"{label} is rejected",
+                      "client" in str(exc).lower(), str(exc)[:90])
+
+        for label, engine, mode, client, role in (
+                ("E7 CASE with a client", "E7", "CASE", a, "MODEL_RESEARCH"),
+                ("E7 FOUNDATION with none", "E7", "FOUNDATION", None, "MODEL_RESEARCH"),
+                ("E7 INBOX with none", "E7", "INBOX", None, "MODEL_RESEARCH"),
+                ("E6 REBUILD with a client", "E6", "REBUILD", a, "MODEL_ANALYSIS")):
+            ok = RE_SCOPE.run_engine(pooled, RE_SCOPE.EngineRequest(
+                engine=engine, mode=mode, client_id=client, model_role=role,
+                structured_input={"CASE_VERSION": 1 if client else 0}))
+            check(f"{label} is accepted", ok.status == "SUCCEEDED",
+                  ok.error or ok.status)
+
+        check("the mode is on the RUN, not only on a successful output",
               admin.execute(
-                  "select count(*) from v_runs_without_client").fetchone()[0] == 0,
+                  "select engine_mode from engine_runs where run_id=%s",
+                  (run_a.run_id,)).fetchone()[0] == "INIT")
+        check("nothing incoherent was written",
+              admin.execute(
+                  "select count(*) from v_engine_run_incoherent "
+                  "where engine_mode is not null").fetchone()[0] == 0,
               str(admin.execute(
-                  "select engine::text, count(*) from v_runs_without_client "
-                  "group by 1").fetchall()))
+                  "select engine::text, engine_mode, problem "
+                  "from v_engine_run_incoherent limit 3").fetchall()))
+
+        # ------------------------------------------------------------------
+        # 015. A failed CASE response is the client's clinical record in a
+        # different shape. dead_letter_jobs had no client_id and no RLS at
+        # all, so every raw payload was readable under ANY scope.
+        print("\n  dead-letter payloads are client-scoped (015)")
+
+        def refuses(system, user, params):
+            # Prose, no machine blocks: the run dead-letters and the RAW
+            # RESPONSE is what lands in dead_letter_jobs.raw_payload.
+            #
+            # It echoes the case back, which is what makes this a PHI test
+            # rather than a column test. A model that fails mid-analysis
+            # routinely restates what it was given -- "for this client,
+            # HbA1c 6.4, I cannot..." -- and that restatement is the
+            # client's clinical record sitting in a table that had no
+            # client_id and no RLS at all.
+            return f"I could not complete this. The case as given: {user}", 10, 10
+
+        secret_a = "SENTINEL-LABS-CLIENT-A-HbA1c-6.4"
+        secret_b = "SENTINEL-LABS-CLIENT-B-HbA1c-5.1"
+        original_provider = RE_SCOPE.select_provider
+        RE_SCOPE.select_provider = lambda: (refuses, "fixture")
+        try:
+            dead_a = RE_SCOPE.run_engine(pooled, RE_SCOPE.EngineRequest(
+                engine="E6", mode="INIT", client_id=a,
+                structured_input={"CASE_VERSION": 1, "LABS": secret_a}))
+            dead_b = RE_SCOPE.run_engine(pooled, RE_SCOPE.EngineRequest(
+                engine="E6", mode="INIT", client_id=b,
+                structured_input={"CASE_VERSION": 1, "LABS": secret_b}))
+        finally:
+            RE_SCOPE.select_provider = original_provider
+
+        check("both runs dead-lettered",
+              dead_a.status == "DEAD_LETTER" and dead_b.status == "DEAD_LETTER")
+        check("the dead letter records which client's data it holds",
+              admin.execute(
+                  "select client_id from dead_letter_jobs where entity_id=%s",
+                  (dead_a.run_id,)).fetchone()[0] is not None)
+
+        # The leak. No client_id filter -- RLS is the only thing that can
+        # exclude the other client's clinical text.
+        with pooled.transaction():
+            pooled.execute("select set_client_scope(%s)", (b,))
+            payloads = " ".join(
+                json.dumps(r[0]) for r in pooled.execute(
+                    "select raw_payload from dead_letter_jobs").fetchall())
+        check("under B's scope, A's failed payload is invisible",
+              secret_b in payloads and secret_a not in payloads,
+              f"A leaked: {secret_a in payloads}")
+
+        with pooled.transaction():
+            pooled.execute("select set_client_scope(%s)", (a,))
+            payloads_a = " ".join(
+                json.dumps(r[0]) for r in pooled.execute(
+                    "select raw_payload from dead_letter_jobs").fetchall())
+        check("...and under A's scope, B's is invisible",
+              secret_a in payloads_a and secret_b not in payloads_a)
+
+        unscoped = " ".join(json.dumps(r[0]) for r in pooled.execute(
+            "select raw_payload from dead_letter_jobs").fetchall())
+        check("with no scope set, no client payload is visible at all",
+              secret_a not in unscoped and secret_b not in unscoped)
+
+        check("RLS is FORCED, so even a table owner cannot read past it",
+              admin.execute(
+                  "select relforcerowsecurity from pg_class "
+                  "where relname='dead_letter_jobs'").fetchone()[0])
+
+        # A dead letter that genuinely has no client stays global -- a
+        # knowledge-clock failure carries no client data and hiding it
+        # would make the knowledge track undebuggable.
+        RE_SCOPE.select_provider = lambda: (refuses, "fixture")
+        try:
+            clock_dead = RE_SCOPE.run_engine(pooled, RE_SCOPE.EngineRequest(
+                engine="E7", mode="FOUNDATION", model_role="MODEL_RESEARCH",
+                structured_input={"CASE_VERSION": 0}))
+        finally:
+            RE_SCOPE.select_provider = original_provider
+        check("a knowledge-clock dead letter has no client and stays readable",
+              pooled.execute(
+                  "select count(*) from dead_letter_jobs "
+                  "where entity_id=%s and client_id is null",
+                  (clock_dead.run_id,)).fetchone()[0] == 1)
+
+        # Triage without reading anyone's clinical text.
+        triage = admin.execute(
+            "select job_type, failures, clients_affected from v_dead_letter_triage "
+            "where job_type like 'RUN_ENGINE_%' order by failures desc limit 1"
+        ).fetchone()
+        check("triage counts failures without exposing raw_payload",
+              triage is not None and triage[1] >= 2, str(triage))
+        check("...and the view has no raw_payload column",
+              "raw_payload" not in {r[0] for r in admin.execute(
+                  "select column_name from information_schema.columns "
+                  "where table_name='v_dead_letter_triage'").fetchall()})
     finally:
         pooled.close()
 

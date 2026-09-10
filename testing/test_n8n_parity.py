@@ -355,6 +355,133 @@ def main() -> int:
                   py_results["valid E6 INIT"]["output_tokens"] == 29
                   and js_results["valid E6 INIT"]["output_tokens"] == 29)
 
+    # ------------------------------------------------------------------
+    print("\ntransport retry: same semantics as the reference (D27)")
+    # The HTTP node was configured with six retries at a FIXED 2000 ms while
+    # its own note described exponential backoff. Python does exponential +
+    # jitter + Retry-After, and the difference matters most where it is
+    # least visible: Step 16's Knowledge Factory, at concurrency 3, on a
+    # 2 vCPU box, where fixed-interval retries from concurrent workers all
+    # return at the same instant and re-overload a provider already
+    # shedding load.
+    #
+    # Deterministic. No network, no paid calls: fetch is stubbed, the
+    # backoff base is set tiny through the same env var the node reads, and
+    # setTimeout is captured rather than honoured, so the SHAPE of the
+    # delays is what is asserted.
+    retry_cases = [
+        {"name": "success first time", "sequence": [{"status": 200}]},
+        {"name": "429 then success",
+         "sequence": [{"status": 429}, {"status": 200}]},
+        {"name": "503 twice then success",
+         "sequence": [{"status": 503}, {"status": 503}, {"status": 200}]},
+        {"name": "400 is never retried", "sequence": [{"status": 400}]},
+        {"name": "401 is never retried", "sequence": [{"status": 401}]},
+        {"name": "404 is never retried", "sequence": [{"status": 404}]},
+        {"name": "network error is retried",
+         "sequence": [{"network_error": True}, {"status": 200}]},
+        {"name": "attempts are bounded", "sequence": [{"status": 503}],
+         "max_attempts": 4},
+        {"name": "Retry-After is honoured",
+         "sequence": [{"status": 429, "headers": {"Retry-After": "7"}},
+                      {"status": 200}]},
+        {"name": "an unparseable Retry-After falls back to backoff",
+         "sequence": [{"status": 429, "headers": {"Retry-After": "soon"}},
+                      {"status": 200}], "backoff_base": 100},
+        {"name": "backoff grows with the attempt",
+         "sequence": [{"status": 503}, {"status": 503}, {"status": 503},
+                      {"status": 200}], "backoff_base": 10},
+    ]
+
+    if node is None:
+        print("  SKIP  node not available; retry semantics not compared")
+    else:
+        proc = subprocess.run(
+            [node, str(REPO / "testing" / "n8n_retry.js")],
+            input=json.dumps({"cases": retry_cases}),
+            capture_output=True, text=True)
+        if proc.returncode != 0:
+            check("the retry harness ran", False,
+                  f"exit {proc.returncode}: {proc.stderr[:400]}")
+        else:
+            r = {x["name"]: x for x in json.loads(proc.stdout)["results"]}
+            check("every retry case ran",
+                  not [x for x in r.values() if "error" in x],
+                  str([x.get("error") for x in r.values() if "error" in x])[:300])
+
+            check("a success makes exactly one call",
+                  r["success first time"]["calls"] == 1
+                  and not r["success first time"]["result"]["provider_failed"])
+            check("a 429 is retried and then succeeds",
+                  r["429 then success"]["calls"] == 2
+                  and not r["429 then success"]["result"]["provider_failed"])
+            check("a 503 is retried until it succeeds",
+                  r["503 twice then success"]["calls"] == 3)
+            for status in ("400", "401", "404"):
+                name = f"{status} is never retried"
+                check(f"a {status} is not retried at all",
+                      r[name]["calls"] == 1 and r[name]["waits"] == []
+                      and r[name]["result"]["provider_failed"],
+                      f'{r[name]["calls"]} calls, waits {r[name]["waits"]}')
+            check("a network error IS retried",
+                  r["network error is retried"]["calls"] == 2)
+            check("attempts are bounded by the configured maximum",
+                  r["attempts are bounded"]["calls"] == 4,
+                  str(r["attempts are bounded"]["calls"]))
+            check("...and the last attempt does not sleep afterwards",
+                  len(r["attempts are bounded"]["waits"]) == 3)
+
+            # Retry-After wins over our own backoff, exactly.
+            check("Retry-After is honoured to the second",
+                  r["Retry-After is honoured"]["waits"] == [7.0],
+                  str(r["Retry-After is honoured"]["waits"]))
+            # backoff_base 100 would give a huge jittered delay; an
+            # unparseable header must fall back to it, not to zero.
+            fallback = r["an unparseable Retry-After falls back to backoff"]["waits"]
+            check("an unparseable Retry-After falls back to backoff, never to zero",
+                  len(fallback) == 1 and fallback[0] > 0, str(fallback))
+
+            # Exponential with jitter: each delay sits inside
+            # [0.5, 1.5] x base**attempt, capped at 60.
+            waits = r["backoff grows with the attempt"]["waits"]
+            check("backoff is exponential, jittered and capped",
+                  len(waits) == 3
+                  and all(0.5 * min(60, 10 ** (i + 1)) <= w
+                          <= 1.5 * min(60, 10 ** (i + 1)) and w <= 60
+                          for i, w in enumerate(waits)),
+                  str(waits))
+            check("...and the cap actually binds",
+                  waits[-1] <= 60, str(waits[-1]))
+
+            # Every physical attempt is recorded, failures included.
+            logged = r["503 twice then success"]["result"]["transport_attempts"]
+            check("every physical attempt is recorded, failures included",
+                  len(logged) == 3 and [a["ok"] for a in logged] == [False, False, True],
+                  str(logged))
+            check("...each with the error class that caused it",
+                  logged[0]["error_class"] == "HTTPError503", str(logged[0]))
+
+            # The reference's rule: transport failures never spend a repair
+            # attempt. The node returns provider_failed, and the workflow's
+            # own dead-letter branch handles it -- the repair loop is not
+            # entered at all.
+            check("a transport failure never consumes a repair attempt",
+                  r["400 is never retried"]["result"]["provider_failed"] is True
+                  and r["400 is never retried"]["result"]["error_class"]
+                  == "HTTPError400")
+
+            # Python's classification, on the same statuses, must agree.
+            import urllib.error as _ue
+            for status, want in ((429, True), (503, True), (500, True),
+                                 (408, True), (400, False), (401, False),
+                                 (404, False)):
+                same = RE._is_retryable(
+                    _ue.HTTPError("http://x", status, "", {}, None)) is want
+                if not same:
+                    check(f"Python agrees {status} is "
+                          f"{'retryable' if want else 'permanent'}", False)
+            check("Python and n8n classify the same statuses the same way", True)
+
     print()
     if FAILS:
         print(f"{len(FAILS)} FAILURE(S): " + "; ".join(FAILS))

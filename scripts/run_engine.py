@@ -837,12 +837,12 @@ def run_engine(conn: psycopg.Connection, req: EngineRequest) -> EngineResult:
         conn.execute(
             """insert into engine_runs
                  (run_id, client_id, case_version_id, cycle_id, engine, pass,
-                  prompt_file, prompt_hash, schema_version, model_role, model_name,
-                  model_params, status, started_at)
-               values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'RUNNING',now())""",
+                  engine_mode, prompt_file, prompt_hash, schema_version,
+                  model_role, model_name, model_params, status, started_at)
+               values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'RUNNING',now())""",
             (run_id, req.client_id, req.case_version_id, req.cycle_id, req.engine,
-             req.pass_label, prompt_file, prompt_hash, SCHEMA_VERSION,
-             req.model_role, model_name,
+             req.pass_label, handoff_mode, prompt_file, prompt_hash,
+             SCHEMA_VERSION, req.model_role, model_name,
              json.dumps(req.run_context)),
         )
 
@@ -967,15 +967,20 @@ def run_engine(conn: psycopg.Connection, req: EngineRequest) -> EngineResult:
                  totals["duration_ms"],
                  "PROVIDER_ERROR" if provider_failed else "SCHEMA_INVALID",
                  "; ".join(errors)[:2000], run_id))
-        # dead_letter_jobs has no RLS: a dead letter is operational
-        # telemetry about a failure, and the payload is already truncated.
-        conn.execute(
-            """insert into dead_letter_jobs
-                 (job_type, entity_type, entity_id, failure_reason, raw_payload, attempts)
-               values (%s,'engine_run',%s,%s,%s,%s)""",
-            (f"RUN_ENGINE_{req.engine}", run_id,
-             "; ".join(errors)[:2000], json.dumps({"raw": raw[:8000]}), attempts),
-        )
+            # The dead letter carries the CLIENT (015). raw_payload holds up
+            # to 8,000 characters of the failed response, and for a case
+            # run that is the client's clinical record in a different
+            # shape -- labs, conditions, medications. It is not telemetry
+            # and it is not global: same scope, same transaction as the run
+            # it belongs to.
+            conn.execute(
+                """insert into dead_letter_jobs
+                     (job_type, entity_type, entity_id, client_id,
+                      failure_reason, raw_payload, attempts)
+                   values (%s,'engine_run',%s,%s,%s,%s,%s)""",
+                (f"RUN_ENGINE_{req.engine}", run_id, req.client_id,
+                 "; ".join(errors)[:2000], json.dumps({"raw": raw[:8000]}),
+                 attempts))
         return EngineResult(run_id, "DEAD_LETTER", None, raw, None, attempts,
                             "; ".join(errors))
 

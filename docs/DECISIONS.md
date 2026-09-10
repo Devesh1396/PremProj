@@ -1036,6 +1036,229 @@ extra.
 
 ---
 
+## D27 — The mode is stored on the run, and coherence is checked before the insert
+**SETTLED**
+
+`v_runs_without_client` (migration 014) read
+`client_id IS NULL AND engine <> 'E7'`. That is two rules where there are
+four, and the exemption it grants is far too wide: it permits **every**
+Engine 7 run without a client, including **E7 CASE**, which is client work
+and cannot be a case with no case.
+
+| | |
+|---|---|
+| E1–E6 | client **required** |
+| E7 `CASE` | client **required** |
+| E7 `FOUNDATION` / `UPDATE` / `INBOX` | client **must be NULL** |
+
+### The real defect was that the mode was not on the run
+
+The rule could not be checked correctly by any view, because the only place
+a mode was recorded was `engine_outputs.handoff_mode` — a row that exists
+only after a run **succeeds**. So the mode of a dead-lettered run, or an
+in-flight one, was unknowable, and the mode of any run was inferable only
+from the engine name plus a guess. A guard that can only evaluate
+successful runs is not a guard.
+
+`engine_runs.engine_mode` is written by `RUN_ENGINE` at the moment the run
+opens, from the mode it already resolved for the `<RUNTIME_INVOCATION>`
+envelope (D24a). One typed column, no inference anywhere.
+
+### A trigger, not a CHECK constraint
+
+The VPS is running `main` and has `engine_runs` rows from before this. A
+CHECK would have to either reject that history or carry a permanent escape
+hatch that new rows could use too. `trg_engine_run_coherent` is BEFORE
+INSERT: history is grandfathered by construction and nothing new can skip
+it. Pre-015 rows are not hidden — `v_engine_run_incoherent` lists them as
+"mode not recorded".
+
+*Note for anyone writing a test:* a BEFORE INSERT trigger fires **before**
+CHECK constraints. `test_knowledge_inbox.py` had to start supplying a valid
+`engine_mode` for `ck_run_clock_coherent` to remain the thing its assertion
+was actually testing.
+
+*Rejected:* deriving the mode from the engine name. E7 has four modes and
+two of them route in opposite directions on the client question. There is
+nothing to derive it from.
+
+*Rejected:* keeping the view and fixing only its WHERE clause. A view
+detects; it does not prevent. The brief asked for enforcement before the
+insert, and after the insert is after the payload already exists.
+
+---
+
+## D28 — A failed engine response is client data, not telemetry
+**SETTLED**
+
+`dead_letter_jobs` has existed since `001_ops.sql` with **no `client_id`
+and no row level security**, while `RUN_ENGINE` writes up to 8,000
+characters of raw failed model output into `raw_payload`. For a case run
+that raw output is the client's labs, conditions, medications and
+symptoms — the clinical record in a different shape. Every one of those
+rows was readable by `phi_runtime` under **any** client scope.
+
+Hard rule 8 says client isolation is structural. It does not have an
+exception for the failure path, and calling the payload "telemetry" would
+be a relabelling, not a fix — the bytes are the same bytes.
+
+**The payload is kept.** Debugging a dead letter without the response that
+caused it is guesswork, and the point of the queue is that a malformed
+output can be inspected rather than lost. It is kept **and scoped**:
+`client_id` is nullable, RLS is `ENABLE` + `FORCE`, and the runtime policy
+is `client_id IS NULL OR client_id = current_client_scope()`.
+
+Nullable because dead letters that genuinely carry no client data are
+real — knowledge-clock runs and source ingestion — and those stay readable
+without a scope, exactly as 005 decided for `chat_threads` and 014 for
+knowledge-clock runs. It is the same rule in both places: no client, no
+scope needed; a client, scope enforced.
+
+`v_dead_letter_triage` answers the first question anyone actually asks —
+how many, since when, still happening — **without a `raw_payload`
+column**. Reading someone's failed clinical text should take a deliberate
+scoped query, not be the by-product of checking whether the queue is
+backing up.
+
+Forward migration, never a redefinition of `001` (hard rule 10): the
+column is added, existing rows are backfilled from the run they belong to,
+and rows whose client cannot be recovered stay NULL rather than being
+guessed at.
+
+*Rejected:* dropping `raw_payload`, or truncating it to a hash. That
+trades a fixable isolation problem for a permanent debugging one.
+
+*Rejected:* a separate `dead_letter_jobs_client` table. Two queues means
+two things to check and one of them will be forgotten; the scoping key
+belongs on the row.
+
+---
+
+## D29 — n8n retries the way the reference retries
+**SETTLED**
+
+The HTTP Request node was configured with **six retries at a fixed
+2,000 ms**, under a note describing exponential backoff. `run_engine.py`
+does exponential backoff, jittered, capped at 60 s, with `Retry-After`
+honoured when the provider sends one, and retries **only** the statuses
+that can succeed on a repeat.
+
+The gap matters most exactly where it is least visible: Step 16's
+Knowledge Factory, at `KNOWLEDGE_MAX_CONCURRENCY` 2–3, on a 2 vCPU box.
+Fixed-interval retries from concurrent workers all come back at the same
+instant and re-overload a provider that is already shedding load. Jitter is
+the whole reason the reference has it.
+
+n8n's own retry cannot express any of this, so **the call moved into the
+Code node** and the semantics are the reference's:
+
+| | |
+|---|---|
+| retryable | 408, 409, 425, 429, 500, 502, 503, 504, and network-level failures |
+| permanent | everything else, 400 and 401 included — an unrecognised error is not retried |
+| delay | `min(60, base ** attempt)`, then multiplied by `0.5 + random()` |
+| `Retry-After` | delta-seconds honoured, capped at 60; unparseable falls back to backoff, never to zero |
+| accounting | one `cost_events` row per **physical** attempt, failures included |
+
+Tested deterministically against a local stub — 18 assertions, no paid
+calls — including that a transport failure never consumes one of the two
+**repair** attempts. Those are different budgets: a repair is a second
+request with a violation message attached, and spending it on a 503 means
+a malformed response gets one chance instead of two.
+
+*Rejected:* documenting the fixed-interval node as an intentional
+divergence. D26's bar is parity, the divergence had no upside, and its
+first symptom would have been a Knowledge Factory batch failing under load
+in a way nothing distinguishes from a provider outage.
+
+---
+
+## D30 — The rate card is rows too. The fourth registry
+**SETTLED**
+
+Prompts (`010`), the orchestration contract (`012`) and the handoff
+registry (`013`) all moved from files to rows for one reason: **n8n cannot
+read this repository.** `config/model_prices.json` was the last thing
+`RUN_ENGINE` read from disk, and the consequence surfaced the moment the
+n8n cost node was written — it had nowhere to get a rate.
+
+The choice was to write `UNPRICED` for every n8n call, or to make the rate
+card readable the same way everything else is. UNPRICED is not a small
+divergence: **n8n is production and the Python path is the reference**, D5
+was decided on cost numbers, and Step 16 will push thousands of Knowledge
+Factory calls through the workflow. A production path that cannot price its
+own calls makes the cost table describe the reference implementation
+instead of the system.
+
+So `model_prices` is a table, `scripts/load_prices.py` is the fourth
+loader, and the SQL function `price_call()` reproduces
+`pricing.price_call()`: env override, exact model name, longest matching
+prefix, else UNPRICED with a **NULL** cost — never zero, which would read
+as "this call was free". A fresh deployment now runs **four** loaders after
+migrating.
+
+Two implementations of one rule, compared over a corpus. That arrangement
+has now found something four times out of four.
+
+A model removed from the file is **deactivated, never deleted**: its rate
+is the evidence for every `cost_events` row already priced with it.
+
+---
+
+## D31 — The workflow's SQL is executed by a test, because reading it is not enough
+**SETTLED**
+
+`test_n8n_parity.py` proved the two implementations build the same request
+and read the same response. Nothing ever executed the third thing the
+workflow does, which is **write** — and three defects were sitting in it
+at once, all introduced in the same sitting as the migrations that made
+them wrong:
+
+* `Open run` did not send `engine_mode`, so **every** n8n run would have
+  been rejected by the coherence trigger D27 had just added.
+* `Dead letter` did not send `client_id`, so every n8n dead letter would
+  have been exactly the unscoped cross-client payload D28 had just fixed.
+* `Record attempts` inserted into `latency_ms`, a column that has never
+  existed, and cast `error_class` to `failure_type` — an enum belonging to
+  the case layer's intervention-failure vocabulary, which has nothing to do
+  with engine errors and does not contain `SCHEMA_INVALID`.
+
+### Two of them were not SQL mistakes at all
+
+They were mistakes about how n8n turns a `queryReplacement` expression
+into a parameter list. At Postgres node v2.5 that algorithm is surprising
+in three separate ways, none of them documented:
+
+1. **Literal text outside `{{ }}` is discarded.** `RUN_ENGINE_{{ engine }}`
+   binds `E1`, not `RUN_ENGINE_E1` — so `job_type` and `workflow` were
+   silently losing their prefix.
+2. **`null` becomes the string `'null'`.** Against a `uuid` column that is
+   an error; against `text` it is worse, because it succeeds.
+3. **A resolved string that is not JSON is split on commas** into several
+   parameters. One comma in an error message shifts every parameter after
+   it.
+
+The **array form** — a single `{{ [a, b, c] }}` — takes a different branch
+that has none of these behaviours: values pass through whole, `null` stays
+`null`, objects are stringified. Every node uses it, and `undefined` is
+never allowed into the array, because that branch skips undefined elements
+and would shift the numbering.
+
+`testing/n8n_bind_params.js` is a faithful port of that algorithm, and
+`test_n8n_sql.py` binds the workflow's **real** expressions through it and
+executes the resulting SQL against the real database as **`phi_runtime`**.
+It also compares the INSERT column lists of both implementations, which is
+what makes a missing `engine_mode` a failure rather than a silent
+difference.
+
+Ported rather than imported: n8n is not a dependency of this repository and
+must not become one for a test to run. Same reasoning as `scripts/trigram.py`.
+
+*Rejected:* asserting on the SQL text. Two of the three defects were
+invisible in the text and one of them was in the JSON around it.
+
+---
+
 ## OPEN
 
 **O1 — Intake form. `RESOLVED FOR V1` — see D22.** Core Intake V1 is built:
