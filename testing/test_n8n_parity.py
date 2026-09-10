@@ -37,6 +37,9 @@ import psycopg
 import load_handoffs as LH
 import run_engine as RE
 
+sys.path.insert(0, str(REPO / "testing"))
+from test_contract_registry import find_ajv  # noqa: E402
+
 FAILS: list[str] = []
 CORPUS = REPO / "testing" / "fixtures" / "golden" / "run_engine_corpus.json"
 JS_RUNNER = REPO / "testing" / "n8n_build_request.js"
@@ -119,13 +122,10 @@ def main() -> int:
     # ------------------------------------------------------------------
     print("\nn8n builds the same requests, byte for byte")
     node = shutil.which("node")
-    ajv_modules = None
-    for root in (os.environ.get("N8N_HOME"),
-                 str(Path(os.environ.get("TMPDIR", "/tmp")) / "premproj-n8n"),
-                 str(REPO)):
-        if root and (Path(root) / "node_modules" / "ajv").exists():
-            ajv_modules = str((Path(root) / "node_modules").resolve())
-            break
+    # find_ajv() rather than a second copy of the same search. The copy that
+    # used to live here did not honour AJV_MODULE_PATH, so setting it moved
+    # one suite and not the other.
+    ajv_modules = find_ajv()
     if node is None:
         print("  SKIP  node not available; the Python half above ran in full")
         print("        install Node to run the byte-parity comparison")
@@ -246,8 +246,19 @@ def main() -> int:
         ("empty content: the whole budget went to reasoning", "E1", "SINGLE", ""),
     ]
 
-    if node is None:
-        print("  SKIP  node not available; response parity not compared")
+    if node is None or ajv_modules is None:
+        # The response parser IS the Validate control node, and that node
+        # requires ajv. Without it the JavaScript returns an error per case
+        # rather than a parse, and comparing a parse against an error dict
+        # reports differences that are not differences -- then indexes a key
+        # that is not there. Same shape as the pg_trgm floor: the degraded
+        # branch has to be exercised, not assumed.
+        missing = "node" if node is None else "ajv"
+        print(f"  SKIP  {missing} not available; response parity not compared")
+        print("        run `bash scripts/local_n8n.sh install` or set "
+              "AJV_MODULE_PATH")
+        print("        the Python half above ran in full; only the "
+              "cross-implementation comparison was skipped")
     else:
         document, _hash = __import__("load_contracts").active(conn, RE.SCHEMA_VERSION)
         js_cases, py_results = [], {}
@@ -304,11 +315,15 @@ def main() -> int:
                   f"exit {proc.returncode}: {proc.stderr[:400]}")
         else:
             js_results = {r["name"]: r for r in json.loads(proc.stdout)["results"]}
-            check("the workflow's parser handled every response",
-                  not [r for r in js_results.values() if "error" in r],
-                  str([r.get("error") for r in js_results.values()
-                       if "error" in r])[:300])
+            broken = {n: r["error"] for n, r in js_results.items() if "error" in r}
+            check("the workflow's parser handled every response", not broken,
+                  "; ".join(f"{n}: {e}" for n, e in broken.items())[:300])
 
+        if proc.returncode == 0 and not broken:
+            # Only compare once every case actually produced a parse. An
+            # error dict has none of the fields being compared, so indexing
+            # into it raises rather than reporting -- which is how a missing
+            # ajv turned a skippable condition into a crash.
             mismatches = []
             for name, _e, _m, _raw in responses:
                 py, js = py_results[name], js_results.get(name, {})
@@ -356,7 +371,7 @@ def main() -> int:
                   and js_results["valid E6 INIT"]["output_tokens"] == 29)
 
     # ------------------------------------------------------------------
-    print("\ntransport retry: same semantics as the reference (D27)")
+    print("\ntransport retry: same semantics as the reference (D29)")
     # The HTTP node was configured with six retries at a FIXED 2000 ms while
     # its own note described exponential backoff. Python does exponential +
     # jitter + Retry-After, and the difference matters most where it is

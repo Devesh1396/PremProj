@@ -351,3 +351,32 @@ jobs:
 
       - name: Re-run against the used database
         run: bash testing/run_all.sh
+
+      - name: Node present, ajv absent — the parity suites must SKIP, not crash
+        # The pg_trgm shape again, one layer up. Every job above installs
+        # ajv, so every job above is green, and the branch where node is
+        # available but ajv is NOT was reachable on a developer machine and
+        # nowhere else. It crashed: test_n8n_parity.py indexed 'valid' on a
+        # per-case error dict and raised KeyError instead of skipping.
+        #
+        # ajv is an optional dependency, so its absence belongs in the job
+        # whose whole purpose is running with nothing optional available.
+        # Asserting the SKIP appears is the point -- a suite that passed for
+        # some other reason would prove nothing.
+        run: |
+          set -euo pipefail
+          rm -rf node_modules/ajv node_modules/ajv-formats
+          node --version
+          if [ -d node_modules/ajv ]; then
+            echo "ajv is still present; this step is not testing what it claims" >&2
+            exit 1
+          fi
+          for suite in test_contract_registry test_n8n_parity; do
+            echo "=== $suite (node present, ajv absent) ==="
+            out=$(python3 "testing/$suite.py" 2>&1) || {
+              echo "$out"; echo "^^ $suite must SKIP the ajv half, not fail" >&2; exit 1; }
+            echo "$out" | tail -20
+            echo "$out" | grep -q "SKIP" || {
+              echo "^^ $suite passed without reporting a SKIP -- it is not " \
+                   "detecting that ajv is missing" >&2; exit 1; }
+          done

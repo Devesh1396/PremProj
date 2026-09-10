@@ -33,7 +33,7 @@ not inspected by eye.**
 | Ontology | 26 domains, 269 concepts seeded from the curriculum, hash-verified |
 | Registries | **Four**: prompts (`010`), contract (`012`), handoffs (`013`), prices (`016`) |
 | Backup | Restore drill performed 2026-09-10; roles gap found and fixed |
-| Bugs | 56 found and fixed, each with a regression test |
+| Bugs | 57 found and fixed, each with a regression test |
 
 **D5 is ANSWERED and Engine 1 is not to be staged.** Measured on a live
 provider 2026-09-09 (see *D5 ANSWERED* below):
@@ -1053,6 +1053,35 @@ being thin is the expected state of the system today.
     the reference does, on the one retry that matters.
     `format_violation()` defines the wording and both sides build it from
     their own library's structured error data.
+
+57. **`test_n8n_parity.py` crashed instead of skipping when node was
+    present and ajv was not.** The response-parity half runs the Validate
+    control node's own source, which requires ajv. Without it the
+    JavaScript returns one error dict per case — and the suite indexed
+    `["valid"]` on it, raising `KeyError` after first reporting fifteen
+    mismatches that were not mismatches.
+
+    **This is the pg_trgm shape one layer up.** All three CI jobs install
+    ajv, so all three were green and the degraded branch was reachable on a
+    developer machine and nowhere else — the same way an ungated
+    `similarity()` call survived steps 12 and 13 (bug 44). A branch that
+    only runs where nothing watches is a branch that is not tested.
+
+    `test_contract_registry.py` had always handled the condition correctly,
+    with a loud SKIP, so the fix is to match it: the response half is gated
+    on ajv as well as node; a per-case error is reported and the comparison
+    skipped rather than indexed; and `find_ajv()` is now imported from
+    `test_contract_registry` instead of being a second copy that did not
+    honour `AJV_MODULE_PATH`.
+
+    The floor is now tested. The bare job — the one whose purpose is
+    running with nothing optional available, and ajv is optional in exactly
+    that sense — deletes `node_modules/ajv` after the full suite and re-runs
+    both parity suites, **asserting a SKIP actually appears**: a suite that
+    passed for some other reason would prove nothing.
+    `testing/run_bare.sh` does the same locally and restores ajv on exit,
+    because a check that exists only in CI is how this class of gap forms
+    (bug 49).
 
 
 **Also, and recorded rather than amended away:** commit `c99ebf4` was made
