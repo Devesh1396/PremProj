@@ -395,6 +395,8 @@ def main() -> int:
         {"name": "404 is never retried", "sequence": [{"status": 404}]},
         {"name": "network error is retried",
          "sequence": [{"network_error": True}, {"status": 200}]},
+        {"name": "a programming error is NOT retried",
+         "sequence": [{"throw_programming_error": True}]},
         {"name": "attempts are bounded", "sequence": [{"status": 503}],
          "max_attempts": 4},
         {"name": "Retry-After is honoured",
@@ -438,6 +440,21 @@ def main() -> int:
                       r[name]["calls"] == 1 and r[name]["waits"] == []
                       and r[name]["result"]["provider_failed"],
                       f'{r[name]["calls"]} calls, waits {r[name]["waits"]}')
+            # A bug in the node is not the network being down. Python
+            # retries URLError/TimeoutError/ConnectionError and nothing
+            # else, so a NameError there fails on the first attempt; n8n
+            # retried EVERY thrown error, which is how a ReferenceError in
+            # this very node got six attempts and an exponential backoff
+            # before being dead-lettered as a transport problem (D33).
+            check("a programming error is NOT retried, it fails once",
+                  r["a programming error is NOT retried"]["calls"] == 1
+                  and r["a programming error is NOT retried"]["waits"] == [],
+                  str(r["a programming error is NOT retried"]))
+            check("...and is reported as itself, not as a network failure",
+                  r["a programming error is NOT retried"]["result"]["error_class"]
+                  == "ReferenceError",
+                  str(r["a programming error is NOT retried"]["result"]["error_class"]))
+
             check("a network error IS retried",
                   r["network error is retried"]["calls"] == 2)
             check("attempts are bounded by the configured maximum",

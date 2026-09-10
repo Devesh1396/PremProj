@@ -33,7 +33,7 @@ not inspected by eye.**
 | Ontology | 26 domains, 269 concepts seeded from the curriculum, hash-verified |
 | Registries | **Four**: prompts (`010`), contract (`012`), handoffs (`013`), prices (`016`) |
 | Backup | Restore drill performed 2026-09-10; roles gap found and fixed |
-| Bugs | 57 found and fixed, each with a regression test |
+| Bugs | 60 found and fixed, each with a regression test |
 
 **D5 is ANSWERED and Engine 1 is not to be staged.** Measured on a live
 provider 2026-09-09 (see *D5 ANSWERED* below):
@@ -130,13 +130,22 @@ AiSensy, a detection PoC) on volume `n8n-sdc9_n8n_data`, backed up to
 `docker-compose.yml` are out of scope for this build, permanently. This
 repo adds a database to the same network and nothing else.
 
-### The n8n version question is answered, and the answer is a gap
+### The n8n version question is answered, and the pin follows the VPS
 
-`scripts/local_n8n.sh` pins **2.35.7**. The VPS runs **2.11.4**. Workflow
-JSON is version-sensitive and the two are not the same major generation, so
-`workflows/run_engine.json` must not be assumed importable there. This is
-exactly the risk `docs/OPERATIONS.md` "n8n version" was written to flag; it
-is no longer unknown. See that section for the choice.
+**DECIDED: pin to 2.11.4, do not upgrade the VPS** (D32). Verifying against
+`n8n-nodes-base` 2.11.2 — what n8n 2.11.4 ships — found two things that
+would have failed on first import, neither of them a version regression:
+
+1. The Postgres node's `queryReplacement` **array branch does not exist in
+   2.11.2**. Every binding had been written to use it, and would have bound
+   **one** parameter where the statement wanted twelve.
+2. The Code node has **no `fetch`** — it runs in `vm2` — on 2.35.7 as much
+   as on 2.11.4 (D33). The provider call could never have run anywhere, and
+   the retry harness could not see it because it ran the extracted source in
+   plain Node.
+
+Both are fixed and both are now covered by tests that would catch a
+recurrence. See `docs/OPERATIONS.md` "n8n version".
 
 ### Two things the deployment taught
 
@@ -400,7 +409,7 @@ established, and the third time it caught something:
 
 No paid live calls were made to prove any of it.
 
-**Pinned to n8n 2.35.7**, and what the VPS runs is unknown — see
+**Pinned to n8n 2.11.4** to match the VPS (D32) — see
 `docs/OPERATIONS.md` "n8n version" before deploying.
 
 ### Step 15 — `CLIENT_NEW` `BUILT 2026-09-10`
@@ -521,7 +530,7 @@ Determined by doing it, not by reading documentation:
 | | |
 |---|---|
 | Container registries | `docker.n8n.io` **403** at the egress proxy, Docker Hub's blob CDN blocked. The documented Docker route is unavailable here. |
-| npm registry | reachable. `npm install n8n` → **n8n 2.35.7**, ~2.5 GB, 3 minutes |
+| npm registry | reachable. `npm install n8n@2.11.4` → ~2.5 GB, 3 minutes. (Unpinned picks up 2.35.7; the pin follows the VPS, D32) |
 | Headless execution | works, with a caveat: n8n 2.x **dropped `execute --file`**. A workflow must be `import:workflow`-ed and then run by id, so workflow JSON in this repo carries a stable id |
 | Postgres node | connected as **`phi_runtime`** through a credential seeded from `.env.local`, and read the D23 prompt registry: seven rows, hashes identical to what `load_prompts.py` reported |
 | Credentials | seeded by `scripts/local_n8n.sh seed-credentials` from `.env.local`. Nothing is pasted anywhere, and nothing touches the VPS |
@@ -1084,6 +1093,48 @@ being thin is the expected state of the system today.
     (bug 49).
 
 
+58. **Every Postgres binding in the workflow was written for a branch the
+    target version does not have.** D31's fix — one `{{ [a, b, c] }}` array
+    per node — was made against `n8n-nodes-base` 2.35.7. The VPS runs
+    2.11.4, whose 2.11.2 nodes have **no array branch**: an array is
+    `JSON.stringify`'d like any other object and pushed as ONE value.
+    Driving the real 2.11.2 module over the workflow's own expressions:
+    Open run bound 1 of 12, Record attempts 1 of 9, Record success 1 of 12,
+    Dead letter 1 of 10. Every Postgres node would have failed on the first
+    run.
+
+    Replaced with one resolvable per parameter, each a JSON literal,
+    unwrapped in SQL with `($n::jsonb #>> '{}')` — verified identical
+    against **both** real implementations. `test_n8n_sql.py` now asserts,
+    for every node on every run, that the bound count equals the highest
+    `$n` the statement uses, and that no node uses the array form. See D32.
+
+59. **The Call provider node used `fetch`, which the Code node does not
+    have.** n8n's Code node runs inside `vm2`; that sandbox provides
+    `setTimeout`, `Promise`, `Math`, `JSON`, `Date` and `helpers`, and
+    **not** `fetch` or `URL` — verified empirically, the same answer on
+    2.11.4 and 2.35.7. The node could never have run on any version.
+
+    Every retry assertion passed regardless, because `n8n_retry.js`
+    extracted the source and ran it with `new Function(...)` in plain Node,
+    where `fetch` is a global. **The harness was more capable than the
+    runtime it modelled** — bug 57 in different clothes. The node now uses
+    `helpers.httpRequest` with `returnFullResponse` and
+    `ignoreHttpStatusErrors`, read from n8n-core 2.11.1 rather than
+    guessed, and the harness runs the source in `node:vm` with only the
+    globals vm2 provides. See D33.
+
+60. **A `ReferenceError` in that node was retried five times with
+    exponential backoff and then dead-lettered as a transport failure.**
+    Found while proving the new harness catches bug 59: the node treated
+    every thrown error as a network error. Python retries `URLError`,
+    `TimeoutError` and `ConnectionError` and nothing else, so a `NameError`
+    there fails on the first attempt. Thrown errors are now classified by
+    network `code` exactly as statuses are classified by number; a
+    programming error has no such code, fails once, and is reported as
+    itself. A bug in that node must be loud, not slow.
+
+
 **Also, and recorded rather than amended away:** commit `c99ebf4` was made
 on a red suite. `run_all.sh` printed `FAILURES PRESENT` and the command
 chain did not gate on its exit code. The rule in `CLAUDE.md` is to run the
@@ -1409,10 +1460,11 @@ Two Engine 7 items for the practitioner, neither blocking:
   suite, so behaviour cannot drift (D26, D31). The remaining n8n gap is
   that `CLIENT_NEW` exists only as `scripts/client_new.py`; the workflow
   form of it is step 15's n8n half and is not written.
-- **The VPS runs n8n 2.11.4; `scripts/local_n8n.sh` pins 2.35.7.** Workflow
-  JSON is version-sensitive. `workflows/run_engine.json` must not be
-  assumed importable on the VPS until that is resolved — see
-  `docs/OPERATIONS.md` "n8n version".
+- **n8n is pinned to 2.11.4, matching the VPS (D32).** Two runtime
+  settings on that instance still decide whether the workflow works and are
+  not in this repo: `N8N_BLOCK_ENV_ACCESS_IN_NODE` (the workflow reads
+  `$env`) and `N8N_RUNNERS_ENABLED` (which sandbox the Code node uses).
+  Check both before importing — `docs/OPERATIONS.md` "n8n version".
 - Deterministic flag rule set not yet written; `case_flags` and the gate
   work, but the SQL rules that populate HOLD/NOTE are still to come and
   must start narrow

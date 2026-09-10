@@ -111,6 +111,23 @@ def insert_columns(text: str) -> dict[str, set[str]]:
     return out
 
 
+BIND_CTX = {
+    "nodes": {
+        "Inputs": {"CLIENT_ID": None, "ENGINE_ID": "E7", "MODE": "FOUNDATION",
+                   "PASS": None, "MODEL_ROLE": "MODEL_RESEARCH", "RUN_CONTEXT": {}},
+        "Build request": {"run_id": "r-1", "attempt": 1, "model_name": "m",
+                          "totals": {"duration_ms": 1}},
+        "Call provider": {"provider_failed": False},
+    },
+    "json": {"run_id": "r-1", "prompt_file": "p.md", "prompt_hash": "h",
+             "model_name": "m", "ENGINE_ID": "E7", "input_tokens": 1,
+             "output_tokens": 2, "raw": "x", "errors": ["e"],
+             "transport_attempts": [], "human_output": "", "structured": {},
+             "control": {}, "primary_tag": None, "secondary_handoffs": {}},
+    "env": {},
+}
+
+
 def main() -> int:
     if shutil.which("node") is None:
         print("\nSKIPPED: node is not installed. The workflow's SQL was NOT "
@@ -125,27 +142,74 @@ def main() -> int:
                                          _role_password("POSTGRES_RUNTIME_PASSWORD")))
 
     # ------------------------------------------------------------------
-    print("\nhow n8n binds parameters (the part that is not SQL)")
+    print("\nhow n8n binds parameters, ON 2.11.4 (the part that is not SQL)")
 
-    # These three are why every node uses the array form. Each is a real
-    # n8n behaviour, asserted here so the reason survives as a test rather
-    # than as a comment somebody deletes.
+    # These assertions describe n8n-nodes-base 2.11.2, which is what n8n
+    # 2.11.4 ships and what this system runs on (D32). They are here so the
+    # reason for an odd-looking binding form survives as a test rather than
+    # as a comment somebody deletes -- and the first draft of that form was
+    # deleted-by-accident in advance: it used an ARRAY branch that only
+    # exists in later releases, and on 2.11.4 it bound ONE parameter where
+    # the statement wanted twelve.
+
+    # The check that would have caught it outright, applied to every node.
+    doc0 = json.loads(WORKFLOW.read_text(encoding="utf-8"))
+    wf0 = doc0[0] if isinstance(doc0, list) else doc0
+    pg_nodes = [n for n in wf0["nodes"] if n["type"].endswith("postgres")]
+
+    arity_ok, arity_detail = True, []
+    for n in pg_nodes:
+        wanted = max((int(m) for m in re.findall(r"\$(\d+)", n["parameters"]["query"])),
+                     default=0)
+        _, bound = bind(n["name"], BIND_CTX)
+        if len(bound) != wanted:
+            arity_ok = False
+            arity_detail.append(f"{n['name']}: binds {len(bound)}, statement needs {wanted}")
+    check("every node binds exactly as many parameters as its statement uses",
+          arity_ok, "; ".join(arity_detail))
+
+    # The form itself. One resolvable per parameter, each a JSON literal.
+    check("no node uses the array form, which 2.11.4 does not have",
+          all("{{ [" not in (n["parameters"].get("options", {})
+                             .get("queryReplacement") or "") for n in pg_nodes),
+          str([n["name"] for n in pg_nodes
+               if "{{ [" in (n["parameters"].get("options", {})
+                             .get("queryReplacement") or "")]))
+
     _, v = bind("Handoff registry", {
         "nodes": {"Inputs": {"ENGINE_ID": "E7", "MODE": "FOUNDATION"}}})
-    check("the array form binds one value per element", v == ["E7", "FOUNDATION"], str(v))
+    check("each parameter arrives as its own JSON literal",
+          v == ['"E7"', '"FOUNDATION"'], str(v))
 
     _, v = bind("Open run", {
         "nodes": {"Inputs": {"CLIENT_ID": None, "ENGINE_ID": "E7", "MODE": "FOUNDATION",
                              "MODEL_ROLE": "MODEL_RESEARCH", "RUN_CONTEXT": {}}},
         "json": {"run_id": str(uuid.uuid4()), "prompt_file": "engine7.md",
                  "prompt_hash": "abc", "model_name": "m"}})
-    check("a null client binds as SQL NULL, not the string 'null'",
-          v[0] is None, repr(v[0]))
-    check("...and every element is present, so the numbering cannot shift",
+    # 2.11.2 turns a real null into the STRING 'null', which against a uuid
+    # column is an error and against text is worse, because it succeeds. The
+    # JSON literal `null` survives as four characters and SQL turns it back
+    # into a real NULL with #>> '{}' -- proven at the database below, where
+    # a knowledge-clock run opens with client_id IS NULL.
+    check("a null binds as the JSON literal null, not a bare 'null'",
+          v[0] == "null", repr(v[0]))
+    check("...and every parameter is present, so the numbering cannot shift",
           len(v) == 12, str(len(v)))
 
-    # A free-text value with a comma in it. Under the string form n8n would
-    # have split this into two parameters and shifted everything after it.
+    # An absent value is the trap: JSON.stringify(undefined) returns
+    # undefined, not a string, and stringToArray('') drops it -- shifting
+    # every parameter after it. `?? null` before stringify is what stops it.
+    _, v = bind("Open run", {
+        "nodes": {"Inputs": {"ENGINE_ID": "E7", "MODE": "FOUNDATION",
+                             "MODEL_ROLE": "MODEL_RESEARCH"}},
+        "json": {"run_id": str(uuid.uuid4()), "prompt_file": "e.md",
+                 "prompt_hash": "abc", "model_name": "m"}})
+    check("an ABSENT input still binds a parameter rather than vanishing",
+          len(v) == 12 and v[0] == "null" and v[2] == "null", str(len(v)))
+
+    # A free-text value with a comma. A bare string is not JSON, so 2.11.2
+    # splits it on commas into several parameters and shifts everything
+    # after it. As a JSON literal it is one value.
     _, v = bind("Dead letter", {
         "nodes": {"Inputs": {"CLIENT_ID": None, "ENGINE_ID": "E1"},
                   "Call provider": {"provider_failed": False},
@@ -154,11 +218,22 @@ def main() -> int:
         "json": {"input_tokens": 1, "output_tokens": 2, "raw": "x",
                  "errors": ["CASE_VERSION: required, and ROUTE: bad"]}})
     check("a value containing a comma stays ONE parameter",
-          len(v) == 10 and "," in v[6], str(len(v)))
+          len(v) == 10 and "," in v[6], f"{len(v)} params, [6]={v[6]!r}")
     check("...and the job_type keeps its literal prefix",
-          v[8] == "RUN_ENGINE_E1", repr(v[8]))
+          v[8] == '"RUN_ENGINE_E1"', repr(v[8]))
 
-    # ------------------------------------------------------------------
+    # An empty string is dropped by stringToArray; as a JSON literal it is
+    # the two characters "" and survives.
+    _, v = bind("Record success", {
+        "nodes": {"Inputs": {"CLIENT_ID": None, "MODE": "INIT"},
+                  "Build request": {"attempt": 1, "run_id": str(uuid.uuid4()),
+                                    "totals": {"duration_ms": 1}}},
+        "json": {"input_tokens": 1, "output_tokens": 2, "human_output": "",
+                 "structured": {}, "control": {}, "primary_tag": None,
+                 "secondary_handoffs": {}}})
+    check("an EMPTY string binds as a parameter instead of disappearing",
+          len(v) == 12 and v[6] == '""', f"{len(v)} params, [6]={v[6]!r}")
+
     print("\nthe columns each side writes")
 
     py = insert_columns((REPO / "scripts" / "run_engine.py").read_text(encoding="utf-8"))

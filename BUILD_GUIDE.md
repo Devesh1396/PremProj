@@ -220,16 +220,25 @@ port of n8n's own algorithm (D31) — that is what caught a missing
 `engine_mode`, a missing `client_id` on the dead letter, and an INSERT into
 a column that has never existed. Transport retry matches the reference
 exactly (D29): exponential, jittered, capped, `Retry-After` honoured, every
-physical attempt in `cost_events`.
+physical attempt in `cost_events`, and a thrown error classified by network
+code so a bug in the node fails once instead of being retried six times.
+
+**Written for the sandbox it runs in (D33).** The Code node has no `fetch`
+and no `URL` — it is `vm2` — so the provider call goes through
+`helpers.httpRequest`, and the retry harness runs the node's own source in
+`node:vm` with only the globals vm2 provides. Every Postgres parameter is
+one resolvable evaluating to a JSON literal, unwrapped with
+`($n::jsonb #>> '{}')`: the form that is exact on 2.11.2 **and** 2.35.7,
+because 2.11.2 has no array branch (D32).
 
 No further step-11 work is to be started. Changes to it are bug fixes only.
 
 **No n8n credentials are required.** `scripts/local_n8n.sh` installs n8n
 from npm at a **pinned** version (the container registries are blocked in
 some environments), seeds a `phi_runtime` credential from `.env.local`,
-imports a workflow and runs it headlessly. **The VPS runs 2.11.4** against
-that pin — see `docs/OPERATIONS.md` "n8n version" for the choice that has
-to be made before the workflow is deployed there.
+imports a workflow and runs it headlessly. **Pinned to 2.11.4, matching
+the VPS** (D32) — the pin follows the VPS and is never raised to keep
+current.
 
 **The port must mirror the reference on all three outputs, not two.** D24:
 a run produces human output, a substantive handoff, and a control block.

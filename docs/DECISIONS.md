@@ -1259,6 +1259,144 @@ invisible in the text and one of them was in the JSON around it.
 
 ---
 
+## D32 — n8n is pinned to 2.11.4, the version the VPS runs. The VPS is not upgraded
+**SETTLED 2026-09-10**
+
+The VPS's n8n stack runs **three live business automations** (GFG T1 v2,
+AiSensy, a detection PoC) that have nothing to do with this build. An
+upgrade window is not free, and there was nothing to buy by taking one: the
+binding quirks this workflow depends on knowing were read out of the
+installed node's own source, not inherited from a newer release.
+
+**The pin follows the VPS. It is never raised to keep current.** A future
+session that "helpfully" bumps `N8N_VERSION` is reintroducing the problem
+this decision closes.
+
+### Re-pinning was not a one-line change, and that is the point
+
+`n8n-nodes-base` **2.11.2** is what n8n 2.11.4 ships. Diffing its
+`executeQuery.operation.js` against 2.35.7's turned up one difference, and
+it was load-bearing:
+
+```
+2.35.7   an expression evaluating to an ARRAY pushes one value per
+         element, preserving null and passing strings through whole
+2.11.2   there is no such branch. An array is JSON.stringify'd like any
+         other object and pushed as ONE value
+```
+
+Every `queryReplacement` in `workflows/run_engine.json` had been written as
+a single `{{ [a, b, c] }}` to use that branch — the fix from D31, made
+against the wrong version. On 2.11.4 that binds **one** parameter where the
+statement wants twelve, and **every Postgres node in the workflow fails on
+the first run**. Verified by driving the real 2.11.2 module: Open run
+bound 1 of 12, Record attempts 1 of 9, Record success 1 of 12, Dead letter
+1 of 10.
+
+### The form that is exact on both
+
+One resolvable per parameter, each evaluating to a **JSON literal**:
+
+```
+={{ JSON.stringify(a ?? null) }},{{ JSON.stringify(b ?? null) }}
+```
+
+`isJSON()` is then true for every one, so each is pushed whole on either
+version — no branch that only one of them has. SQL unwraps with
+`($n::jsonb #>> '{}')`, which turns JSON `null` into a real SQL NULL and
+returns a comma-bearing string intact. `?? null` before `JSON.stringify` is
+not decoration: `JSON.stringify(undefined)` returns `undefined`, not a
+string, and `stringToArray('')` drops it — shifting every later parameter.
+
+Verified against **both** real implementations over the workflow's own
+expressions: identical values, identical count, and the count matches the
+highest `$n` each statement uses. `test_n8n_sql.py` asserts that arity
+match for every node on every run, and that no node uses the array form.
+
+### What was checked before accepting the pin
+
+| Node | Workflow uses | 2.11.2 supports |
+|---|---|---|
+| `postgres` | 2.5 | 2 … **2.5** … 2.6 |
+| `code` | 2 | 1, **2** |
+| `if` | 2.2 | 2, 2.1, **2.2**, 2.3 |
+| `executeWorkflowTrigger` | 1.1 | 1, **1.1** |
+
+*Rejected:* upgrading the VPS. It buys a workflow proven against the
+version it runs on — which re-pinning also buys, at no risk to three live
+automations.
+
+*Rejected:* keeping the 2.35.7 pin and "testing on 2.11.4 later". Later is
+after the first import fails.
+
+---
+
+## D33 — The Code node has no `fetch`, and a test that runs the code in plain Node cannot know that
+**SETTLED 2026-09-10**
+
+`workflows/run_engine.json`'s Call provider node was written with
+`await fetch(url, …)`. **It could never have run.** n8n's Code node
+executes inside `vm2`, and that sandbox does not provide `fetch` or `URL`.
+Verified empirically against the installed vm2 — the same answer on 2.11.4
+and 2.35.7, so this was never a version question:
+
+```
+setTimeout function   Promise function   Math object
+JSON object           Date function      helpers object
+fetch UNDEFINED       URL   UNDEFINED
+```
+
+Every retry assertion passed anyway, because `testing/n8n_retry.js`
+extracted the node's source and ran it with `new Function(...)` **in plain
+Node, where `fetch` is a global**. The harness was more capable than the
+runtime it claimed to model, which is the same failure as bug 57 wearing
+different clothes: a check that cannot see the condition it exists to
+catch.
+
+### Two fixes, and the second is the durable one
+
+**The node** now calls `helpers.httpRequest`, which the Code node's context
+does provide. Options read from n8n-core 2.11.1's implementation, not
+guessed:
+
+| | |
+|---|---|
+| `returnFullResponse: true` | returns `{ body, headers, statusCode, statusMessage }` |
+| `ignoreHttpStatusErrors: true` | sets axios `validateStatus = () => true`, so a 4xx/5xx **returns** instead of throwing — which is what lets the retry loop see the status and decide |
+| a network failure | still throws, and is retryable, as in Python |
+
+Header names arrive **lowercased** (axios), so `Retry-After` is read
+case-insensitively.
+
+**The harness** now runs the extracted source in `node:vm` with a context
+carrying exactly the host globals vm2 provides and nothing else. A fresh vm
+context has the JS intrinsics and none of Node's additions, which is the
+same shape — so a node reaching for `fetch` throws `ReferenceError` there
+just as it would in n8n. `node:vm` is built in; **vm2 is not a dependency
+of this repository and must not become one for a test to run** — the same
+reasoning as `scripts/trigram.py` and `testing/n8n_bind_params.js`.
+
+### The bug the fix uncovered
+
+With `fetch` restored temporarily to prove the harness catches it, the
+`ReferenceError` was **retried five times with exponential backoff** and
+then dead-lettered as a transport failure. The node treated every thrown
+error as a network error; Python retries `URLError`, `TimeoutError` and
+`ConnectionError` and **nothing else**, so a `NameError` there fails on the
+first attempt.
+
+So thrown errors are now classified by network `code` (`ECONNREFUSED`,
+`ETIMEDOUT`, `ENOTFOUND`, …) exactly as statuses are classified by number.
+A programming error has no such code, fails once, and is reported as
+itself. A bug in this node must be loud, not slow.
+
+*Rejected:* requiring vm2 in the test suite to get a perfect sandbox.
+`node:vm` reproduces the property under test — host globals absent — and
+adding an n8n internal as a test dependency is how a suite starts testing
+n8n instead of this build.
+
+---
+
 ## OPEN
 
 **O1 — Intake form. `RESOLVED FOR V1` — see D22.** Core Intake V1 is built:

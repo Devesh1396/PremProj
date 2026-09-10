@@ -26,7 +26,7 @@ finished it must keep working on n8n + PostgreSQL + an LLM API alone.
 
 | File | When |
 |---|---|
-| `docs/DECISIONS.md` | **Before proposing any structural change.** 31 settled decisions with rationale and rejected alternatives. |
+| `docs/DECISIONS.md` | **Before proposing any structural change.** 33 settled decisions with rationale and rejected alternatives. |
 | `docs/MASTER_SPEC.md` | The 40-phase build specification plus amendments. |
 | `BUILD_PLAN.md` | Milestones, dependencies, acceptance criteria. |
 | `PROGRESS.md` | What actually works, tests passed, bugs fixed, next exact task. |
@@ -312,12 +312,20 @@ strategies in it and Pass B reasons from an empty retrieval set — that is
 expected, not a bug, and `PROGRESS.md` says so before the first full case
 is run.
 
-**Before deploying:** `scripts/local_n8n.sh` pins n8n **2.35.7**. The VPS
-runs **2.11.4**, and workflow JSON is version-sensitive. The choice —
-upgrade the VPS or re-target the workflow — is in `docs/OPERATIONS.md`
-"n8n version" and has not been made. The VPS's n8n stack runs three live
-business automations; **never touch that stack, its volume, or its
-`docker-compose.yml`.**
+**n8n is pinned to 2.11.4, the version the VPS runs (D32).** The pin
+follows the VPS; it is **never** raised to keep current. Re-pinning found
+two things that would have failed on first run and are now covered by
+tests: the Postgres node's `queryReplacement` **array branch does not exist
+in 2.11.2**, and the Code node's `vm2` sandbox has **no `fetch` and no
+`URL`** (D33). Every binding is now one resolvable per parameter, each a
+JSON literal, unwrapped in SQL with `($n::jsonb #>> '{}')` — a form
+verified exact against both real implementations. The provider call goes
+through `helpers.httpRequest`, and the retry harness runs the node's source
+in `node:vm` with only the globals vm2 provides, so a node reaching for a
+host global fails in the test as it would in n8n.
+
+The VPS's n8n stack runs three live business automations; **never touch
+that stack, its volume `n8n-sdc9_n8n_data`, or its `docker-compose.yml`.**
 
 ## Do NOT build
 

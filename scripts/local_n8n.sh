@@ -29,19 +29,30 @@
 
 set -euo pipefail
 
-# PINNED. `npm install n8n` unpinned picked up 2.35.7 on 2026-09-10 and would
-# pick up something else tomorrow. Workflow JSON is version-sensitive -- node
-# `typeVersion` values and the CLI surface both move across majors, and 2.x
-# already dropped `execute --file` -- so a parity result proven against an
-# unpinned install proves nothing reproducible.
+# PINNED TO WHAT THE VPS RUNS. 2.11.4, decided 2026-09-10 (D32).
 #
-# Raise this deliberately, re-run the parity suite, and record the result.
-# Do NOT let it float.
-N8N_VERSION="${N8N_VERSION:-2.35.7}"
+# The VPS's n8n stack runs three live business automations. Upgrading it is
+# not a free action, and there is nothing to buy: the binding quirks this
+# build depends on knowing were read out of the installed node's source,
+# not inherited from a newer release. So the workflow targets the version
+# it will run on, and the pin here is what proves it.
+#
+# That decision was not free of consequences. 2.35.7 has an ARRAY BRANCH in
+# the Postgres node's queryReplacement handling that 2.11.2 does not, and
+# every binding in workflows/run_engine.json had been written to use it.
+# On 2.11.4 that binds ONE parameter where the statement wants twelve.
+# See DECISIONS.md D32.
+#
+# Raise this ONLY to follow the VPS, never to "keep current". Re-run
+# testing/test_n8n_parity.py and testing/test_n8n_sql.py afterwards, and
+# re-read the Postgres node's executeQuery.operation.js at the new version
+# before believing the result. Do NOT let it float.
+N8N_VERSION="${N8N_VERSION:-2.11.4}"
 
-# The VPS runs its own n8n and this pin does not change it. If the two differ
-# across a major, a workflow proven here may not import there. See
-# docs/OPERATIONS.md "n8n version" for how to check.
+# What the VPS runs, recorded here so the pin can be checked against it
+# without opening another file. Verified 2026-09-10.
+N8N_VPS_VERSION="2.11.4"
+
 N8N_HOME="${N8N_HOME:-${TMPDIR:-/tmp}/premproj-n8n}"
 N8N_BIN="$N8N_HOME/node_modules/.bin/n8n"
 

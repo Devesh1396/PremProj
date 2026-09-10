@@ -138,52 +138,77 @@ docker compose exec postgres psql -U phi_admin -d phi
 
 ## n8n version
 
-**ANSWERED 2026-09-10, and the answer is a gap.**
+**DECIDED 2026-09-10: pinned to 2.11.4, the version the VPS runs.
+The VPS is not to be upgraded.** See `DECISIONS.md` D32.
 
 | | |
 |---|---|
-| `scripts/local_n8n.sh` pins | **2.35.7** |
+| `scripts/local_n8n.sh` pins | **2.11.4** |
 | The VPS runs | **2.11.4** |
 
-Workflow JSON is version-sensitive: node `typeVersion` values move across
-releases, and 2.x dropped `n8n execute --file`, which is why workflows in
-this repo carry a stable `id` and are imported before being run.
-`workflows/run_engine.json` uses `postgres` 2.5, `code` 2, `if` 2.2 and
-`executeWorkflowTrigger` 1.1, and its parameter binding depends on the
-**v2.5** branch of the Postgres node's `queryReplacement` handling (D31) —
-which is precisely the kind of thing that differs between generations.
-
-**So `workflows/run_engine.json` must not be assumed importable on the VPS
-as it stands.** It has not been tried there, and trying it is not urgent:
-`LLM_API_KEY` is empty on the VPS and nothing there makes a call yet.
-
-### The choice, and it is the practitioner's to confirm
-
 The n8n stack on that box runs **three live business automations** (GFG T1
-v2, AiSensy, a detection PoC) that have nothing to do with this build.
-Upgrading it is not a free action.
+v2, AiSensy, a detection PoC) that have nothing to do with this build. An
+upgrade window is not free, and there was nothing to buy by taking one: the
+binding quirks this workflow depends on knowing were read out of the
+installed node's own source, not inherited from a newer release.
 
-| Option | What it costs |
-|---|---|
-| **Upgrade the VPS to 2.35.7** *(preferred)* | an upgrade of a stack running three live automations, with its volume `n8n-sdc9_n8n_data` backed up first (it already is: `/root/n8n-data-2026-09-10.tar.gz`). Buys a workflow that is proven, byte for byte, against the version it will run on |
-| **Re-target the workflow at 2.11.4** | re-pin `N8N_VERSION`, re-check every node `typeVersion`, re-verify the `queryReplacement` binding semantics against 2.11.4's own source, and re-run the parity and SQL suites. The three automations are untouched |
+**That stack, the `n8n-sdc9_n8n_data` volume and the n8n
+`docker-compose.yml` are out of scope for this build, permanently.** This
+repo adds a database to the same Docker network (`n8n-sdc9_default`, no
+published port) and nothing else.
 
-Do not pick by preference. Pick by whether the three live automations can
-tolerate an n8n upgrade window, which is a question about that business,
-not about this build. Until it is picked, the workflow is proven for
-2.35.7 and for nothing else.
+### What the decision cost, and why it was worth finding
 
-Whichever is chosen, **re-run `test_n8n_parity.py` and `test_n8n_sql.py`
-afterwards.** The failure mode this section exists to prevent is a workflow
-that passes every local test and refuses to import — or worse, imports and
-binds its parameters differently — on the machine it was built for.
+Re-pinning was not a one-line change. Verifying against 2.11.2's actual
+source — `n8n-nodes-base` 2.11.2 is what n8n 2.11.4 ships — turned up two
+things that would have failed on first run:
 
-### Never touch the n8n side
+1. **The Postgres node's `queryReplacement` array branch does not exist in
+   2.11.2.** Every binding in `workflows/run_engine.json` had been written
+   as a single `{{ [a, b, c] }}` to use it. On 2.11.4 that binds **one**
+   parameter where the statement wants twelve. Every Postgres node in the
+   workflow would have failed on the first run.
+2. **The Code node has no `fetch`.** It runs inside `vm2`, whose sandbox
+   provides `setTimeout`, `Promise`, `Math`, `JSON`, `Date` and `helpers`
+   and **not** `fetch` or `URL` — on 2.35.7 just as much as on 2.11.4. The
+   provider call now goes through `helpers.httpRequest`.
 
-That stack, the `n8n-sdc9_n8n_data` volume and the n8n `docker-compose.yml`
-are out of scope for this build, permanently. This repo adds a database to
-the same Docker network (`n8n-sdc9_default`, no published port) and nothing
-else.
+Neither was a version regression. The first was a dependency on a branch
+that only exists in later releases; the second was never going to work
+anywhere. Both are now covered by tests.
+
+### Node typeVersions, checked against 2.11.2
+
+| Node | Workflow uses | 2.11.2 supports |
+|---|---|---|
+| `postgres` | 2.5 | 2, 2.1, 2.2, 2.3, 2.4, **2.5**, 2.6 |
+| `code` | 2 | 1, **2** |
+| `if` | 2.2 | 2, 2.1, **2.2**, 2.3 |
+| `executeWorkflowTrigger` | 1.1 | 1, **1.1** |
+
+### Before the workflow is imported on the VPS
+
+Two runtime settings decide whether it works, and neither is in this repo:
+
+* **`$env` access.** The workflow reads `LLM_BASE_URL`, `LLM_API_KEY` and
+  the transport-retry knobs from `$env`. If `N8N_BLOCK_ENV_ACCESS_IN_NODE`
+  is set on that instance, every one of those reads returns nothing and the
+  provider call fails in a way that looks like a bad base URL. Check it.
+* **The task runner.** With `N8N_RUNNERS_ENABLED` the Code node runs in the
+  JS task runner instead of `vm2`. The workflow is written for the stricter
+  of the two — `helpers.httpRequest`, no `fetch` — so it works either way,
+  but a change to that setting is a change to what the Code node can reach
+  and is worth knowing about before it happens.
+
+### If the VPS is ever upgraded
+
+Re-pin `N8N_VERSION` **to follow the VPS, never to keep current**, then
+re-read `executeQuery.operation.js` at the new version and re-run
+`test_n8n_parity.py` and `test_n8n_sql.py`. The binding form now in use —
+one resolvable per parameter, each a JSON literal — was chosen because it
+is exact on 2.11.2 **and** 2.35.7, verified against both real
+implementations, so an upgrade should be uneventful. "Should be" is not
+"is": read the source and re-run the suites.
 
 ---
 
