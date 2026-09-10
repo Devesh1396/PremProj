@@ -448,13 +448,11 @@ biomedical API, so the suite stubs the transport and drives the real
 adapters through the real chokepoint. Policy, cursor, query history,
 refusals, parsing and handoff are proven; the wire format is not.
 
-**Step 17 groundwork is in place.** `scripts/embedding.py` is the single
-embedding boundary — text only, unit-norm checked, dimension checked, cost
-recorded at the TEXT rate (D38). K14 builds retrieval on top of it; the
-guarantees are already enforced.
+**Step 17 is BUILT** — `scripts/embed_library.py`, `scripts/retrieval.py`,
+migration `023`, `testing/test_retrieval.py`. See D39.
 
-**Next:** step 17, K14 embedding and hybrid retrieval. **Do not begin mass
-ingestion** until one real source has run the whole loop.
+**Next:** step 18, the evaluation layers. **Do not begin mass ingestion**
+until one real source has run the whole loop.
 
 `MODEL_EXTRACTION` on the cheapest capable model — highest volume.
 Use the **Batch API** where the provider offers it: the knowledge clock is
@@ -466,12 +464,29 @@ before the LLM call.
 
 Concurrency 2–3 on this VPS.
 
-## Step 17 — K14 embedding and hybrid retrieval
+## Step 17 — K14 embedding and hybrid retrieval  ✅ BUILT
 
 Metadata filter → full-text → vector → dedupe → rerank.
 Do not regenerate unchanged embeddings.
 
 **Acceptance:** the cross-domain case retrieves across insulin sensitivity, hepatic fat, triglycerides, muscle, appetite, sleep, vegetarian implementation, exercise and behaviour — not three disease folders.
+
+**Met, at the default setting** (D39). `test_retrieval.py` seeds a
+lopsided library — six strategies in each of three disease folders, one in
+each of six other domains — and a page of twelve reaches all nine. The
+counterfactual runs the same function with the per-bucket cap lifted and
+reaches fewer, so the breadth is the mechanism's and not the fixture's.
+
+Four channels, not three: the case's **normalized concepts** are an input,
+and `strategy_concepts` contributes scored hits. Similarity alone returns
+the presenting complaint's folder however good the embeddings are — the
+sleep material is relevant because Engine 1 said so, not because the words
+resemble each other.
+
+`per_bucket_cap` is derived (`limit // len(concepts)`), never a constant.
+Freshness is a hash of the embedded **text**, so a second pass makes zero
+provider calls. Without pgvector the vector channel is skipped and the
+diagnostics say so (D15) — verified on the no-extension floor.
 
 ## Step 18 — Evaluation layers A–E
 

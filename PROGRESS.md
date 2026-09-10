@@ -26,14 +26,21 @@ not inspected by eye.**
 
 | | |
 |---|---|
-| Schema | 23 migrations, 78 tables, 24 views, 51 enums, 211 indexes, 45 triggers, 60 policies, 30 RLS tables |
-| Suites | **20**, green from an empty database, each run followed by a re-run, and on the D15 floor with no optional extension available |
+| Schema | 24 migrations, 83 tables, 28 views, 51 enums, 225 indexes, 78 check constraints, 50 triggers, 60 policies, 30 RLS tables |
+| Suites | **21**, green from an empty database, each run followed by a re-run, and on the D15 floor with no optional extension available |
 | CI | `.github/workflows/tests.yml` — every push on every branch, **with and without pgvector** |
 | Engines | All seven canonical prompts installed; E6 → E1 Pass A → E7 → E1 Pass B proven **live** |
 | Ontology | 26 domains, 269 concepts seeded from the curriculum, hash-verified |
 | Registries | **Four**: prompts (`010`), contract (`012`), handoffs (`013`), prices (`016`) |
 | Backup | Restore drill performed 2026-09-10; roles gap found and fixed |
-| Bugs | 61 found and fixed, each with a regression test |
+| Bugs | 62 found and fixed, each with a regression test |
+
+*Counts measured 2026-09-10 against the local full-capability database, not
+carried forward: `pg_tables`, `pg_views`, `pg_type typtype='e'`,
+`pg_indexes`, `pg_constraint contype='c'`, `pg_trigger NOT tgisinternal`,
+`pg_policies`, `pg_tables.rowsecurity`, all filtered to `public`. Earlier
+entries in this file used a different (unrecorded) method and do not
+reconcile with these; re-measure rather than adjusting them.*
 
 **D5 is ANSWERED and Engine 1 is not to be staged.** Measured on a live
 provider 2026-09-09 (see *D5 ANSWERED* below):
@@ -102,6 +109,67 @@ normalized → delta analysis → evidence researched → strategy decided
 **Discovery (K02–K06) is built too** — `knowledge_discover.py` and the
 `acquisition.py` chokepoint. Five ways to arrive, no new way to process.
 
+### The embedding endpoint is live — verified 2026-09-10
+
+`gemini-embedding-2` was called through `embedding.embed()` — the
+production path, no stub — and returned:
+
+```
+model gemini-embedding-2   dims 1536 (column 1536)   L2 norm 1.000000028
+```
+
+Every check passed at the call: text-only, dimension against
+`embedding_dim()`, unit norm inside `embedding_norm_tolerance()` (1e-3),
+and the cost row priced `PRICE_REGISTRY` at the TEXT rate — 7 tokens,
+$0.000001. So **D34 Option A is confirmed on the live provider**, not only
+in the probe: 1536 dimensions come back already normalised, which is the
+single thing `gemini-embedding-001` did not do.
+
+Two calls in total, both incidental to a CLI smoke test. This is a
+one-call verification of the wire format and **not** evidence about
+throughput, rate limits or cost at corpus scale.
+
+**Step 17: K14 embedding and hybrid retrieval are built and tested.**
+
+```
+metadata filter → full text → vector → dedupe → rerank
+```
+
+| | |
+|---|---|
+| `023_embedding_freshness.sql` | `embedding_source_hash` + `embedded_at` on the five embeddable tables, `v_embedding_coverage` |
+| `embed_library.py` | the backfill. Chooses rows and text; never calls a provider — that is `embedding.py` (D38) |
+| `retrieval.py` | the four channels, the dedupe, and the rerank |
+| `test_retrieval.py` | 35 checks, green with pgvector and on the D15 floor without it, **ten consecutive runs on each** |
+
+**The acceptance criterion is met at the DEFAULT setting, which is the
+only version of it worth anything (D39).** The suite seeds a deliberately
+lopsided library — six strategies in each of three disease folders, one in
+each of six other domains, with the folders on PRIMARY concept links (1.0)
+and the rest on weaker ones (0.4) — and a page of twelve reaches all nine
+domains. The counterfactual runs **the same function** with the per-bucket
+cap lifted and returns **disease folders only**, so the breadth is
+attributable to the mechanism rather than to the fixture.
+
+The first version of this check passed on a coin flip. See **bug 62** —
+worth reading before writing any other ranking test.
+
+`per_bucket_cap` is **derived** (`limit // len(concepts)`), not a
+constant. A fixed 3 fails the criterion at a page of 12. An acceptance
+test that passes because the test chose the cap has tested the test.
+
+**"Do not regenerate unchanged embeddings" is proved by counting real
+calls**, not asserted: a second backfill pass makes **zero** provider
+calls and editing one row costs exactly one. The hash is of the embedded
+TEXT, not of the row — `retrieval_hits` moves on every retrieval, so a
+row hash would have made reading the library pay to re-embed it.
+
+**Without pgvector it degrades loudly (D15).** The vector channel is
+skipped, the diagnostics say why, weights renormalize over the channels
+that ran, and `v_embedding_coverage` reports NULL rather than zero —
+"not applicable", not "backfill has not run". Verified by running the
+suite on the no-extension floor, not by reading the branch.
+
 **What is NOT done, and should not be assumed:**
 - **No discovery adapter has ever reached its real API.** The build
   environment's egress proxy blocks `eutils.ncbi.nlm.nih.gov`,
@@ -111,14 +179,16 @@ normalized → delta analysis → evidence researched → strategy decided
   and the handoff are verified — and **the wire format is not**. This is a
   weaker claim than anything else in this build. Treat the first live
   `PUBMED` run as unverified code rather than as a regression.
-- **K14 itself.** `scripts/embedding.py` is the boundary and its
-  guarantees are tested, but nothing has been embedded and hybrid
-  retrieval is not built. The embedding provider call has never been made
-  from this code — the suite injects the transport.
+- **Bulk embedding has never been run on the live provider.** The wire
+  format now HAS been verified — see *The embedding endpoint is live* —
+  but every embedding in every suite still comes from an injected
+  transport, and no corpus has been embedded for real. The per-call
+  guarantees are proven; the throughput, the rate limits and the bill are
+  not.
 - **No real source has run the loop yet** — only fixtures and synthetic
   documents. Do not begin mass ingestion; one real source first, then the
   20-video pilot.
-- Steps 17–23.
+- Steps 18–23.
 - Engine 5 and the release path. `CLIENT_NEW` deliberately stops at the
   review queue; nothing yet turns an approval into client-facing output.
 - `STRIP_IDENTITY_FROM_ENGINE_PAYLOADS` is documented and **not enforced**
@@ -1178,6 +1248,59 @@ being thin is the expected state of the system today.
     Python defaults for E1–E5, and `Build request` throws `HandoffMissing`
     when the registry returns nothing. n8n is stricter than the reference in
     the safe direction, which is a documented difference rather than a gap.
+
+62. **The step 17 acceptance test passed on a coin flip.** The fixture gave
+    every strategy an identical link weight of 1.0, and the query
+    (`insulin resistance with hepatic fat and raised triglycerides`) matched
+    **no** strategy under `websearch_to_tsquery`, which ANDs its terms — a
+    summary saying "insulin sensitivity" does not contain `resist`, `hepat`
+    and `triglycerid` at once. So the full-text channel returned nothing,
+    every result scored identically on the concept channel, and the page was
+    decided by the tie-break: `ORDER BY (-score, kind, id)` on freshly
+    generated UUIDs. The stub embedder made it worse rather than better —
+    hashing the whole string gives distinct texts a near-zero, effectively
+    random similarity, and per-channel normalization then rescales that
+    noise across the full range, so the vector channel voted at random too.
+
+    It was green four times running before the bare floor caught it, and
+    green is exactly what a coin flip looks like most of the time.
+
+    Two fixes, both making the fixture carry signal a real library has:
+    the presenting complaint's concepts are **PRIMARY** links (1.0) and the
+    concepts Engine 1 raised alongside them are weaker (0.4) — which makes
+    the breadth *harder* to achieve, not easier; and the stub embedder gives
+    each topic keyword its own direction so texts about insulin land near
+    texts about insulin. The counterfactual was also sharpened from "returns
+    fewer domains" to "returns **only** the three disease folders", because
+    "fewer" still passes on a tie. Verified deterministic over **20
+    consecutive runs**, ten on each capability floor.
+
+    This is **V2 in a fifth disguise**. Nothing was hand-written twice this
+    time; the harness simply had no signal in it, so the assertion measured
+    randomness and reported it as retrieval quality. *A test whose fixture
+    cannot distinguish the right answer from the wrong one proves nothing,
+    the same way one that constructs both halves does.*
+
+    **Putting signal in then exposed three more assertions that were
+    statements about the fixture rather than about retrieval**, each caught
+    by a capability floor or by running from an empty database:
+
+    - *"uncapped returns exactly the three folders"* — it returns **two**,
+      twelve slots taken by hepatic fat and triglycerides alone. A sharper
+      collapse than the criterion names. Now: folders **only**, and strictly
+      fewer domains than the capped page.
+    - *"with no concepts, the query cannot reach sleep"* — a statement about
+      library size. In a library of 29 strategies a page of 10 reaches most
+      of it. Now measured as rank movement, which is size-independent.
+    - *"named material ranks first"* — true without pgvector and **false
+      with it**, because a row that both the lexical and vector channels
+      found legitimately outranks one the spine alone reached. Asserting it
+      would have been asserting a capability floor. Now: the spine is the
+      channel that **drove** the row onto the page.
+
+    Every one of those passed on the floor it was written on. The floors are
+    not a formality — they are three different libraries, and an assertion
+    that is really about corpus shape survives exactly one of them.
 
 
 **Also, and recorded rather than amended away:** commit `c99ebf4` was made

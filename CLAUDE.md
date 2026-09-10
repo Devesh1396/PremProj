@@ -26,7 +26,7 @@ finished it must keep working on n8n + PostgreSQL + an LLM API alone.
 
 | File | When |
 |---|---|
-| `docs/DECISIONS.md` | **Before proposing any structural change.** 38 settled decisions with rationale and rejected alternatives. |
+| `docs/DECISIONS.md` | **Before proposing any structural change.** 39 settled decisions with rationale and rejected alternatives. |
 | `docs/MASTER_SPEC.md` | The 40-phase build specification plus amendments. |
 | `BUILD_PLAN.md` | Milestones, dependencies, acceptance criteria. |
 | `PROGRESS.md` | What actually works, tests passed, bugs fixed, next exact task. |
@@ -221,9 +221,9 @@ A pipeline's exit status is its LAST command's. `| tail`, `| grep`,
 the suites and not reading the result is the same failure as not running
 them, with an extra step and more confidence.
 
-### V2. A test must not construct both halves of a comparison
+### V2. A test must not construct both halves of a comparison — or neither
 
-**Four times now** — bugs 49, 57, 59, 61. Every instance had the same
+**Five times now** — bugs 49, 57, 59, 61, 62. Every instance had the same
 shape: **the harness differed from production, so it proved nothing about
 production.**
 
@@ -233,6 +233,7 @@ production.**
 | 57 | a suite that could not see the condition it existed to catch | nothing, and it crashed instead of skipping |
 | 59 | the workflow's own code run in plain Node, where `fetch` is global | nothing — the node could never have run in `vm2` |
 | 61 | a hand-written "n8n row" against a hand-written "reference row" | nothing — both halves were invented, so they agreed |
+| 62 | a retrieval fixture where every row scored identically | nothing — the page was decided by UUID tie-break, and a coin flip is green most of the time |
 
 The rules that follow from it:
 
@@ -252,6 +253,15 @@ The rules that follow from it:
 - **A check that cannot run must SKIP loudly**, never pass quietly. A green
   suite that silently skipped its only real assertion is worse than a red
   one.
+- **The fixture must be able to tell the right answer from the wrong one.**
+  If every row scores the same, the assertion is measuring the tie-break.
+  Before trusting a ranking test, ask what it would return if the mechanism
+  under test were deleted — and if the honest answer is "the same thing,
+  sometimes", the fixture has no signal in it. Sharpen the claim too:
+  "fewer" passes on a tie where "only these three" does not.
+- **Repeat-run anything whose fixture generates identifiers.** Bug 62 was
+  green four consecutive times. Ten runs on each capability floor is cheap
+  and is what actually distinguishes deterministic from lucky.
 
 ---
 
@@ -287,11 +297,13 @@ run as `phi_runtime` at all (D25). See `PROGRESS.md` *Deployed to the VPS*.
 layer, all seven canonical prompts installed, and build steps **10b and
 11–15**. Step 11 is **frozen**: changes to it are bug fixes only.
 
-22 migrations, 84 tables, 29 views, 51 enums, 211 indexes, 66 check
-constraints, 45 triggers, 30 RLS tables, 60 policies. **Twenty test
-suites**, passing from an empty database, idempotent on a re-run, and
-verified in three capability configurations: full, **no pgvector**, and
-**no optional extension at all**.
+24 migrations, 83 tables, 28 views, 51 enums, 225 indexes, 78 check
+constraints, 50 triggers, 30 RLS tables, 60 policies — measured
+2026-09-10, with the counting queries recorded in `PROGRESS.md`; earlier
+figures used a different method and do not reconcile, so re-measure rather
+than adjust. **Twenty-one test suites**, passing from an empty database,
+idempotent on a re-run, and verified in three capability configurations:
+full, **no pgvector**, and **no optional extension at all**.
 
 Working end to end **on a live provider**, not only on the fixture:
 ```
@@ -468,6 +480,34 @@ derived from what was written, never echoed from the model's counts, and
 because `parse_handoff_block` already handles continuation lines — so K09
 needed **no change to frozen step 11**, to `run_engine.py`, or to either
 parity suite. Check the constraint before working around it.
+
+**Step 17: K14 is built — retrieval breadth is a MECHANISM (D39).**
+`metadata → full text → vector → dedupe → rerank`, and the case's
+normalized concepts are a **fourth channel**, not a filter. Similarity
+alone returns the presenting complaint's folder however good the
+embeddings are; the sleep material is relevant because Engine 1 said so,
+not because the words resemble each other. `per_bucket_cap` is **derived**
+(`limit // len(concepts)`) — a fixed 3 fails the step 17 acceptance
+criterion at a page of 12, and an acceptance test that passes because the
+test chose the cap has tested the test. Channel weights renormalize over
+the channels that ran, so no-pgvector changes recall and not the scale of
+the scores. **Held-out material (A3) is excluded by default**; only
+evaluation asks for it.
+
+**The embedding endpoint is live-verified (2026-09-10).**
+`gemini-embedding-2` through `embedding.embed()` returns **1536 dims at L2
+norm 1.000000028** — D34 Option A confirmed on the provider, not only in
+the probe. One call, $0.000001. That verifies the WIRE FORMAT and nothing
+about throughput or cost at corpus scale; no corpus has been embedded for
+real.
+
+**Embedding freshness is a hash of the TEXT, never of the row.**
+`embedding_source_hash` (migration `023`) makes "do not regenerate
+unchanged embeddings" a property: a second backfill pass makes **zero**
+provider calls. A row hash would re-embed on every read, because retrieval
+increments `retrieval_hits`. `embed_library.py` chooses rows and text and
+nothing else — the provider, the norm check and the price stay in
+`embedding.py` (D38).
 
 Until real sources are ingested the library is nearly empty, so Engine 7
 retrieves little and Pass B reasons from a thin retrieval set — that is

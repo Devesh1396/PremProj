@@ -1905,3 +1905,102 @@ complete 19-part reports on one prompt hash. Re-run
 re-confirm a settled result.
 **F4** Multi-tenant anything, mobile app, billing, client portal. Explicitly
 out of scope: this is internal single-practitioner software.
+
+---
+
+## D39 — Retrieval breadth is a mechanism, not a hope
+**SETTLED 2026-09-10**
+
+BUILD_GUIDE step 17's acceptance criterion is *"the cross-domain case
+retrieves across insulin sensitivity, hepatic fat, triglycerides, muscle,
+appetite, sleep, vegetarian implementation, exercise and behaviour — **not
+three disease folders**."*
+
+That is not a quality target that better embeddings eventually reach. It is
+a statement about what the ranking must be built to do, because the two
+things standing in its way are both structural.
+
+### Why similarity alone always returns the folders
+
+A case note about insulin resistance is lexically and semantically **close**
+to insulin-resistance material and **far** from sleep material. That is not
+a defect in the index; it is what similarity means. Retrieval that ranks by
+text or vector similarity to the presenting complaint therefore returns the
+presenting complaint's folder, and the better the embeddings the more
+reliably it does so.
+
+The sleep and behaviour material is relevant because **Engine 1 said it
+was** — the case's normalized concepts include `SLEEP_QUALITY` and
+`BEHAVIOUR_CHANGE` — not because the words resemble each other. So the
+concept spine is a **retrieval channel** here, not a filter applied to one:
+`strategy_concepts` is queried with the case's concepts and contributes its
+own scored hits, alongside full text and vector. `by_concept()` is the
+channel that can reach material no similarity score would.
+
+### Why a fixed per-bucket cap would have been a knob, not a property
+
+Even with the spine, an imbalanced library defeats breadth on volume alone.
+Six insulin strategies and one sleep strategy means the top of any blended
+ranking is insulin strategies. So each query concept may fill at most
+`per_bucket_cap` slots in a first pass, and leftover capacity is filled from
+what that pass deferred — the cap changes the **order** in which breadth and
+depth are spent and costs no recall.
+
+The cap is **derived, not a constant**: `limit // len(concepts)`. A fixed
+cap of 3 satisfies the criterion at a page of 27 and fails it at a page of
+12, where three folders take nine of the twelve slots. A build whose
+acceptance test passes only because the test chose the cap has tested the
+test. `derive_cap()` means the default satisfies the criterion, and the
+suite asserts the cap it used was the derived one.
+
+**Rejected:** a fixed cap (fails at small pages); returning N per concept
+regardless of score (throws away ranking entirely and returns weak
+material to fill quotas); reranking with a model (a per-query LLM call on
+the hot path, for an ordering problem that is deterministic).
+
+### Channel weights are renormalized over the channels that ran
+
+`concept 0.40 / fts 0.30 / vector 0.30`, divided by the weight of whichever
+channels actually produced hits. Without this, a database with no pgvector
+(D15) scores every result 30% lower than the same database with it — the
+same ordering wearing a different number, which reads as a quality drop
+that has not happened. Recall genuinely degrades without vectors; ranking
+does not, and the scores should say so.
+
+Raw channel scores are normalized to `[0,1]` **per channel** first.
+`ts_rank_cd` is unbounded and corpus-dependent, cosine similarity is a
+bounded angle; blending them raw lets whichever is numerically larger
+dominate for reasons unrelated to relevance.
+
+### One row, every channel that found it
+
+A strategy found by all three channels is **one result carrying three
+channels**, not three results. The channel list is why a retrieval is
+explainable afterwards — "why did this appear?" is answered by the row
+rather than reconstructed.
+
+### A3: held-out material is excluded by default
+
+Chunks from a held-out `source_items` row are filtered in the metadata
+step. Evaluation passes `include_held_out=True` deliberately. If production
+retrieval could see the held-out set, the measurement it exists for would
+be measuring itself.
+
+### Freshness is a hash of the TEXT, not of the row
+
+`embedding_source_hash` (migration 023) is the sha256 of the exact text
+that was embedded, so "do not regenerate unchanged embeddings" is a
+property rather than an intention: a second backfill pass makes **zero**
+provider calls and an edit to one row costs exactly one. Hashing the row
+would re-embed the library every time `retrieval_hits` moved — which
+retrieval itself increments, so reading the library would have paid to
+re-embed it.
+
+The embeddable text expression **mirrors the full-text index** on the same
+table. Two halves of one hybrid score computed over different text are not
+comparable, and the rerank combines them.
+
+`scripts/embed_library.py` chooses rows and text; it never calls a
+provider, checks a norm or prices a call. Those live in `embedding.py`
+(D38) because a second copy of a check is a second place for it to be
+wrong.
