@@ -1,5 +1,58 @@
 # PROGRESS
 
+## STATE AS OF 2026-09-10 — merged to `main` (`9c8c33a`)
+
+Read this first. The sections below are the working record and are written
+in the order things happened, so a few of them describe a position that a
+later section supersedes. Where they disagree, this summary is current.
+
+**Build steps 1–10b are complete and verified against a real PostgreSQL,
+not inspected by eye.** Nothing in this repo had ever run on a database
+before 2026-09-09; all of it has now.
+
+| | |
+|---|---|
+| Schema | 9 migrations, 70 tables, 16 views, 49 enums, 52 policies, 26 RLS tables |
+| Suites | **8**, green from an empty database three consecutive times, each followed by a re-run against the used database |
+| CI | `.github/workflows/tests.yml` — every PR and every push to `main`, **with and without pgvector** |
+| Engines | All seven canonical prompts installed; E6 → E1 Pass A → E7 → E1 Pass B proven **live** |
+| Backup | Restore drill performed 2026-09-10; roles gap found and fixed |
+| Bugs | 37 found and fixed, each with a regression test |
+
+**D5 is ANSWERED and Engine 1 is not to be staged.** Measured on a live
+provider 2026-09-09 (see *D5 ANSWERED* below):
+
+```
+E6     18,909 →  12,580   $0.061   41s
+E1  A  20,869 →  32,687   $0.138  117s
+E7     20,558 →   8,885   $0.049   34s
+E1  B  20,922 →  32,529   $0.138  115s
+CYCLE  81,258 →  86,681   $0.386  306s
+```
+
+Both passes produced complete 19-part reports (116,661 and 116,436 chars)
+on one prompt hash. Second-half-to-first-half ratios **1.07** and **0.98**:
+the back of the report carries as much as the front. If splitting Engine 1
+is proposed again, the measurement is one command and the answer is
+currently no.
+
+**Cost, measured rather than estimated:** ~$0.39 per 4-call measurement,
+so a full 8-call new-client cycle lands near **$0.75–0.80** on
+`gemini-3.8-flash`. The free tier (20 requests/day/model) is not viable for
+this system — billing is a prerequisite, not an optimisation.
+
+**What is NOT done, and should not be assumed:**
+- Steps 11–23. Step 14 (intake form V1) gates the entire case track and is
+  the largest unstarted piece; 11, 12 and 13 are unblocked and parallel.
+- `scripts/backup.sh` has never run **on the VPS**, under cron, with GPG
+  encryption or an off-site target. The drill could not exercise those paths.
+- `STRIP_IDENTITY_FROM_ENGINE_PAYLOADS` is documented and **not enforced**
+  in `RUN_ENGINE`.
+- No VPS exists yet. Everything above was verified on a local PostgreSQL 16
+  and in CI.
+
+---
+
 ## Completed
 
 ### M0 — Foundations
@@ -75,7 +128,7 @@
   OpenAI-compatible provider selected automatically once `LLM_API_KEY` is
   set.
 
-### Step 10b — synthetic client and call measurement `COMPLETE (fixture)`
+### Step 10b — synthetic client and call measurement `COMPLETE (measured live)`
 Everything in step 10b that does not need credentials.
 
 - `docker-compose.local.yml` + `.env.local.example` +
@@ -519,18 +572,24 @@ failed attempt's tokens included in the run total.
 
 ## Next task
 
-**Immediately, and it needs nothing from the build: the live measurement
-run.** Put `LLM_BASE_URL`, `LLM_API_KEY` and the five `MODEL_*` roles in
-`.env`, add the provider's rates to `config/model_prices.json`, then
+*(The live measurement that stood here is DONE — see D5 ANSWERED. Re-running
+`python3 scripts/measure_engine1.py` costs ~$0.39; do it to re-measure after
+a model change, not to re-confirm a settled result.)*
 
-```
-python3 scripts/measure_engine1.py
-```
+**Step 14 — intake form V1 is the bottleneck.** It gates the entire case
+track: no real client can enter the system without it, and steps 15 and 21
+build directly on it. Keep it practical, emit structured JSON rather than
+prose, and do not recreate RHT. Incomplete intake runs anyway and populates
+`HIGH_PRIORITY_MISSING_DATA` — it never blocks.
 
-`run_engine.py` switches provider on its own. That produces the real token
-counts D5 deferred — and it is the only way to answer whether Engine 1's
-later sections degrade across a 19-part report. Do not restructure Engine 1
-before that number exists.
+**Unblocked and parallel to it:** step 11 (n8n `RUN_ENGINE` subworkflow,
+now well-specified because live provider behaviour is known), step 12 (K1
+ontology seed) and step 13 (C3 normalization layer).
+
+**Cheap now, awkward later:** enforce
+`STRIP_IDENTITY_FROM_ENGINE_PAYLOADS` in `RUN_ENGINE` before real client
+data exists, and run `scripts/backup.sh` on the VPS once with GPG and an
+off-site target configured.
 
 Both build tracks run in parallel. The prompts and `006` are done, so
 nothing below is blocked on schema.
@@ -617,12 +676,17 @@ access context (§52), and reprocessing/versioning (§56).
 Sonnet 5 $0.137 uncached / $0.014 cached. Caching matters: E1 and E6 each
 load twice per cycle.
 
-## Live measurement attempt — 2026-09-09 `BLOCKED (provider quota)`
+## Live measurement attempt — 2026-09-09 `SUPERSEDED — see D5 ANSWERED`
+
+> **This section is a record of the FIRST attempt, which failed on provider
+> quota. Its conclusion — that D5 was still open — was overtaken the same
+> day once billing was enabled: the measurement completed and D5 is
+> answered. Kept because its observations about provider behaviour and the
+> fixes it produced still stand. Do not read its conclusion as current.**
 
 First run of `scripts/measure_engine1.py` against a real provider
-(OpenAI-compatible Gemini endpoint). **The measurement did not complete.**
-Engine 1 Pass A never returned, so D5 is still open: there is no live
-Engine 1 call size on record and nothing here should be quoted as one.
+(OpenAI-compatible Gemini endpoint). **This attempt did not complete.**
+Engine 1 Pass A never returned, so at the time D5 remained open.
 
 What the provider actually returned, live, on the synthetic client:
 
@@ -646,7 +710,8 @@ a 40 KB request succeeded in 4 s minutes earlier, and the full Engine 1
 prompt alone returned fine. A 14.5-minute run with a 12-attempt backoff
 budget still could not land Pass A, on either `gemini-3.8-flash` or
 `gemini-3.7-flash`. Completing this needs a billed key, or a quiet quota
-window; nothing in the repo is at fault.
+window; nothing in the repo is at fault. **Billing was enabled and the run
+completed — see *D5 ANSWERED*.**
 
 Also observed, and correct: `gemini-3.7-flash` has no rate in
 `config/model_prices.json`, so its cost reported `unpriced` rather than 0.
@@ -680,13 +745,14 @@ not recorded as a schema violation, and every failed physical attempt is
 costed.
 
 ## Awaiting input
-`LLM_API_KEY` and the base URL are now **supplied and working** — the live
-provider path is proven end to end, and E6 has completed against it. What
-is still needed to finish D5 is a key **with quota for more than a handful
-of large calls**: the free tier allows 20 requests per day per model and
-sheds large requests during demand spikes, which is what stopped the run
-above. `MODEL_ANALYSIS` and `MODEL_RESEARCH` are set; the other three roles
-are still unassigned and are needed as their engines come online.
+`LLM_API_KEY`, the base URL and billing are all **in place and proven**:
+the full cycle completed live and D5 is answered. `MODEL_ANALYSIS` and
+`MODEL_RESEARCH` are set to `gemini-3.8-flash`; `MODEL_EXTRACTION`,
+`MODEL_EMBEDDING` and `MODEL_FAST` are still unassigned and are needed as
+their engines come online — `MODEL_EXTRACTION` first and on the cheapest
+capable model, since it carries the highest volume.
+
+Nothing is blocked on credentials any more.
 
 Until a rate is configured the cost column reports `unpriced`, not zero.
 
