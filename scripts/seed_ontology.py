@@ -39,6 +39,7 @@ from pathlib import Path
 
 import psycopg
 
+import concept_key
 import trigram
 
 REPO = Path(__file__).resolve().parent.parent
@@ -154,11 +155,11 @@ def declared_hash(text: str) -> str:
     return re.search(r"`([0-9a-f]{64})`", text).group(1)
 
 
-def canonical_key(term: str) -> str:
-    """ck_canonical_key_shape requires ^[A-Z][A-Z0-9_]{2,79}$."""
-    key = re.sub(r"[^A-Za-z0-9]+", "_", term).strip("_").upper()
-    key = re.sub(r"^[^A-Z]+", "", key)[:80]
-    return key if re.fullmatch(r"[A-Z][A-Z0-9_]{2,79}", key) else ""
+# One rule, shared with normalize.py. Both create concepts and both must
+# satisfy ck_canonical_key_shape; they were not using the same rule, and
+# the normalizer's version produced keys the database rejected.
+# Re-exported so existing callers and tests keep working.
+canonical_key = concept_key.canonical_key
 
 
 def split_aliases(term: str) -> tuple[str, list[str]]:

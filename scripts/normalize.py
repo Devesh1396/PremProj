@@ -34,6 +34,8 @@ from typing import Any
 
 import psycopg
 
+import concept_key
+
 ALIAS_THRESHOLD = float(os.environ.get("CONCEPT_AUTO_ALIAS_THRESHOLD", "0.92"))
 CREATE_THRESHOLD = float(os.environ.get("CONCEPT_AUTO_CREATE_THRESHOLD", "0.72"))
 WEEKLY_CAP = int(os.environ.get("CONCEPT_ESCALATION_WEEKLY_CAP", "15"))
@@ -349,11 +351,36 @@ def _propose_new(conn, phrase: str, phrase_norm: str, context: str | None,
     retrieval until something deliberate promotes it. Automatic is not the
     same as canonical.
     """
-    key = phrase_norm.upper().replace(" ", "_")[:80]
+    # ck_canonical_key_shape is ^[A-Z][A-Z0-9_]{2,79}$, and the old rule
+    # here (upper + spaces to underscores) produced
+    # LARGE_POST-MEAL_GLUCOSE_EXCURSIONS, which the database rejected
+    # outright. That phrase is D2's own example of what normalization is
+    # for; this suite never hit it because its fixtures have no
+    # punctuation, and the first CLIENT_NEW run did. One rule now, shared
+    # with the seeder (scripts/concept_key.py).
+    key = concept_key.key_for(phrase_norm)
     existing = conn.execute(
-        "select concept_id from concepts where canonical_key=%s", (key,)).fetchone()
-    if existing:
+        "select concept_id, norm_phrase(canonical_name) from concepts "
+        "where canonical_key=%s", (key,)).fetchone()
+    if existing and existing[1] == phrase_norm:
+        # Same phrase modulo punctuation -- one concept, not two.
         concept_id = str(existing[0])
+    elif existing:
+        # Different phrase, same key: 80-character truncation can collide
+        # two unrelated long phrases, and reusing a concept because its KEY
+        # matched is a silent merge (D3). Suffix rather than merge.
+        key = concept_key.disambiguate(key, phrase_norm)
+        concept_id = str(conn.execute(
+            """insert into concepts
+                 (canonical_key, canonical_name, concept_type, status,
+                  origin_method, origin_detail)
+               values (%s,%s,%s,'PROPOSED','DETERMINISTIC',%s)
+               on conflict (canonical_key) do update set canonical_key = excluded.canonical_key
+               returning concept_id""",
+            (key, phrase, concept_type,
+             "C3_NORMALIZATION: proposed from an unmatched phrase whose key "
+             f"collided with an existing concept; context: {context or 'none'}")
+        ).fetchone()[0])
     else:
         concept_id = str(conn.execute(
             """insert into concepts
