@@ -26,7 +26,7 @@ finished it must keep working on n8n + PostgreSQL + an LLM API alone.
 
 | File | When |
 |---|---|
-| `docs/DECISIONS.md` | **Before proposing any structural change.** 37 settled decisions with rationale and rejected alternatives. |
+| `docs/DECISIONS.md` | **Before proposing any structural change.** 38 settled decisions with rationale and rejected alternatives. |
 | `docs/MASTER_SPEC.md` | The 40-phase build specification plus amendments. |
 | `BUILD_PLAN.md` | Milestones, dependencies, acceptance criteria. |
 | `PROGRESS.md` | What actually works, tests passed, bugs fixed, next exact task. |
@@ -374,10 +374,26 @@ and would otherwise have degraded retrieval silently. The dimension has one
 source — `embedding_dim()` reads it from the catalog; do not add a second.
 Not 3072: pgvector refuses an HNSW index above 2000 dimensions.
 
-**`gemini-embedding-2` has no rate configured** and it was not guessed —
-a fabricated price corrupts every total built on it. `load_prices.py` names
-the gap on every run and `v_unpriced_spend` counts what has been spent
-without one.
+**A rate belongs to a MODALITY, and is never borrowed (D38).**
+`gemini-embedding-2` is priced $0.20/1M for text, $0.45 image, $6.50 audio,
+$12.00 video — 60x apart. `model_prices` is keyed `(model_name, modality)`,
+`cost_events` records which modality it paid for, and **both** halves of
+`price_call` refuse to guess: an unpriced modality is UNPRICED and a
+multimodal model with no modality stated is UNPRICED. Never TEXT, which is
+the cheapest and would round every mistake toward under-reporting. A
+single-modality model still prices with no modality given, which is why the
+frozen workflow needs no change.
+
+**K14 embeds TEXT ONLY, enforced twice (D38).** Transcripts and extracted
+document text, never the source media — audio is a 32x bill for a worse
+index. `scripts/embedding.py` is the ONE embedding boundary and refuses
+media magic bytes, `data:` media URLs, media MIME types, non-UTF-8 bytes
+and empty payloads **before the provider is called**;
+`ck_embedding_text_only` refuses the cost row. It also enforces D34's
+unit-norm and dimension checks at the call, so a bad vector fails where it
+happened. **A cost decision, not a capability limit** — the other three
+rates are already loaded, so enabling multimodal embedding is a migration
+that drops the constraint and says why, not a pricing exercise.
 
 **Step 16: K02–K11 are ALL built.** One source runs the whole loop: `knowledge_ingest.py` (inbox → heading-located
 chunks, deterministic, no model call) → `knowledge_extract.py` (E7 INBOX →

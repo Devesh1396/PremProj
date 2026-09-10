@@ -26,7 +26,7 @@ not inspected by eye.**
 
 | | |
 |---|---|
-| Schema | 22 migrations, 78 tables, 24 views, 51 enums, 211 indexes, 45 triggers, 60 policies, 30 RLS tables |
+| Schema | 23 migrations, 78 tables, 24 views, 51 enums, 211 indexes, 45 triggers, 60 policies, 30 RLS tables |
 | Suites | **20**, green from an empty database, each run followed by a re-run, and on the D15 floor with no optional extension available |
 | CI | `.github/workflows/tests.yml` — every push on every branch, **with and without pgvector** |
 | Engines | All seven canonical prompts installed; E6 → E1 Pass A → E7 → E1 Pass B proven **live** |
@@ -111,6 +111,10 @@ normalized → delta analysis → evidence researched → strategy decided
   and the handoff are verified — and **the wire format is not**. This is a
   weaker claim than anything else in this build. Treat the first live
   `PUBMED` run as unverified code rather than as a regression.
+- **K14 itself.** `scripts/embedding.py` is the boundary and its
+  guarantees are tested, but nothing has been embedded and hybrid
+  retrieval is not built. The embedding provider call has never been made
+  from this code — the suite injects the transport.
 - **No real source has run the loop yet** — only fixtures and synthetic
   documents. Do not begin mass ingestion; one real source first, then the
   20-video pilot.

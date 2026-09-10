@@ -1776,6 +1776,86 @@ the bytes. That is the second normalizer this decision exists to prevent.
 
 ---
 
+## D38 — A rate belongs to a modality, and K14 embeds text only
+**SETTLED 2026-09-10**
+
+`gemini-embedding-2` text input is **$0.20 per 1M tokens**, paid tier —
+supplied by the practitioner 2026-09-10, the one number D34 said it would
+not guess. The gap `load_prices.py` had been naming on every run is closed
+and `v_unpriced_spend` is empty for `MODEL_EMBEDDING`.
+
+### The model is multimodal, and the modalities are priced 60x apart
+
+| | per 1M tokens |
+|---|---|
+| TEXT | **$0.20** |
+| IMAGE | $0.45 |
+| AUDIO | $6.50 |
+| VIDEO | $12.00 |
+
+A registry keyed on model name alone has **one rate per model**. An audio
+embedding priced at the text rate under-reports by **32x** and a video one
+by **60x** — and the cost table would look fine while being wrong, which is
+the failure D30 exists to prevent arriving through a different door. A
+fabricated rate and a borrowed one corrupt the same totals.
+
+So the key is `(model_name, modality)` in `model_prices`, `cost_events`
+records which modality it paid for, and both halves of `price_call` —
+SQL and Python — **refuse to guess**:
+
+* a modality given with no rate → `UNPRICED`, **never another modality's rate**
+* no modality given, model priced in **several** → `UNPRICED`
+* no modality given, model priced in **one** → that one, unambiguously
+
+The last case is what keeps every single-modality caller working unchanged,
+including the frozen n8n workflow (D32), which passes no modality and does
+not need to: an engine run is text and Claude models carry one rate.
+
+### K14 embeds TEXT ONLY, and it is enforced in two places
+
+Transcripts and extracted document text, never the source media. Embedding
+a podcast's audio instead of its transcript is a **32x bill for a worse
+retrieval index** — the audio carries no more meaning than the words and
+far more tokens.
+
+| where | what it refuses |
+|---|---|
+| `scripts/embedding.py` | media magic bytes (PNG, JPEG, Ogg, MP3, Matroska, PDF, FLAC), `data:` media URLs, media MIME types, non-UTF-8 bytes, non-strings, empty payloads — **before the provider is called** |
+| `ck_embedding_text_only` | any `cost_events` row with `model_role = 'MODEL_EMBEDDING'` and a modality other than TEXT |
+
+Two layers because either alone is a habit. The code refusal is what stops
+the spend; the constraint is what stops a second code path from ever
+appearing that does not refuse.
+
+**This is a cost decision, not a capability limit.** If multimodal
+embedding is ever actually wanted, drop the constraint in a migration that
+says why and change `embedding.py` deliberately. The rates for the other
+three modalities are already loaded, so that day is a policy change and not
+a pricing one.
+
+### One embedding boundary
+
+`embedding.embed()` is the only path, for the same reason there is one
+`RUN_ENGINE`. It also enforces D34 at the call rather than only at the
+column: a vector that comes back non-unit-norm or wrong-dimensioned is
+refused **before it is returned**, so the failure surfaces where it
+happened instead of one layer later at the insert.
+
+Token counts are an **estimate** — the embeddings endpoint returns no usage
+block — and `estimate_tokens()` says so in its name and its docstring. The
+measurement report must not quote them as measurements.
+
+*Rejected:* one rate per model with the modality handled at the call site.
+That is the arrangement being replaced: it puts the guarantee in whichever
+caller remembered, and the registry stays capable of expressing something
+false.
+
+*Rejected:* defaulting an unstated modality to TEXT. It is the cheapest of
+the four, so every mistake would round in the direction of under-reporting
+— silently, and in the direction nobody checks.
+
+---
+
 ## OPEN
 
 **O1 — Intake form. `RESOLVED FOR V1` — see D22.** Core Intake V1 is built:

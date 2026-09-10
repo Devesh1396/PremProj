@@ -13,20 +13,14 @@
     "cost_events.model_name exactly first, then by longest matching prefix,",
     "so a dated snapshot id resolves to its family entry.",
     "",
-    "The Claude entries are the comparison rates already recorded in",
-    "PROGRESS.md. The provider actually in use must be added here with its",
-    "own published rates before a live cost figure means anything.",
+    "MODALITY (migration 022). An entry may give rates directly, which means",
+    "TEXT, or give a `modalities` map. gemini-embedding-2 is multimodal and",
+    "its modalities are priced 60x apart, so a single rate per model would",
+    "charge an audio embedding at the text rate and under-report by 32x.",
+    "Lookup NEVER falls back to another modality: an unpriced modality is",
+    "UNPRICED and shows up in v_unpriced_spend.",
     "",
-    "MISSING RATE \u2014 gemini-embedding-2 (MODEL_EMBEDDING, D34).",
-    "It is deliberately ABSENT rather than guessed. Web search is",
-    "unavailable in the build environment and Google's pricing pages are",
-    "blocked by the egress proxy, and a fabricated rate is worse than no",
-    "rate: UNPRICED is visibly missing, whereas a wrong number silently",
-    "corrupts every total built on it. Add `input_usd_per_mtok` (embeddings",
-    "have no output tokens, so `output_usd_per_mtok` is 0) from the",
-    "provider's published rates and re-run scripts/load_prices.py.",
-    "Until then `load_prices.py` names the gap on every run and",
-    "v_unpriced_spend counts what has been spent without a rate."
+    "Embeddings have no output tokens, so output_usd_per_mtok is 0."
   ],
   "prices": {
     "claude-opus-5": {
@@ -44,6 +38,27 @@
     "gemini-3.8-flash": {
       "input_usd_per_mtok": 0.75,
       "output_usd_per_mtok": 3.75
+    },
+    "gemini-embedding-2": {
+      "_source": "Supplied by the practitioner 2026-09-10, paid tier. Not guessed: search is unavailable in the build environment and the provider's pricing pages are blocked by the egress proxy.",
+      "modalities": {
+        "TEXT": {
+          "input_usd_per_mtok": 0.2,
+          "output_usd_per_mtok": 0.0
+        },
+        "IMAGE": {
+          "input_usd_per_mtok": 0.45,
+          "output_usd_per_mtok": 0.0
+        },
+        "AUDIO": {
+          "input_usd_per_mtok": 6.5,
+          "output_usd_per_mtok": 0.0
+        },
+        "VIDEO": {
+          "input_usd_per_mtok": 12.0,
+          "output_usd_per_mtok": 0.0
+        }
+      }
     }
   },
   "discounts": {

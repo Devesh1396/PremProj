@@ -448,6 +448,11 @@ biomedical API, so the suite stubs the transport and drives the real
 adapters through the real chokepoint. Policy, cursor, query history,
 refusals, parsing and handoff are proven; the wire format is not.
 
+**Step 17 groundwork is in place.** `scripts/embedding.py` is the single
+embedding boundary — text only, unit-norm checked, dimension checked, cost
+recorded at the TEXT rate (D38). K14 builds retrieval on top of it; the
+guarantees are already enforced.
+
 **Next:** step 17, K14 embedding and hybrid retrieval. **Do not begin mass
 ingestion** until one real source has run the whole loop.
 

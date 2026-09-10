@@ -30,6 +30,8 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "scripts"))
 
 import psycopg
+import pricing as PR
+import embedding as EM
 
 FAILS: list[str] = []
 PREFIX = "EMBTEST_"
@@ -241,6 +243,133 @@ def main() -> int:
         "  from v_embedding_state where table_name='concepts'").fetchone()
     check("v_embedding_state reports what each column is pinned to",
           row is not None and row[3] is True, str(row))
+
+    # ==================================================================
+    # Modality pricing (D38)
+    # ==================================================================
+    print("\nthe rate belongs to a MODALITY, and is never borrowed")
+
+    model = "gemini-embedding-2"
+    rates = {}
+    for modality in ("TEXT", "IMAGE", "AUDIO", "VIDEO"):
+        cost, source = PR.price_call(model, 1_000_000, 0, modality)
+        rates[modality] = cost
+        sql = conn.execute(
+            "select cost_usd, price_source::text from "
+            "  price_call(%s, 1000000, 0, null, null, %s)", (model, modality)
+        ).fetchone()
+        check(f"{modality}: Python and SQL agree on the rate",
+              sql[0] is not None and float(sql[0]) == cost and sql[1] == source,
+              f"python {cost}/{source} vs sql {sql[0]}/{sql[1]}")
+
+    check("the modalities really are priced far apart",
+          rates["VIDEO"] / rates["TEXT"] >= 50,
+          f"text {rates['TEXT']}, video {rates['VIDEO']}")
+    check("...so charging audio at the text rate would under-report ~32x",
+          round(rates["AUDIO"] / rates["TEXT"]) == 32,
+          f"{rates['AUDIO'] / rates['TEXT']:.1f}x")
+
+    # The whole point: an unpriced or unstated modality must NOT borrow.
+    unstated = PR.price_call(model, 1_000_000, 0)
+    check("a multimodal model with NO modality given is UNPRICED, not TEXT",
+          unstated == (None, PR.UNPRICED), str(unstated))
+    sql_unstated = conn.execute(
+        "select cost_usd, price_source::text from price_call(%s, 1000000, 0)",
+        (model,)).fetchone()
+    check("...and SQL refuses to guess too",
+          sql_unstated == (None, "UNPRICED"), str(sql_unstated))
+    unknown = PR.price_call(model, 1_000_000, 0, "HOLOGRAM")
+    check("an unpriced modality is UNPRICED, never another modality's rate",
+          unknown == (None, PR.UNPRICED), str(unknown))
+
+    single = PR.price_call("claude-sonnet-5", 1_000_000, 0)
+    check("a single-modality model still prices with no modality given",
+          single[1] == PR.PRICE_REGISTRY, str(single))
+
+    check("v_unpriced_spend is empty for the embedding role",
+          conn.execute("select count(*) from v_unpriced_spend "
+                       " where model_role='MODEL_EMBEDDING'").fetchone()[0] == 0)
+
+    # ==================================================================
+    # K14 embeds TEXT ONLY (D38)
+    # ==================================================================
+    print("\nK14 embeds text only, and that is enforced twice")
+
+    os.environ["MODEL_EMBEDDING"] = model
+    calls: list[str] = []
+
+    def fake_provider(model_name, text, dims):
+        calls.append(text)
+        value = 1.0 / math.sqrt(dims)
+        return [value] * dims
+
+    vector, used, dims = EM.embed(conn, "postprandial glycaemia and fibre",
+                                  entity_type="test", call=fake_provider)
+    check("text embeds", len(vector) == dims and used == model, str((used, dims)))
+    check("...and is recorded at the TEXT rate",
+          conn.execute(
+              "select modality, price_source::text from cost_events "
+              " where operation='EMBEDDING' order by cost_event_id desc limit 1"
+          ).fetchone() == ("TEXT", "PRICE_REGISTRY"))
+
+    for payload, label in (
+            (b"\x89PNG\r\n\x1a\n" + b"\x00" * 40, "a PNG"),
+            (b"\xff\xd8\xff\xe0" + b"\x00" * 40, "a JPEG"),
+            (b"OggS" + b"\x00" * 40, "an Ogg audio stream"),
+            (b"ID3" + b"\x00" * 40, "an MP3"),
+            ("data:audio/mpeg;base64,SUQzBAAA", "a data: audio URL"),
+            ("video/mp4", "a media MIME type"),
+            (b"\xff\xfe\x00\x01\x02", "bytes that are not UTF-8"),
+            (12345, "a number"),
+            ("", "nothing at all")):
+        before = len(calls)
+        try:
+            EM.embed(conn, payload, call=fake_provider)
+            check(f"{label} is refused", False, "it embedded")
+        except EM.NotText:
+            check(f"{label} is refused", True)
+        check(f"...and {label} never reached the provider",
+              len(calls) == before, f"{len(calls) - before} call(s)")
+
+    # The database refuses it too, so neither layer is the only guard.
+    expect_error(
+        conn,
+        "insert into cost_events (operation, model_role, model_name, modality) "
+        "values ('EMBEDDING','MODEL_EMBEDDING','x','AUDIO')", (),
+        "the DATABASE refuses a non-text embedding cost row",
+        "ck_embedding_text_only")
+    conn.execute(
+        "insert into cost_events (operation, model_role, model_name, modality) "
+        "values ('ENGINE_RUN','MODEL_ANALYSIS','x','AUDIO')")
+    check("...while a non-embedding role may record another modality",
+          True)
+    conn.execute("delete from cost_events where model_name='x'")
+
+    # D34's norm guard, at the call boundary rather than only at the column.
+    def bad_norm(model_name, text, dims):
+        value = 0.702191 / math.sqrt(dims)
+        return [value] * dims
+
+    try:
+        EM.embed(conn, "text", call=bad_norm)
+        check("a non-unit-norm vector is refused before it is returned", False,
+              "it was returned")
+    except EM.BadVector as exc:
+        check("a non-unit-norm vector is refused before it is returned",
+              "0.702" in str(exc), str(exc)[:100])
+
+    def wrong_dims(model_name, text, dims):
+        value = 1.0 / math.sqrt(dims // 2)
+        return [value] * (dims // 2)
+
+    try:
+        EM.embed(conn, "text", call=wrong_dims)
+        check("a wrong-dimension vector is refused", False, "it was returned")
+    except EM.BadVector as exc:
+        check("a wrong-dimension vector is refused", "dimensions" in str(exc))
+
+    conn.execute("delete from cost_events where operation='EMBEDDING' "
+                 "  and entity_type='test'")
 
     clear(conn)
 

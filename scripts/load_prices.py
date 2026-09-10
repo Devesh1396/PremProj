@@ -38,59 +38,67 @@ def load(conn: psycopg.Connection, check_only: bool = False) -> list[tuple[str, 
     actions: list[tuple[str, str]] = []
 
     existing = {
-        row[0]: (float(row[1]), float(row[2]), row[3])
+        (row[0], row[1]): (float(row[2]), float(row[3]), row[4])
         for row in conn.execute(
-            "select model_name, input_usd_per_mtok, output_usd_per_mtok, active "
-            "  from model_prices").fetchall()
+            "select model_name, modality, input_usd_per_mtok, "
+            "       output_usd_per_mtok, active from model_prices").fetchall()
     }
 
+    authored_keys: set[tuple[str, str]] = set()
     for model_name, entry in sorted(authored.items()):
-        try:
-            rates = (float(entry["input_usd_per_mtok"]),
-                     float(entry["output_usd_per_mtok"]))
-        except (KeyError, TypeError, ValueError):
-            # A malformed entry is skipped, not fatal, and not guessed at.
-            # pricing._rates() already treats it as no rate; the registry
-            # must agree or the two implementations diverge on bad data.
-            actions.append((model_name, "skipped-malformed"))
-            continue
+        # One row PER MODALITY (022). A model priced in four modalities that
+        # sit 60x apart cannot be represented by one rate, and pretending it
+        # can is how an audio embedding gets charged at the text rate.
+        for modality, rate in sorted(pricing.modalities_of(entry).items()):
+            label = f"{model_name} [{modality}]"
+            authored_keys.add((model_name, modality))
+            try:
+                rates = (float(rate["input_usd_per_mtok"]),
+                         float(rate["output_usd_per_mtok"]))
+            except (KeyError, TypeError, ValueError):
+                # A malformed entry is skipped, not fatal, and not guessed at.
+                # pricing._rates() already treats it as no rate; the registry
+                # must agree or the two implementations diverge on bad data.
+                actions.append((label, "skipped-malformed"))
+                continue
 
-        current = existing.get(model_name)
-        if current == (rates[0], rates[1], True):
-            actions.append((model_name, "unchanged"))
-            continue
-        if check_only:
-            actions.append((model_name, "would-load" if current is None
-                            else "would-update"))
-            continue
+            current = existing.get((model_name, modality))
+            if current == (rates[0], rates[1], True):
+                actions.append((label, "unchanged"))
+                continue
+            if check_only:
+                actions.append((label, "would-load" if current is None
+                                else "would-update"))
+                continue
 
-        conn.execute(
-            """insert into model_prices
-                 (model_name, input_usd_per_mtok, output_usd_per_mtok,
-                  source_file, active, loaded_at)
-               values (%s,%s,%s,%s,true,now())
-               on conflict (model_name) do update
-                  set input_usd_per_mtok = excluded.input_usd_per_mtok,
-                      output_usd_per_mtok = excluded.output_usd_per_mtok,
-                      source_file = excluded.source_file,
-                      active = true,
-                      loaded_at = now()""",
-            (model_name, rates[0], rates[1], source_file))
-        actions.append((model_name, "loaded" if current is None else "updated"))
+            conn.execute(
+                """insert into model_prices
+                     (model_name, modality, input_usd_per_mtok,
+                      output_usd_per_mtok, source_file, active, loaded_at)
+                   values (%s,%s,%s,%s,%s,true,now())
+                   on conflict (model_name, modality) do update
+                      set input_usd_per_mtok = excluded.input_usd_per_mtok,
+                          output_usd_per_mtok = excluded.output_usd_per_mtok,
+                          source_file = excluded.source_file,
+                          active = true,
+                          loaded_at = now()""",
+                (model_name, modality, rates[0], rates[1], source_file))
+            actions.append((label, "loaded" if current is None else "updated"))
 
-    # A model removed from the file is DEACTIVATED, never deleted: a rate is
-    # the evidence for every cost_events row already priced with it, and
+    # A rate removed from the file is DEACTIVATED, never deleted: it is the
+    # evidence for every cost_events row already priced with it, and
     # deleting it would make a historical cost unexplainable.
-    stale = sorted(set(existing) - set(authored))
-    for model_name in stale:
-        if not existing[model_name][2]:
+    for model_name, modality in sorted(set(existing) - authored_keys):
+        if not existing[(model_name, modality)][2]:
             continue
+        label = f"{model_name} [{modality}]"
         if check_only:
-            actions.append((model_name, "would-deactivate"))
+            actions.append((label, "would-deactivate"))
             continue
-        conn.execute("update model_prices set active=false where model_name=%s",
-                     (model_name,))
-        actions.append((model_name, "deactivated"))
+        conn.execute(
+            "update model_prices set active=false "
+            " where model_name=%s and modality=%s", (model_name, modality))
+        actions.append((label, "deactivated"))
 
     return actions
 
@@ -103,12 +111,14 @@ def main() -> int:
             print(f"  {model_name:32s} {action}")
 
         rows = conn.execute(
-            "select model_name, input_usd_per_mtok, output_usd_per_mtok "
-            "  from model_prices where active order by model_name").fetchall()
+            "select model_name, modality, input_usd_per_mtok, output_usd_per_mtok "
+            "  from model_prices where active "
+            " order by model_name, modality").fetchall()
         print()
         print(f"ACTIVE RATES  ({len(rows)})")
-        for model_name, in_rate, out_rate in rows:
-            print(f"  {model_name:32s} in {in_rate}/Mtok   out {out_rate}/Mtok")
+        for model_name, modality, in_rate, out_rate in rows:
+            print(f"  {model_name:24s} {modality:6s} in {in_rate}/Mtok   "
+                  f"out {out_rate}/Mtok")
         if not rows:
             print("  none — every call will record UNPRICED with a NULL cost.")
 
@@ -123,7 +133,11 @@ def main() -> int:
             name = os.environ.get(role, "").strip()
             if not name:
                 continue
-            cost, source = pricing.price_call(name, 1000, 1000)
+            # MODEL_EMBEDDING embeds TEXT only (022, D38) and the others are
+            # text too, so the question is asked WITH a modality. Asking
+            # without one would report a multimodal model as unpriced merely
+            # because it is priced in several.
+            cost, source = pricing.price_call(name, 1000, 1000, "TEXT")
             if source == pricing.UNPRICED:
                 gaps.append((role, name))
         if gaps:
@@ -136,12 +150,13 @@ def main() -> int:
                   f"{pricing.price_file().name}.")
 
         spent = conn.execute(
-            "select model_name, calls from v_unpriced_spend limit 5").fetchall()
+            "select model_name, modality, calls from v_unpriced_spend limit 5"
+        ).fetchall()
         if spent:
             print()
             print("ALREADY SPENT WITHOUT A RATE (v_unpriced_spend):")
-            for name, calls in spent:
-                print(f"  {name:32s} {calls} call(s)")
+            for name, modality, calls in spent:
+                print(f"  {name:24s} {modality:6s} {calls} call(s)")
 
     changed = [(m, a) for m, a in actions
                if a not in ("unchanged", "skipped-malformed")]
