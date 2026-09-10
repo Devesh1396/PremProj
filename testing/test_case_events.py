@@ -413,6 +413,82 @@ def main() -> int:
            returning candidate_id""", (a,)).fetchone()[0]
     check("trusted structured ingestion follows its own path", trusted is not None)
 
+    # ------------------------------------------------------------------
+    # Intake (009). This is where a real client's name, date of birth and
+    # labs first enter the system, so the isolation is asserted here rather
+    # than trusted to the migration having listed the right tables.
+    print("\nintake tables are client-scoped (009)")
+    for table in ("intake_submissions", "intake_sections", "client_report_files"):
+        forced = admin.execute(
+            "select relrowsecurity, relforcerowsecurity from pg_class where relname=%s",
+            (table,)).fetchone()
+        check(f"{table}: RLS enabled and FORCED", forced == (True, True), str(forced))
+
+    sub_a = admin.execute(
+        """insert into intake_submissions (client_id, raw_payload, captured_by)
+           values (%s,%s,'test') returning submission_id""",
+        (a, json.dumps({"sections": {"GOALS": {"consultation_reason": "A_INTAKE_MARKER"}}}))
+    ).fetchone()[0]
+    sub_b = admin.execute(
+        """insert into intake_submissions (client_id, raw_payload, captured_by)
+           values (%s,%s,'test') returning submission_id""",
+        (b, json.dumps({"sections": {"GOALS": {"consultation_reason": "B_INTAKE_MARKER"}}}))
+    ).fetchone()[0]
+    for cid, sid_, marker in ((a, sub_a, "A_SECTION"), (b, sub_b, "B_SECTION")):
+        admin.execute(
+            """insert into intake_sections (submission_id, client_id, section, payload)
+               values (%s,%s,'GOALS',%s)""", (sid_, cid, json.dumps({"marker": marker})))
+        admin.execute(
+            """insert into client_report_files (client_id, report_kind, original_filename)
+               values (%s,'LAB_PANEL',%s)""", (cid, marker + "_report.pdf"))
+
+    with runtime.transaction():
+        runtime.execute("select set_client_scope(%s)", (a,))
+        subs = runtime.execute(
+            "select raw_payload from intake_submissions").fetchall()
+        secs = runtime.execute("select payload from intake_sections").fetchall()
+        files = runtime.execute(
+            "select original_filename from client_report_files").fetchall()
+    # No client_id filter in any of those queries. That is the point.
+    check("intake_submissions: Client A's scope returns only Client A",
+          len(subs) == 1 and "A_INTAKE_MARKER" in json.dumps(subs[0][0]), str(subs))
+    check("intake_sections: Client A's scope returns only Client A",
+          len(secs) == 1 and secs[0][0].get("marker") == "A_SECTION", str(secs))
+    check("client_report_files: Client A's scope returns only Client A",
+          len(files) == 1 and files[0][0].startswith("A_SECTION"), str(files))
+
+    with runtime.transaction():
+        unscoped = runtime.execute("select count(*) from intake_submissions").fetchone()[0]
+        unscoped_f = runtime.execute("select count(*) from client_report_files").fetchone()[0]
+    check("with no client scope, intake returns ZERO rows, not all rows",
+          unscoped == 0 and unscoped_f == 0, f"{unscoped}/{unscoped_f}")
+
+    # A submission cannot be written into another client's record.
+    try:
+        with runtime.transaction():
+            runtime.execute("select set_client_scope(%s)", (a,))
+            runtime.execute(
+                """insert into intake_submissions (client_id, raw_payload)
+                   values (%s,'{}'::jsonb)""", (b,))
+        check("runtime cannot file an intake under a client it is not scoped to",
+              False, "accepted")
+    except psycopg.Error as exc:
+        check("runtime cannot file an intake under a client it is not scoped to",
+              "row-level security" in str(exc).lower() or "policy" in str(exc).lower(),
+              str(exc)[:90])
+
+    # The shared practitioner connection was closed with its own section, so
+    # this opens a fresh one rather than reaching for a dead handle.
+    prac_intake = psycopg.connect(prac_dsn)
+    try:
+        with prac_intake.transaction():
+            seen = prac_intake.execute(
+                "select count(distinct client_id) from client_report_files").fetchone()[0]
+        check("practitioner reads intake across clients (the deliberate path)",
+              seen >= 2, str(seen))
+    finally:
+        prac_intake.close()
+
     print("\nchat scoping")
     general = admin.execute(
         "insert into chat_threads (client_id, title, created_by) values (NULL,'General','practitioner:pd') returning thread_id"

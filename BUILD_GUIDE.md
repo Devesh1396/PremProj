@@ -226,7 +226,7 @@ ambiguity, capped weekly.
 
 **Acceptance:** "large post-meal glucose excursions … low muscle stimulus" resolves to the expected concept family; cache hit avoids a second LLM call; normalization tests pass including negative pairs.
 
-## Step 14 — Intake form V1
+## Step 14 — Intake form V1 *(Core Intake V1 built 2026-09-10)*
 
 The largest unstarted piece on the case track. It gates everything.
 
@@ -345,7 +345,7 @@ GPG encryption and an off-site target configured.
       $0.386/cycle. D5 stands — do not stage Engine 1.
 11    n8n RUN_ENGINE subworkflow
 12/13 K1 ontology seed  ||  C3 normalization layer
-14    intake form V1                     <- gates the case track
+14    Core Intake V1                     <- BUILT (009, D22)
 15    CLIENT_NEW workflow
 16    Knowledge Factory K02–K11
 17    K14 embedding and hybrid retrieval
@@ -358,6 +358,6 @@ GPG encryption and an off-site target configured.
 24    backup restore drill               <- DONE 2026-09-10 (roles gap found)
 ```
 
-`bash testing/run_all.sh` must pass before every commit. Eight suites.
+`bash testing/run_all.sh` must pass before every commit. Nine suites.
 
 **This layer is frozen.** Do not reopen D16–D21 without instruction.
