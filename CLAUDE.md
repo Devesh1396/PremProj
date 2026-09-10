@@ -214,12 +214,12 @@ Database is in India; model inference is not. Engine payloads carry
 
 ## State as of 2026-09-10
 
-**Complete and verified** — M0 foundations, M1 schema (13 migrations), M2
+**Complete and verified** — M0 foundations, M1 schema (14 migrations), M2
 engine execution layer, all seven canonical prompts installed, and build
 steps **10b, 12, 13, 14, 15** and step 11's registry half.
 
-76 tables, 20 views, 51 enums, 199 indexes, 60 check constraints,
-44 triggers, 29 RLS tables, 58 policies. **Thirteen test suites**, passing
+77 tables, 22 views, 51 enums, 202 indexes, 64 check constraints,
+44 triggers, 29 RLS tables, 58 policies. **Fifteen test suites**, passing
 from an empty database three consecutive times, idempotent, and verified in
 three capability configurations: full, **no pgvector**, and **no optional
 extension at all**.
@@ -236,13 +236,23 @@ prerequisite.
 
 **Nothing is blocked on input.** `LLM_API_KEY` and the base URL are set.
 
-**Since D23 the prompts AND the control contract are rows, not files.**
-`prompts/*.md` and `schemas/orchestration/*.json` stay the authored forms;
-`engine_prompts` (`010`) and `orchestration_contracts` (`012`) are what
-`RUN_ENGINE` reads. A fresh deployment must run **both**
-`scripts/load_prompts.py` and `scripts/load_contracts.py` after migrating,
-or every engine raises `PromptMissing` / `ContractMissing`. Migrating alone
-is no longer enough.
+**Three runtime registries, all rows (D23, D24).** `prompts/*.md` and
+`schemas/orchestration/*.json` stay the authored forms; `engine_prompts`
+(`010`), `orchestration_contracts` (`012`) and `engine_handoffs` (`013`)
+are what `RUN_ENGINE` reads. A fresh deployment must run **all three**
+loaders after migrating — `load_prompts.py`, `load_contracts.py`,
+`load_handoffs.py` — or every engine raises `PromptMissing`,
+`ContractMissing` or `HandoffMissing`. Migrating alone is not enough.
+
+**The control block routes; the handoff is the reasoning (D24).** Every
+engine emits both, and they are never interchangeable. `<CONTROL_BLOCK>`
+is ~17 typed fields for routing and gating; `<..._HANDOFF>` is what the
+next engine thinks with. A run missing its required handoff repairs and
+then dead-letters — a valid control block is not evidence that an engine
+did its work. **E6 and E7 have no default mode**: E6 emits a full state on
+`INIT`/`REBUILD` and a delta on `UPDATE`, E7 a CASE or FOUNDATION handoff,
+and `mode=` must be passed. **A delta is never stored as
+`canonical_state`.**
 
 **The case track runs end to end.** `scripts/client_new.py` takes a
 submitted intake to the practitioner's review queue: E6 → E1 Pass A →

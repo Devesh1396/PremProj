@@ -34,6 +34,7 @@ python scripts/migrate.py --status
 python scripts/migrate.py
 python scripts/load_prompts.py     # engine specifications into the DB (D23)
 python scripts/load_contracts.py   # orchestration contract into the DB (D23)
+python scripts/load_handoffs.py    # which handoff each engine owes (D24)
 bash testing/run_all.sh
 ```
 
@@ -45,7 +46,10 @@ database with an empty registry is valid and unusable — every engine
 raises `PromptMissing` on its first call. `load_prompts.py --check` exits
 0 only when all seven are active and match the files. `load_contracts.py`
 does the same for the control contract, which `RUN_ENGINE` validates every
-control block against and n8n routes on.
+control block against and n8n routes on, and `load_handoffs.py` for the
+substantive handoff each engine owes — the reasoning the next engine
+thinks with, which is a different thing from the control block and never a
+substitute for it (D24).
 
 n8n at http://localhost:5678
 

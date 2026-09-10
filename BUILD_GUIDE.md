@@ -213,7 +213,15 @@ it is a real gate.
 **No n8n credentials are required.** `scripts/local_n8n.sh` installs n8n
 from npm (the container registries are blocked in some environments),
 seeds a `phi_runtime` credential from `.env.local`, imports a workflow and
-runs it headlessly. What remains is authoring `workflows/run_engine.json`.
+runs it headlessly.
+
+**The port must mirror the reference on all three outputs, not two.** D24:
+a run produces human output, a substantive handoff, and a control block.
+`engine_handoffs` (`013`) says which handoff tag to expect per engine and
+mode; the workflow reads those rows rather than carrying a map of its own,
+and a response missing a required handoff dead-letters exactly as an
+invalid control block does. What remains is authoring
+`workflows/run_engine.json`.
 
 ## Step 12 — K1 ontology seed *(BUILT 2026-09-10)*
 
@@ -409,7 +417,7 @@ GPG encryption and an off-site target configured.
 10    done: seven canonical prompts + foundation domain seed
 10b   DONE: measured live. 19/19 parts both passes, no degradation,
       $0.386/cycle. D5 stands — do not stage Engine 1.
-11    n8n RUN_ENGINE subworkflow         <- registry half BUILT (012);
+11    n8n RUN_ENGINE subworkflow         <- registries BUILT (012, 013);
                                          workflow JSON is the next task
 12/13 K1 ontology seed  ||  C3 normalization layer
                                          <- BOTH BUILT 2026-09-10
@@ -426,6 +434,6 @@ GPG encryption and an off-site target configured.
 24    backup restore drill               <- DONE 2026-09-10 (roles gap found)
 ```
 
-`bash testing/run_all.sh` must pass before every commit. Thirteen suites.
+`bash testing/run_all.sh` must pass before every commit. Fifteen suites.
 
 **This layer is frozen.** Do not reopen D16–D21 without instruction.

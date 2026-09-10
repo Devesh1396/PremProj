@@ -12,13 +12,13 @@ before 2026-09-09; all of it has now.
 
 | | |
 |---|---|
-| Schema | 13 migrations, 76 tables, 20 views, 51 enums, 199 indexes, 44 triggers, 58 policies, 29 RLS tables |
-| Suites | **13**, green from an empty database, each run followed by a re-run, and on the D15 floor with no optional extension available |
+| Schema | 14 migrations, 77 tables, 22 views, 51 enums, 202 indexes, 44 triggers, 58 policies, 29 RLS tables |
+| Suites | **15**, green from an empty database, each run followed by a re-run, and on the D15 floor with no optional extension available |
 | CI | `.github/workflows/tests.yml` — every push on every branch, **with and without pgvector** |
 | Engines | All seven canonical prompts installed; E6 → E1 Pass A → E7 → E1 Pass B proven **live** |
 | Ontology | 26 domains, 269 concepts seeded from the curriculum, hash-verified |
 | Backup | Restore drill performed 2026-09-10; roles gap found and fixed |
-| Bugs | 49 found and fixed, each with a regression test |
+| Bugs | 50 found and fixed, each with a regression test |
 
 **D5 is ANSWERED and Engine 1 is not to be staged.** Measured on a live
 provider 2026-09-09 (see *D5 ANSWERED* below):
@@ -249,6 +249,43 @@ Only the shapes that bear safety or data integrity are checked — what step
 15 writes into typed columns and what an engine reads as clinical fact. A
 validate-everything layer would freeze the field registry D22 keeps as
 data.
+
+### D24 — the substantive handoffs now flow `FIXED 2026-09-10`
+Found in review, before the n8n port, and confirmed against the code rather
+than taken on trust.
+
+Every prompt defines **two** machine-readable outputs. `<CONTROL_BLOCK>` is
+~17 typed routing fields (D14); `<..._HANDOFF>` is the reasoning the next
+engine thinks with. `RUN_ENGINE` parsed only the first —
+`EngineResult.structured` was `None` on both return paths, and
+`engine_outputs.structured` was written from the **input's** `_echo` key,
+which nothing sets, so it stored `{}` on every run since the engine layer
+was built. `CLIENT_NEW` then passed control blocks downstream as
+`E7_HANDOFF` and `E1_HANDOFF`, and built both case versions from the input
+it had handed Engine 6.
+
+Engine 1 Pass B — which exists **solely** to see Engine 7's retrieval (D4)
+— was receiving eight routing booleans where strategies and evidence should
+have been. The sequence executed perfectly and the thinking did not move.
+
+- `013_handoff_registry.sql` — `engine_handoffs` keyed
+  `(engine, mode, tag)` with a `required` flag. The third instance of the
+  pattern `010` and `012` established, not a third bespoke mechanism. The
+  loader **verifies every tag against the registered prompt**, and caught a
+  real discrepancy on the first run.
+- **E6 and E7 have no default mode.** Guessing means expecting a delta
+  where a state was needed, or the reverse.
+- **A delta is never `canonical_state`.** `_new_case_version` refuses a
+  version without a full state; the delta goes in the column `004` created
+  for it. `CLIENT_NEW`'s second E6 call runs `REBUILD`, not `UPDATE` — see
+  D24 for why that is a deliberate deviation.
+- A missing required handoff joins the same `errors` list as a contract
+  violation, so it repairs and then dead-letters rather than adding a third
+  failure path.
+- `test_handoff_flow.py` — sentinels that exist in exactly one block,
+  asserted to reach specific downstream **inputs**, captured from what was
+  actually transmitted. Plus the negative: a perfect control block with no
+  handoff must dead-letter.
 
 ### Step 15 — `CLIENT_NEW` `BUILT 2026-09-10`
 `scripts/client_new.py`. A submitted intake to the practitioner's queue in
@@ -784,6 +821,18 @@ does not.
     silently becoming the current directory, and `ajv_validate.js` resolves
     its own argument too. Reproduced locally by installing ajv exactly the
     way the workflow does, rather than by reading the diff.
+
+50. **Every value in a handoff block is a string, and that killed the
+    first real run.** The format the prompts specify is line-oriented
+    `KEY: text`, so Engine 6's `CASE_VERSION: 1` parses as `"1"` — and the
+    control contract correctly rejected it as not an integer, dead-lettering
+    E1 Pass A the moment the pipeline ran on real handoffs. Not fixed by
+    coercing per field, which would invent a typing rule per key:
+    `client_case_versions.case_version` is an integer column assigned by the
+    insert, and D18 rests on stored versions starting at 1. Engine 6's line
+    is its claim; the row is the fact. The general form of the lesson —
+    typed values come from typed places, the handoff is prose-shaped and is
+    reasoning — is in D24 and matters for the n8n port too.
 
 
 **Also, and recorded rather than amended away:** commit `c99ebf4` was made

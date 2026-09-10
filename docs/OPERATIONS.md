@@ -64,6 +64,12 @@ DATABASE_URL=postgresql://phi_admin:...@host:port/phi \
 DATABASE_URL=postgresql://phi_admin:...@host:port/phi \
   python3 scripts/load_contracts.py
 
+# 6c. LOAD THE HANDOFF REGISTRY. Which substantive block each engine owes,
+#     per mode (D24). Without it RUN_ENGINE raises HandoffMissing rather
+#     than accepting a control block as evidence that an engine reasoned.
+DATABASE_URL=postgresql://phi_admin:...@host:port/phi \
+  python3 scripts/load_handoffs.py
+
 # 7. Verify, and do not skip the second half.
 docker compose exec postgres psql -U phi_admin -d phi -c \
   "SELECT capability, enabled FROM system_capabilities;"
@@ -87,10 +93,18 @@ DATABASE_URL=postgresql://phi_admin:...@host:port/phi \
 #    exit 1  -> NOT READY, or the document differs from the authored file
 #    exit 2  -> the schema file is missing, unparseable, or constrains
 #               nothing
+
+DATABASE_URL=postgresql://phi_admin:...@host:port/phi \
+  python3 scripts/load_handoffs.py --check
+#    exit 0  -> READY, and prints what each engine owes per mode
+#    exit 1  -> an engine/mode has no registered handoff
+#    exit 2  -> a registered tag is not defined in its prompt, which means
+#               a specification was renamed and the registry was not
 ```
 
 **Whenever `prompts/*.md` or `schemas/orchestration/*.json` changes, the
-matching loader must be re-run** — deploying a prompt or contract edit is a
+matching loaders must be re-run — `load_handoffs.py` included, since it
+verifies its tags against the prompts** — deploying a prompt or contract edit is a
 load, not a restart. The registry is
 append-only: loading changed content inserts a new version and deactivates
 the old one, so the superseded text stays readable for any `engine_runs`
@@ -279,6 +293,7 @@ DATABASE_URL=... python3 scripts/set_role_passwords.py
 #     checkout.
 DATABASE_URL=...phi_restore_test python3 scripts/load_prompts.py --check
 DATABASE_URL=...phi_restore_test python3 scripts/load_contracts.py --check
+DATABASE_URL=...phi_restore_test python3 scripts/load_handoffs.py --check
 #     exit 0 -> the restored registry matches prompts/ in this checkout
 #     exit 1 -> it does not. Read the output before loading over it: the
 #               restored rows are what produced every engine_runs.prompt_hash
@@ -320,9 +335,11 @@ python3 scripts/migrate.py             # schema
 python3 scripts/set_role_passwords.py  # roles
 python3 scripts/load_prompts.py        # THE ENGINE SPECIFICATIONS (D23)
 python3 scripts/load_contracts.py      # THE ORCHESTRATION CONTRACT (D23)
+python3 scripts/load_handoffs.py       # WHICH HANDOFF EACH ENGINE OWES (D24)
 python3 scripts/seed_ontology.py       # K1 concept dictionary, if wanted
-python3 scripts/load_prompts.py --check   # both must exit 0 before
-python3 scripts/load_contracts.py --check #   n8n is considered ready
+python3 scripts/load_prompts.py --check   # all three must exit 0
+python3 scripts/load_contracts.py --check #   before n8n is
+python3 scripts/load_handoffs.py --check  #   considered ready
 bash testing/run_all.sh                # prove it, do not assume it
 ```
 
