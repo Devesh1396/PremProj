@@ -26,14 +26,14 @@ not inspected by eye.**
 
 | | |
 |---|---|
-| Schema | 24 migrations, 83 tables, 28 views, 51 enums, 225 indexes, 78 check constraints, 50 triggers, 60 policies, 30 RLS tables |
-| Suites | **21**, green from an empty database, each run followed by a re-run, and on the D15 floor with no optional extension available |
+| Schema | 25 migrations, 90 tables, 31 views, 54 enums, 238 indexes, 85 check constraints, 50 triggers, 60 policies, 30 RLS tables |
+| Suites | **22**, green from an empty database, each run followed by a re-run, and on the D15 floor with no optional extension available |
 | CI | `.github/workflows/tests.yml` — every push on every branch, **with and without pgvector** |
 | Engines | All seven canonical prompts installed; E6 → E1 Pass A → E7 → E1 Pass B proven **live** |
 | Ontology | 26 domains, 269 concepts seeded from the curriculum, hash-verified |
 | Registries | **Four**: prompts (`010`), contract (`012`), handoffs (`013`), prices (`016`) |
 | Backup | Restore drill performed 2026-09-10; roles gap found and fixed |
-| Bugs | 62 found and fixed, each with a regression test |
+| Bugs | 63 found and fixed, each with a regression test |
 
 *Counts measured 2026-09-10 against the local full-capability database, not
 carried forward: `pg_tables`, `pg_views`, `pg_type typtype='e'`,
@@ -129,6 +129,48 @@ Two calls in total, both incidental to a CLI smoke test. This is a
 one-call verification of the wire format and **not** evidence about
 throughput, rate limits or cost at corpus scale.
 
+**Step 18: evaluation layers A-E are built, and layer A has a baseline.**
+
+D7's five layers, none of which asks the practitioner to author an answer:
+
+| | | |
+|---|---|---|
+| A | seeded domain structure | `generate_a` splits each family — probes in the query, the rest expected |
+| B | held-out sources | `holdout_answer_keys`, extracted separately, read-only resolution |
+| C | cross-domain synthetic cases | `DOMAIN_BREADTH` against the domains the library actually spans |
+| D | practitioner spot check | drawn automatically, capped, one sample at a time |
+| E | discovery value | a RATE per sample, denominator = items **reviewed** |
+
+**Measured, not asserted** (`docs/evidence/layer_a_baseline.md`):
+
+```
+full text only        mean recall 0.1372    3 of 14 tests pass
+full text + vector    mean recall 0.3255    9 of 14 tests pass
+```
+
+Same fourteen tests, same day; 269 concepts embedded in between, on the
+**live provider** — 283 calls, 1,204 tokens, **$0.000234**, 2m27s. Every
+vector unit-norm at 1536 dimensions, none rejected. The floor was 0.30
+before either run.
+
+**Layer A found bug 63 on its first run** — the full-text channel had been
+returning nothing for any query longer than a few words since step 17,
+silently, and every step 17 test passed because its fixture queries are
+three words long. That is what an evaluation layer is for, and it paid for
+itself before it was finished.
+
+**Three refusals hold the layers up**, each one a way this could have
+become decorative:
+- `ck_test_has_expectation` — recall over an empty expected set is
+  undefined, not 1.0. A young library must not score 100% for knowing
+  nothing.
+- `normalize.resolve(..., read_only=True)` — the ordinary resolver creates
+  PROPOSED concepts and trigram aliases, so building the layer B answer key
+  the ordinary way would have taught the library the held-out vocabulary it
+  is being measured against. Same tiers, no writes.
+- `UNSCORABLE` — a library spanning no domain has not failed retrieval, and
+  is excluded from the mean rather than counted as zero.
+
 **Step 17: K14 embedding and hybrid retrieval are built and tested.**
 
 ```
@@ -188,7 +230,7 @@ suite on the no-extension floor, not by reading the branch.
 - **No real source has run the loop yet** — only fixtures and synthetic
   documents. Do not begin mass ingestion; one real source first, then the
   20-video pilot.
-- Steps 18–23.
+- Steps 19–23.
 - Engine 5 and the release path. `CLIENT_NEW` deliberately stops at the
   review queue; nothing yet turns an approval into client-facing output.
 - `STRIP_IDENTITY_FROM_ENGINE_PAYLOADS` is documented and **not enforced**
@@ -1301,6 +1343,41 @@ being thin is the expected state of the system today.
     Every one of those passed on the floor it was written on. The floors are
     not a formality — they are three different libraries, and an assertion
     that is really about corpus shape survives exactly one of them.
+
+63. **The full-text channel had been returning nothing, for months of
+    build time, for any query longer than a few words.**
+    `websearch_to_tsquery` — and `plainto_tsquery`, and
+    `phraseto_tsquery` — **AND every term**. So
+
+    ```
+    'CONDITIONS & CLINICAL STATES: acne, adrenal fatigue, alopecia'
+      ->  'condit' & 'clinic' & 'state' & 'acn' & 'adren' & 'fatigu' & 'alopecia'
+    ```
+
+    and a document had to contain all seven. No real clinical query — which
+    is a paragraph — could ever match. The channel was not degraded; it was
+    off, silently, and `by_fts` returned `[]` with no error anywhere.
+
+    Every step 17 test passed regardless, because every fixture query in
+    that suite is two or three words. **Layer A found it on its first run**:
+    fourteen domain tests, all scoring exactly 0.00, which is not a number
+    retrieval produces by accident.
+
+    Fixed by ranking rather than filtering: the query becomes an **OR of its
+    lexemes**, taken from `to_tsvector`'s own output and quoted with
+    `quote_literal`, and `ts_rank_cd` — which was already there — separates
+    a document matching six terms from one matching one. ANDing is not a
+    relevance strategy; it is a filter that removes everything.
+
+    Layer A: **0.1372 -> 0.3255** mean recall after the fix and the
+    embeddings, 3 of 14 tests passing to 9 of 14.
+    See `docs/evidence/layer_a_baseline.md`.
+
+    *Also found, fixing it:* `test_retrieval.py` edited whichever strategy
+    `next(iter(...))` returned, which happened to be the row a later
+    ranking check queried for. The two sections had been coupled since the
+    suite was written and it surfaced only once full text started matching
+    at all. The edit target is named now.
 
 
 **Also, and recorded rather than amended away:** commit `c99ebf4` was made

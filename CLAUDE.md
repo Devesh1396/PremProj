@@ -26,7 +26,7 @@ finished it must keep working on n8n + PostgreSQL + an LLM API alone.
 
 | File | When |
 |---|---|
-| `docs/DECISIONS.md` | **Before proposing any structural change.** 39 settled decisions with rationale and rejected alternatives. |
+| `docs/DECISIONS.md` | **Before proposing any structural change.** 40 settled decisions with rationale and rejected alternatives. |
 | `docs/MASTER_SPEC.md` | The 40-phase build specification plus amendments. |
 | `BUILD_PLAN.md` | Milestones, dependencies, acceptance criteria. |
 | `PROGRESS.md` | What actually works, tests passed, bugs fixed, next exact task. |
@@ -297,11 +297,11 @@ run as `phi_runtime` at all (D25). See `PROGRESS.md` *Deployed to the VPS*.
 layer, all seven canonical prompts installed, and build steps **10b and
 11–15**. Step 11 is **frozen**: changes to it are bug fixes only.
 
-24 migrations, 83 tables, 28 views, 51 enums, 225 indexes, 78 check
+25 migrations, 90 tables, 31 views, 54 enums, 238 indexes, 85 check
 constraints, 50 triggers, 30 RLS tables, 60 policies — measured
 2026-09-10, with the counting queries recorded in `PROGRESS.md`; earlier
 figures used a different method and do not reconcile, so re-measure rather
-than adjust. **Twenty-one test suites**, passing from an empty database,
+than adjust. **Twenty-two test suites**, passing from an empty database,
 idempotent on a re-run, and verified in three capability configurations:
 full, **no pgvector**, and **no optional extension at all**.
 
@@ -509,9 +509,42 @@ increments `retrieval_hits`. `embed_library.py` chooses rows and text and
 nothing else — the provider, the norm check and the price stay in
 `embedding.py` (D38).
 
+**Step 18: the five evaluation layers are built (D40), and layer A found a
+real defect on its first run.** Every expectation is derived from something
+the system already held — the K1 seed (A), a held-out source (B), the
+domains the library actually spans (C) — never authored by the
+practitioner (D7). Three refusals are what keep the layers from becoming
+decorative: `ck_test_has_expectation` (recall over an empty expected set is
+undefined, **not 1.0**), `normalize.resolve(..., read_only=True)` (the
+ordinary resolver creates PROPOSED concepts and trigram aliases, so
+building the layer B answer key the ordinary way would teach the library
+the vocabulary it is being measured against), and `UNSCORABLE` (a library
+spanning no domain has not failed retrieval, and is excluded from the mean
+rather than counted zero). Layer D is capped — a second spot-check sample
+is refused while one is unreviewed, because a queue that grows whether or
+not anyone looks at it is the recurring manual job hard rule 3 forbids.
+Layer E's denominator is items **reviewed**, never items presented.
+
+**FULL-TEXT SEARCH ORS ITS TERMS. Never `websearch_to_tsquery`,
+`plainto_tsquery` or `phraseto_tsquery` here — they AND (bug 63).** A
+clinical query is a paragraph; ANDing seven lexemes matched nothing, so the
+full-text channel returned `[]` for every realistic query from step 17
+until layer A scored fourteen domains at exactly 0.00. `ts_rank_cd`
+separates a document matching six terms from one matching one; ANDing is
+not a relevance strategy, it is a filter that removes everything.
+
+**Layer A baseline, measured on the live provider 2026-09-10:** full text
+alone **0.1372**, full text + vector **0.3255**, 269 concepts embedded for
+$0.000234. `docs/evidence/layer_a_baseline.md`. The score is recall@20 and
+a 67-concept family is bounded by 20/67 before retrieval is judged — the
+ceiling travels in the result note and the score is deliberately **not**
+rescaled for it.
+
 Until real sources are ingested the library is nearly empty, so Engine 7
 retrieves little and Pass B reasons from a thin retrieval set — that is
-expected, not a bug. **Do not begin mass ingestion**: one source through
+expected, not a bug. Layers B and C have nothing to report yet, and
+`v_evaluation_state` shows `tests_defined = 0` rather than a passing
+score. **Do not begin mass ingestion**: one source through
 the complete loop first, then the 20-video pilot.
 
 **n8n is pinned to 2.11.4, the version the VPS runs (D32).** The pin

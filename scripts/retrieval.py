@@ -175,14 +175,36 @@ def by_concept(conn, concept_ids: list[str], include_held_out: bool) -> list[dic
 # Channel 2: full text
 # ---------------------------------------------------------------------
 
-def by_fts(conn, query: str, include_held_out: bool) -> list[dict]:
-    """`ts_rank_cd` over exactly the expressions the GIN indexes cover.
+def tsquery_for(conn, query: str) -> str | None:
+    """The query as an OR of its lexemes, or None if it has none.
 
-    `websearch_to_tsquery` rather than `plainto_tsquery`: it never raises
-    on punctuation a practitioner pasted from a case note, and it accepts
-    quoted phrases, which a clinical query genuinely uses.
+    **Not `websearch_to_tsquery` and not `plainto_tsquery`: both AND every
+    term.** `'insulin resistance with hepatic fat'` becomes
+    `'insulin' & 'resist' & 'hepat' & 'fat'`, and a document must contain
+    ALL of them -- so a realistic clinical query, which is a paragraph,
+    matches nothing at all. Step 18 layer A scored 0.00 on all fourteen
+    domain tests for exactly this reason and nothing else (bug 63).
+
+    Ranking is what separates a document matching six terms from one
+    matching one, and `ts_rank_cd` already does that. ANDing is not a
+    relevance strategy, it is a filter that removes everything.
+
+    The lexemes come from `to_tsvector` -- the parser's own output, quoted
+    with `quote_literal` -- so nothing a practitioner pastes can reach
+    `to_tsquery` as syntax.
     """
     if not query or not query.strip():
+        return None
+    row = conn.execute(
+        "select string_agg(quote_literal(lexeme), ' | ') "
+        "  from unnest(to_tsvector('english', %s))", (query,)).fetchone()
+    return row[0] if row and row[0] else None
+
+
+def by_fts(conn, query: str, include_held_out: bool) -> list[dict]:
+    """`ts_rank_cd` over exactly the expressions the GIN indexes cover."""
+    tsq = tsquery_for(conn, query)
+    if tsq is None:
         return []
     out = []
     rows = conn.execute(
@@ -190,7 +212,7 @@ def by_fts(conn, query: str, include_held_out: bool) -> list[dict]:
                   ts_rank_cd(to_tsvector('english',
                       s.name || ' ' || coalesce(s.summary,'') || ' '
                       || coalesce(s.mechanism,'')),
-                      websearch_to_tsquery('english', %s))::float as rank,
+                      to_tsquery('english', %s))::float as rank,
                   (select sc.concept_id::text from strategy_concepts sc
                     where sc.strategy_id = s.strategy_id
                     order by sc.weight desc, sc.concept_id limit 1)
@@ -199,8 +221,8 @@ def by_fts(conn, query: str, include_held_out: bool) -> list[dict]:
               and to_tsvector('english',
                       s.name || ' ' || coalesce(s.summary,'') || ' '
                       || coalesce(s.mechanism,''))
-                  @@ websearch_to_tsquery('english', %s)""",
-        (query, query)).fetchall()
+                  @@ to_tsquery('english', %s)""",
+        (tsq, tsq)).fetchall()
     for sid, name, rank, bucket in rows:
         out.append({"kind": "strategy", "id": sid, "label": name,
                     "bucket": bucket, "channel": "fts", "raw": float(rank)})
@@ -209,13 +231,13 @@ def by_fts(conn, query: str, include_held_out: bool) -> list[dict]:
     rows = conn.execute(
         f"""select c.chunk_id::text, left(c.text, 120), d.item_id::text,
                    ts_rank_cd(to_tsvector('english', c.text),
-                       websearch_to_tsquery('english', %s))::float
+                       to_tsquery('english', %s))::float
               from knowledge_chunks c
               join source_documents d on d.document_id = c.document_id
               join source_items i on i.item_id = d.item_id
              where to_tsvector('english', c.text)
-                   @@ websearch_to_tsquery('english', %s){held_out_clause}""",
-        (query, query)).fetchall()
+                   @@ to_tsquery('english', %s){held_out_clause}""",
+        (tsq, tsq)).fetchall()
     for chunk_id, snippet, item_id, rank in rows:
         out.append({"kind": "chunk", "id": chunk_id, "label": snippet,
                     "bucket": item_id, "channel": "fts", "raw": float(rank)})
@@ -223,12 +245,12 @@ def by_fts(conn, query: str, include_held_out: bool) -> list[dict]:
     rows = conn.execute(
         """select concept_id::text, canonical_name,
                   ts_rank_cd(to_tsvector('english', search_text),
-                      websearch_to_tsquery('english', %s))::float
+                      to_tsquery('english', %s))::float
              from concepts
             where status in ('SEEDED','ACTIVE')
               and to_tsvector('english', search_text)
-                  @@ websearch_to_tsquery('english', %s)""",
-        (query, query)).fetchall()
+                  @@ to_tsquery('english', %s)""",
+        (tsq, tsq)).fetchall()
     for cid, name, rank in rows:
         out.append({"kind": "concept", "id": cid, "label": name,
                     "bucket": cid, "channel": "fts", "raw": float(rank)})

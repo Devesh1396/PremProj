@@ -217,16 +217,30 @@ def escalations_this_week(conn) -> int:
 # ---------------------------------------------------------------------
 
 def resolve(conn, phrase: str, context: str | None = None,
-            llm=None, use_cache: bool = True) -> Resolution:
+            llm=None, use_cache: bool = True,
+            read_only: bool = False) -> Resolution:
     """Resolve one clinical phrase to canonical concepts.
 
     `llm` is an optional callable(phrase, candidates) -> dict, used ONLY
     when the deterministic tiers cannot answer. It is injected rather than
     imported so the suite can prove the cheap tiers do not call it.
+
+    `read_only=True` runs the SAME tiers and writes NOTHING: no cache row,
+    no alias, no proposal, no escalation. It exists for layer B of the
+    evaluation (D7, migration 024). A held-out source is the answer key,
+    and the ordinary path would quietly write its vocabulary into the
+    ontology as PROPOSED concepts and trigram aliases -- so the library
+    being measured would have learned from the material it is being
+    measured against. The tiers are unchanged deliberately: a second
+    matcher written for evaluation would be measuring a different resolver
+    than production uses.
     """
     phrase_norm = norm(conn, phrase)
 
-    if use_cache:
+    # A cache HIT bumps hit_count, which is a write -- small, but it would
+    # make the cache look hotter than the runtime made it, and read_only
+    # means read_only. The tiers produce what the cache stored anyway.
+    if use_cache and not read_only:
         cached = conn.execute(
             """select concept_ids, method, confidence from normalization_cache
                 where phrase_norm=%s""", (phrase_norm,)).fetchone()
@@ -248,14 +262,26 @@ def resolve(conn, phrase: str, context: str | None = None,
         clash = confusable_with(conn, ids)
         if clash:
             # Never return an answer that merges a do-not-merge pair.
+            if read_only:
+                return Resolution(phrase, [], method, confidence, "UNRESOLVED",
+                                  f"read-only: spans CONFUSABLE_DO_NOT_MERGE {clash}")
             return _escalate(conn, phrase, phrase_norm, ids, confidence, method,
                              f"resolution spans CONFUSABLE_DO_NOT_MERGE pair(s): {clash}")
 
         if method in ("alias", "structured") or confidence >= ALIAS_THRESHOLD:
+            if read_only:
+                return Resolution(phrase, ids, method, confidence, "RESOLVED",
+                                  "read-only")
             _cache(conn, phrase_norm, ids, method, confidence)
             if method == "trigram":
                 _attach_alias(conn, ids[0], phrase, phrase_norm, method, confidence)
             return Resolution(phrase, ids, method, confidence, "RESOLVED")
+
+        if read_only:
+            # Between the thresholds. The ordinary path escalates or logs;
+            # both write, and neither is an answer.
+            return Resolution(phrase, [], method, confidence, "UNRESOLVED",
+                              "read-only: below the alias threshold")
 
         # Between the thresholds: real but not certain.
         impact = impact_score(conn, phrase_norm)
@@ -267,6 +293,12 @@ def resolve(conn, phrase: str, context: str | None = None,
 
     # Nothing deterministic answered. This is where, and only where, an LLM
     # is worth paying for.
+    if read_only:
+        # No LLM tier either: it is the most expensive way to reach the
+        # same place, and its successful branch attaches an alias.
+        return Resolution(phrase, [], "none", 0.0, "UNRESOLVED",
+                          "read-only: nothing deterministic matched")
+
     if llm is not None:
         candidates = conn.execute(
             """select concept_id, canonical_key, canonical_name from concepts

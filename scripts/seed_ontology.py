@@ -217,7 +217,8 @@ def parse(text: str) -> list[dict]:
 
 def seed(conn, verbose: bool = True) -> dict[str, int]:
     text = SEED.read_text()
-    stats = {"domains": 0, "concepts": 0, "reused": 0, "aliases": 0, "confusable": 0}
+    stats = {"domains": 0, "concepts": 0, "reused": 0, "aliases": 0,
+             "confusable": 0, "domain_edges": 0}
 
     domains = parse(text)
     for dom in domains:
@@ -286,6 +287,16 @@ def seed(conn, verbose: bool = True) -> dict[str, int]:
                      f"K1 seed, foundation_domains.md DOMAIN {letter} ({dom['name']})")
                 ).fetchone()[0]
                 stats["concepts"] += 1
+            # The domain edge is a ROW, not a sentence in origin_detail
+            # (migration 024). Layer A scores against this family and
+            # cannot be made to parse provenance prose for it.
+            conn.execute(
+                """insert into concept_domains (concept_id, domain_id, source)
+                   select %s, domain_id, 'K1_SEED' from knowledge_domains
+                    where domain_key = %s and active
+                   on conflict do nothing""",
+                (concept_id, domain_key))
+
             siblings.append(str(concept_id))
 
             for alias in aliases:
@@ -299,11 +310,14 @@ def seed(conn, verbose: bool = True) -> dict[str, int]:
         stats["confusable"] += _generate_confusable(conn, letter, siblings)
 
     stats["confusable"] += _resolve_alias_collisions(conn)
+    stats["domain_edges"] = conn.execute(
+        "select count(*) from concept_domains where source = 'K1_SEED'").fetchone()[0]
 
     if verbose:
         print(f"K1 seed: {stats['domains']} domains, {stats['concepts']} new concepts, "
               f"{stats['reused']} reused across domains, {stats['aliases']} aliases, "
-              f"{stats['confusable']} confusable pairs")
+              f"{stats['confusable']} confusable pairs, "
+              f"{stats['domain_edges']} concept-domain edges")
     return stats
 
 

@@ -275,7 +275,14 @@ def main() -> int:
               len(stub.calls) == calls_after_first and second["strategies"]["embedded"] == 0,
               f"{len(stub.calls) - calls_after_first} extra call(s)")
 
-        one = next(iter(fixture["strategies"].values()))
+        # NAMED, not `next(iter(...))`. The edits below change this row's
+        # text, and the ranking checks further down query for a different
+        # row by name -- picking whichever strategy happened to be first
+        # coupled the two sections invisibly, and the coupling only
+        # surfaced once the full-text channel started matching at all
+        # (bug 63). A fixture whose sections interfere is a fixture that
+        # will fail for a reason unrelated to what it is testing.
+        one = fixture["strategies"][f"{PREFIX}APPETITE_REGULATION_0"]
         conn.execute("update strategies set summary = %s where strategy_id = %s",
                      (PREFIX + "edited summary", one))
         third = EL.run(conn, ["strategies"], limit=100, call=stub)
@@ -545,7 +552,7 @@ def main() -> int:
     # ==================================================================
     print("\nDEPRECATED strategies are filtered before anything is scored")
 
-    dead = next(iter(fixture["strategies"].values()))
+    dead = fixture["strategies"][f"{PREFIX}APPETITE_REGULATION_0"]
     conn.execute("update strategies set knowledge_status='DEPRECATED', "
                  "provenance_note='RETTEST merge loser' where strategy_id=%s", (dead,))
     after_dep = RT.retrieve(conn, query=query, concept_ids=concept_ids,

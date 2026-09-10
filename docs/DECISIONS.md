@@ -2004,3 +2004,118 @@ comparable, and the rerank combines them.
 provider, checks a norm or prices a call. Those live in `embedding.py`
 (D38) because a second copy of a check is a second place for it to be
 wrong.
+
+---
+
+## D40 — Evaluation is five layers, and its expectations are never authored
+**SETTLED 2026-09-10** — implements D7; migration `024`
+
+D7 settled *why* there is no practitioner-authored gold benchmark. This is
+*how* the five layers are built, and what each one refuses to do.
+
+### Every expectation is derived from something the system already held
+
+| | the expectation comes from | human |
+|---|---|---|
+| A | the K1 ontology seed, which predates every extraction | none |
+| B | a HELD-OUT source, extracted separately, kept out of the library | none |
+| C | how many domains the library could possibly span | none |
+| D | the practitioner marking a small sample | QC only |
+| E | layer D's verdicts, as a rate | via D |
+
+### The concept-domain edge is a row, not a sentence
+
+Layer A scores against a domain's seeded concept family, and that family
+existed only inside `concepts.origin_detail` — prose, of the form
+`'... DOMAIN A (CONDITIONS & CLINICAL STATES); also DOMAIN B'`. Parsing it
+to decide what a test expects is the same mistake as routing on prose
+(hard rule 5). `concept_domains` is the edge; `seed_ontology.py` writes it,
+and the migration reconciled the 269 already-seeded concepts once. Both
+derivations produce **290 edges**, and the suite asserts they agree.
+
+### Layer A splits the family so the query cannot contain the answer
+
+Three of a domain's concepts become the query text; the **rest** are what
+must come back. The sets are disjoint by construction, and `query_concepts`
+is empty — handing the spine the family it is being asked to find is the
+same failure wearing a different hat (V2).
+
+The score is **recall@20**, and a family of 67 concepts is bounded above by
+20/67 before retrieval is judged at all. The score is deliberately **not**
+rescaled for that; the ceiling travels with the number in the result note
+instead. Rescaling a measure after reading it is how a measure stops
+meaning anything.
+
+### Layer B must not teach the library the answer key
+
+`knowledge_extract.py` already refuses to extract a held-out source into
+`claims` (A3). But the answer key still has to be produced, and producing
+it the ordinary way would have leaked it in a quieter place:
+`normalize.resolve()` **creates PROPOSED concepts and attaches trigram
+aliases**. The held-out vocabulary would have entered the ontology, and the
+library would have learned from the material it was being measured against
+— with nothing in the schema to notice.
+
+Two mechanisms:
+
+* `holdout_answer_keys` is the destination, and nothing in K10 or K11 reads
+  it. No `claims` row, no strategy, no provenance edge.
+* `normalize.resolve(..., read_only=True)` runs the SAME tiers and writes
+  nothing — no cache row, no alias, no proposal, no escalation.
+
+`read_only` is a parameter on the shared resolver rather than a second
+matcher in `evaluate.py`, deliberately. An answer key built by a different
+resolver would be in a different vocabulary from the library, and the
+comparison would measure the two resolvers against each other (V2).
+
+### Layer C measures breadth against an achievable ceiling
+
+"Not three disease folders" is a claim about how many domains a page spans,
+so layer C's metric is `DOMAIN_BREADTH` and the denominator is **how many
+domains the library actually has strategies in** — computed, never assumed.
+A library holding one domain cannot span two, and scoring it 0.3 for that
+would be measuring the library's age.
+
+A library spanning **no** domain is `UNSCORABLE`, recorded as such and
+**excluded from the mean rather than counted as zero**. The metric is a
+column on the test row (`evaluation_metric`), not a branch keyed off the
+layer: A and B ask "did the expected material come back", C asks something
+else, and a third question should be a value rather than an `if`.
+
+### An empty expectation is not a perfect score
+
+`ck_test_has_expectation` refuses a test with nothing to expect. Recall over
+an empty set is undefined, not 1.0 — and a young library reporting a perfect
+score for knowing nothing is the single most plausible way this whole layer
+could have become decorative.
+
+### Layer D is capped, and layer E is a rate
+
+The sample is drawn automatically from a layer C case, so nobody authors a
+query, and a **second sample is refused while one is unreviewed**. A queue
+that grows whether or not anyone looks at it is the recurring manual job
+hard rule 3 forbids, arriving quietly.
+
+D7's fourth verdict — "an important item was missing" — is about the sample,
+not about any row in it, so it lives on the sample and
+`ck_missing_needs_note` refuses it without a note. "Something was missing"
+that does not say what cannot become a knowledge gap or a query fix.
+
+Layer E's denominator is what was **reviewed**, never what was presented: a
+half-reviewed sample would otherwise report half the rate. `v_discovery_value`
+gives the per-sample rate and `v_discovery_value_trend` pools items across
+samples rather than averaging per-sample rates, so a three-item sample does
+not weigh as much as a thirty-item one.
+
+### A score is recorded with the configuration that produced it
+
+`retrieval_test_runs` stores `vector_enabled`, `library_size` and the
+`score_floor` the run judged against. Recall with pgvector and recall
+without it are different numbers (D15) and must never be trended as one
+line; a floor that moved between runs would make the history meaningless.
+
+**Measured on the first real run** (`docs/evidence/layer_a_baseline.md`):
+full text alone **0.1372**, full text + vector **0.3255**, same fourteen
+tests, 269 concepts embedded in between. The floor was 0.30 before either
+run — a threshold chosen to sit just under the number it judges is not a
+threshold.

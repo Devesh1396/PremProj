@@ -451,8 +451,11 @@ refusals, parsing and handoff are proven; the wire format is not.
 **Step 17 is BUILT** — `scripts/embed_library.py`, `scripts/retrieval.py`,
 migration `023`, `testing/test_retrieval.py`. See D39.
 
-**Next:** step 18, the evaluation layers. **Do not begin mass ingestion**
-until one real source has run the whole loop.
+**Step 18 is BUILT** — migration `024`, `scripts/evaluate.py`,
+`testing/test_evaluation.py`, `docs/evidence/layer_a_baseline.md`. See D40.
+
+**Next:** step 19, K12/K13 controversy, negative knowledge and gaps. **Do
+not begin mass ingestion** until one real source has run the whole loop.
 
 `MODEL_EXTRACTION` on the cheapest capable model — highest volume.
 Use the **Batch API** where the provider offers it: the knowledge clock is
@@ -488,7 +491,7 @@ Freshness is a hash of the embedded **text**, so a second pass makes zero
 provider calls. Without pgvector the vector channel is skipped and the
 diagnostics say so (D15) — verified on the no-extension floor.
 
-## Step 18 — Evaluation layers A–E
+## Step 18 — Evaluation layers A–E  ✅ BUILT
 
 - **A** automated retrieval tests from seeded domain structure
 - **B** source-grounded recovery on **held-out** sources (`source_items.held_out`)
@@ -496,7 +499,29 @@ diagnostics say so (D15) — verified on the no-extension floor.
 - **D** practitioner spot check, small sample
 - **E** `UNEXPECTED_USEFUL_STRATEGIES_FOUND` as a **rate**
 
-No practitioner-authored gold benchmark. See D7.
+No practitioner-authored gold benchmark. See D7, and D40 for how each layer
+is built.
+
+```
+python3 scripts/evaluate.py --generate     # (re)build A, B, C
+python3 scripts/evaluate.py --run all
+python3 scripts/evaluate.py --answer-key   # extract held-out sources (B)
+python3 scripts/evaluate.py --spot-check   # draw one sample (D)
+python3 scripts/evaluate.py --report       # E, and where each layer stands
+```
+
+**Layer A baseline, measured 2026-09-10:** full text alone **0.1372** mean
+recall, full text + vector **0.3255**, over the 269-concept K1 seed with an
+empty strategy library. `docs/evidence/layer_a_baseline.md`.
+
+**Layer A found bug 63 on its first run** — `websearch_to_tsquery` ANDs
+every term, so the full-text channel had matched nothing for any query
+longer than a few words since step 17. Every step 17 test passed because
+its fixture queries are three words long.
+
+Layers B and C cannot report anything until a real source is ingested and a
+domain reaches moderate coverage. `v_evaluation_state` shows a layer with
+`tests_defined = 0` rather than a passing score.
 
 ## Step 19 — K12/K13 controversy, negative knowledge, gaps
 
