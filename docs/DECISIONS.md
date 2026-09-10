@@ -640,6 +640,68 @@ library and the practitioner's consultation are for.
 
 ---
 
+## D23 — At runtime the prompts are served from PostgreSQL, not from a filesystem
+**SETTLED — forced by step 11**
+
+`CLAUDE.md` says the finished system must keep working on **n8n +
+PostgreSQL + an LLM API alone**. Porting `RUN_ENGINE` to n8n is the first
+thing that tests that sentence, and it fails immediately:
+`scripts/run_engine.py` loads `prompts/engine1_prevention.md` off the
+repository working tree, and n8n runs in a container that has never seen
+this repository.
+
+So the question is not "how does n8n read a file" but "what is the prompt
+at runtime". Answer: a row.
+
+`engine_prompts` is an append-only registry keyed by
+`(prompt_file, prompt_hash)`, with exactly one `active` version per engine.
+`scripts/load_prompts.py` is its only writer and reads `prompts/*.md`.
+The files stay the authored form — reviewed, diffed and version-controlled
+like everything else — and the database is the **runtime** form, exactly
+the relationship `database/migrations/` already has with
+`schema_migrations`.
+
+What this buys, beyond making the port possible:
+
+- **The hash is computed once, from one body of text.** Both Engine 1
+  passes read the same row, so D4's identical-hash rule is satisfied by
+  construction rather than by two implementations agreeing. A Python
+  reference run and an n8n run of the same engine cannot record different
+  hashes, because there is nothing for them to disagree about.
+- **`PromptMissing` survives.** An engine with no active row raises, and
+  no stub is substituted. Hard rule 7 is unchanged: an output that cannot
+  be traced to a specification is worse than no output.
+- **A prompt change is auditable after the fact.** `engine_runs` records
+  a hash; until now that hash resolved to whatever the working tree
+  happened to contain at the time. Now it resolves to a stored row with
+  its own `loaded_at`, so a run from three months ago can be traced to the
+  exact text that produced it.
+
+*Rejected:* mounting `prompts/` into the n8n container read-only. It
+works, and it makes n8n's behaviour depend on a bind mount that
+`docs/OPERATIONS.md` would have to document, back up and restore
+separately from the database. It also leaves two runtime sources of the
+same text — the Python reference reading the tree, n8n reading the mount —
+which is exactly the drift step 11 exists to prevent.
+
+*Rejected:* embedding the prompt text in the n8n workflow JSON. A 5,000-word
+specification pasted into a Code node is not reviewable, and editing a
+prompt would mean editing a workflow.
+
+*Rejected:* having `load_prompts.py` write the registry **and**
+`run_engine.py` keep reading files, with a test asserting the two agree.
+Two sources of truth plus a test is still two sources of truth; the test
+tells you they diverged after they already have.
+
+*Rejected:* making the registry mutable in place (`UPDATE` the content of
+a row). `engine_runs` foreign-keys nothing to the prompt today, but the
+hash is the provenance link, and rewriting a row's content under a
+recorded hash is the same class of mistake migration 010 exists to
+prevent. Superseding is an `INSERT` plus deactivating the old row, which
+keeps the old text readable.
+
+---
+
 ## OPEN
 
 **O1 — Intake form. `RESOLVED FOR V1` — see D22.** Core Intake V1 is built:

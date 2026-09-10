@@ -23,7 +23,6 @@ Set LLM_API_KEY to switch to a live provider.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import random
@@ -36,10 +35,10 @@ from typing import Any, Callable
 import psycopg
 from jsonschema import Draft202012Validator
 
+import load_prompts
 import pricing
 
 REPO = Path(__file__).resolve().parent.parent
-PROMPTS_DIR = REPO / "prompts"
 SCHEMA_PATH = REPO / "schemas" / "orchestration" / "control_contract.v1.json"
 
 MAX_ATTEMPTS = 3          # initial + repair + final
@@ -63,23 +62,12 @@ RETRYABLE_HTTP_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
 
 CONTROL_TAG = "CONTROL_BLOCK"
 
-ENGINE_PROMPTS = {
-    "E1": "engine1_prevention.md",
-    "E2": "engine2_behaviour.md",
-    "E3": "engine3_nutrition.md",
-    "E4": "engine4_progress.md",
-    "E5": "engine5_communication.md",
-    "E6": "engine6_memory.md",
-    "E7": "engine7_research_practice.md",
-}
-
-
-class PromptMissing(RuntimeError):
-    """Raised when a canonical prompt file is absent.
-
-    Deliberately fatal. Running an engine on a stub would produce output
-    that looks plausible and is not traceable to any specification.
-    """
+# The engine -> specification map and the PromptMissing class live in
+# load_prompts.py, which owns the registry. Keeping a second copy here
+# would be two dictionaries that must agree, which is one dictionary and a
+# latent bug. Re-exported so existing callers keep working.
+ENGINE_PROMPTS = load_prompts.ENGINE_PROMPTS
+PromptMissing = load_prompts.PromptMissing
 
 
 class ModelRoleUnset(RuntimeError):
@@ -119,29 +107,20 @@ class EngineResult:
 # Prompt loading
 # ---------------------------------------------------------------------
 
-_prompt_cache: dict[str, tuple[str, str]] = {}
+def load_prompt(conn: psycopg.Connection, engine: str) -> tuple[str, str, str]:
+    """Return (filename, content, sha256) for an engine's active prompt.
 
+    Read from `engine_prompts`, not from the working tree (D23). The n8n
+    port issues the identical SELECT, so the two implementations cannot
+    disagree about what an engine ran -- there is nothing for them to
+    disagree about.
 
-def load_prompt(engine: str) -> tuple[str, str, str]:
-    """Return (filename, content, sha256). Cached; content hash is provenance."""
-    filename = ENGINE_PROMPTS[engine]
-    if filename in _prompt_cache:
-        content, digest = _prompt_cache[filename]
-        return filename, content, digest
-
-    path = PROMPTS_DIR / filename
-    if not path.exists():
-        raise PromptMissing(
-            f"{path} is missing. Place the canonical master specification there. "
-            "RUN_ENGINE will not fall back to a stub: an engine output that "
-            "cannot be traced to a specification is worse than no output."
-        )
-    content = path.read_text()
-    if not content.strip():
-        raise PromptMissing(f"{path} is empty.")
-    digest = hashlib.sha256(content.encode()).hexdigest()
-    _prompt_cache[filename] = (content, digest)
-    return filename, content, digest
+    Deliberately NOT cached in this process. A cache is what makes
+    "prompts/ changed between Pass A and Pass B" survivable rather than
+    loud, and it would let a long-lived worker keep serving a
+    specification that has been superseded. The read is one indexed row.
+    """
+    return load_prompts.active(conn, engine)
 
 
 # ---------------------------------------------------------------------
@@ -390,7 +369,7 @@ def _call_provider(conn, req: EngineRequest, provider: Provider, system_prompt: 
 # ---------------------------------------------------------------------
 
 def run_engine(conn: psycopg.Connection, req: EngineRequest) -> EngineResult:
-    prompt_file, prompt_content, prompt_hash = load_prompt(req.engine)
+    prompt_file, prompt_content, prompt_hash = load_prompt(conn, req.engine)
     provider, mode = select_provider()
     # A fixture run is recorded under a `fixture:` model name even when a
     # real model is configured, and that prefix is load-bearing rather than
@@ -553,10 +532,13 @@ if __name__ == "__main__":
     import sys
     provider, mode = select_provider()
     print(f"RUN_ENGINE ready. provider mode: {mode}")
-    missing = [f for f in ENGINE_PROMPTS.values() if not (PROMPTS_DIR / f).exists()]
+    with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
+        registered = {r[0] for r in conn.execute(
+            "select engine from engine_prompts where active").fetchall()}
+    missing = [e for e in ENGINE_PROMPTS if e not in registered]
     if missing:
-        print(f"prompt files absent ({len(missing)}): {', '.join(missing)}")
-        print("RUN_ENGINE will raise PromptMissing for these engines until the "
-              "canonical specifications are placed in prompts/.")
+        print(f"no active prompt registered for: {', '.join(sorted(missing))}")
+        print("RUN_ENGINE will raise PromptMissing for these engines. Run "
+              "`python3 scripts/load_prompts.py`.")
         sys.exit(0)
-    print("all seven prompt files present")
+    print("all seven engine prompts registered and active")
