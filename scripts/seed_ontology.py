@@ -31,12 +31,15 @@ require autonomous discovery to continue.
 from __future__ import annotations
 
 import hashlib
+import itertools
 import os
 import re
 import sys
 from pathlib import Path
 
 import psycopg
+
+import trigram
 
 REPO = Path(__file__).resolve().parent.parent
 SEED = REPO / "knowledge" / "seed" / "foundation_domains.md"
@@ -348,15 +351,35 @@ def _generate_confusable(conn, letter: str, siblings: list[str]) -> int:
     """
     if len(siblings) < 2:
         return 0
-    pairs = conn.execute(
-        """select a.concept_id, b.concept_id
-             from concepts a join concepts b
-               on a.concept_id < b.concept_id
-            where a.concept_id = any(%s::uuid[])
-              and b.concept_id = any(%s::uuid[])
-              and similarity(norm_phrase(a.canonical_name),
-                             norm_phrase(b.canonical_name)) between 0.45 and 0.85""",
-        (siblings, siblings)).fetchall()
+
+    # Scored in Python, not by pg_trgm's similarity().
+    #
+    # This used to be an unguarded SQL `similarity()` call, which meant K1
+    # died with UndefinedFunction on a database without pg_trgm -- an
+    # extension D15 says is genuinely optional, and which step 10b had
+    # proved the system ran without.
+    #
+    # Gating the call and seeding fewer pairs would satisfy the letter of
+    # D15 and get the safety layer wrong: a CONFUSABLE_DO_NOT_MERGE pair
+    # records that two concepts must never be merged, and which of those
+    # records exist must not depend on which extensions the server happened
+    # to have. scripts/trigram.py reproduces pg_trgm's similarity exactly,
+    # so the seed is identical either way, and test_ontology_seed.py
+    # asserts that agreement against the real function whenever pg_trgm IS
+    # present.
+    #
+    # Sibling groups are small -- a domain's concepts, not the table -- so
+    # scoring them here costs nothing. normalize.py's trigram TIER is a
+    # different operation: it searches every concept and is answered by a
+    # GIN index, so it stays gated on the capability.
+    names = {str(cid): name for cid, name in conn.execute(
+        "select concept_id, norm_phrase(canonical_name) from concepts "
+        "where concept_id = any(%s::uuid[])", (siblings,)).fetchall()}
+    pairs = [
+        (a, b)
+        for a, b in itertools.combinations(sorted(names), 2)
+        if 0.45 <= trigram.similarity(names[a], names[b]) <= 0.85
+    ]
     made = 0
     for a, b in pairs:
         conn.execute(
