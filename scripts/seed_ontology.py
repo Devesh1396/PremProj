@@ -270,10 +270,16 @@ def seed(conn, verbose: bool = True) -> dict[str, int]:
                     limit 1""", (key, name)).fetchone()
             if existing:
                 concept_id = existing[0]
+                # coalesce on BOTH sides. A concept created by another path
+                # may have a NULL origin_detail, and then `NOT LIKE` is NULL
+                # -- so the WHERE excluded the row, the append never ran, and
+                # the concept gained a domain edge with no provenance naming
+                # it. Hard rule 7: provenance is enforced, not requested.
                 conn.execute(
                     """update concepts
-                          set origin_detail = origin_detail || %s
-                        where concept_id = %s and origin_detail not like %s""",
+                          set origin_detail = coalesce(origin_detail, '') || %s
+                        where concept_id = %s
+                          and coalesce(origin_detail, '') not like %s""",
                     (f"; also DOMAIN {letter}", concept_id, f"%DOMAIN {letter}%"))
                 stats["reused"] += 1
             else:

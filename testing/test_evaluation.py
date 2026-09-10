@@ -37,6 +37,7 @@ import psycopg
 
 import evaluate as EV
 import normalize
+import preflight
 import retrieval as RT
 import run_engine as RE
 
@@ -231,8 +232,18 @@ def main() -> int:
                join knowledge_domains d on d.domain_key = 'DOMAIN_' || m.letter[1]
               where c.origin_method='SEED' and c.origin_detail is not null) x"""
     ).fetchone()[0]
-    check("the concept-domain edges match the provenance they were derived from",
-          seeded == from_prose and seeded > 0, f"{seeded} rows vs {from_prose} in prose")
+    # This compares two independent derivations of the same edge set -- the
+    # seeder's rows against the provenance string the migration back-filled
+    # from -- so it needs the K1 seed to have been run. It is a precondition,
+    # not a failure, and it gets a NAMED skip like any optional dependency
+    # (V3): failing here would say the code is wrong when the database is
+    # merely unseeded.
+    if preflight.have(
+            seeded > 0, "the K1 ontology seed",
+            "no seeded concepts are present, so there is no edge set to "
+            "cross-check. Run `python3 scripts/seed_ontology.py`."):
+        check("the concept-domain edges match the provenance they were derived from",
+              seeded == from_prose, f"{seeded} rows vs {from_prose} in prose")
 
     # ==================================================================
     print("\nlayer A: the query and the expectation are disjoint")
@@ -446,8 +457,10 @@ def main() -> int:
               blind["mean_score"] is None or blind["scored"] < blind["tests"],
               str(blind))
     else:
-        print(f"  SKIP  another suite's strategies still span {empty_ceiling} "
-              "domain(s); the empty-library branch cannot be reached here.")
+        preflight.skip(
+            "an empty strategy library",
+            f"another suite's strategies still span {empty_ceiling} domain(s), "
+            "so the UNSCORABLE branch cannot be reached from here.")
     conn.execute("update strategies set knowledge_status='AI_DISCOVERED_CANDIDATE' "
                  " where canonical_key like %s", (PREFIX + "%",))
 
@@ -492,7 +505,9 @@ def main() -> int:
         except EV.EvaluationError:
             check("a verdict on something never presented is refused", True)
     else:
-        print("  SKIP  every fixture strategy is in the sample; no outsider to try.")
+        preflight.skip("a strategy outside the sample",
+                       "every fixture strategy was presented, so there is "
+                       "nothing to offer an out-of-sample verdict on.")
 
     for strategy_id in items[2:]:
         EV.record_verdict(conn, sample_id, strategy_id, "IRRELEVANT")

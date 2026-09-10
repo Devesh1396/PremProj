@@ -25,6 +25,13 @@
 # The extension files and the ajv modules are always put back, including on
 # failure and on Ctrl-C -- a developer machine left permanently unable to
 # CREATE EXTENSION would be a bizarre thing to debug a week later.
+#
+# The THIRD floor -- optional environment variables such as MODEL_EMBEDDING
+# -- is not handled here, because removing one does not need a schema
+# rebuild. `testing/test_optional_deps.py` removes each registered variable
+# and re-runs the suites that depend on it, and it runs inside run_all.sh,
+# so it is exercised on this floor too. V3 is the rule all three enforce:
+# an optional dependency degrades to a NAMED skip, never an exception.
 
 set -uo pipefail
 cd "$(dirname "$0")/.."

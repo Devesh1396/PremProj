@@ -263,6 +263,45 @@ The rules that follow from it:
   green four consecutive times. Ten runs on each capability floor is cheap
   and is what actually distinguishes deterministic from lucky.
 
+### V3. An optional dependency degrades to a NAMED skip, never an exception
+
+**Three times now** — `pg_trgm`, `ajv`, `MODEL_EMBEDDING` (bug 64). Same
+shape every time: a suite only passed where an optional dependency happened
+to be configured, and CI was green throughout **because CI configures it**.
+
+| | what was missing | what the suite did |
+|---|---|---|
+| `pg_trgm` | the extension | called `similarity()` and died |
+| `ajv` | the node module | indexed `'valid'` on an error dict |
+| `MODEL_EMBEDDING` | the env var | raised `BadVector` halfway through |
+
+Each was fixed where it was found and the next formed elsewhere, because
+"remember to guard optional dependencies" is not a mechanism.
+
+- **`testing/preflight.py` is the mechanism.** `have_env`,
+  `have_capability`, `have` — one skip format, one registry of what is
+  optional and what its absence costs. Never write a bare `print("SKIP ...")`.
+- **Named, not just skipped.** `SKIP` alone tells a reader something was
+  not tested and not *what*, so nobody can tell a supported configuration
+  from a suite that quietly stopped asserting anything.
+- **`testing/test_optional_deps.py` is the assertion**, and it runs in
+  `run_all.sh` so it holds on every floor. It removes each registered
+  variable, finds the suites that reach it — walking the import graph, not
+  reading a list that goes stale — and runs each **twice**: the degraded
+  run must exit 0, and every skip it prints that the baseline did not must
+  name the removed dependency.
+- **Production code degrades too, not just tests.** `retrieval.by_vector`
+  returns `"MODEL_EMBEDDING is not set: ..."` rather than raising; the VPS
+  runs with it unset on purpose. `embedding.embed()` still refuses, and
+  should: asking it to embed with no model pinned IS an error (D34) — a
+  query is not asking it to.
+- **Extensions are `run_bare.sh`'s floor**, env vars are
+  `test_optional_deps`'s. Neither pretends to cover the other.
+
+**A precondition gets the same treatment.** A suite needing the K1 seed, or
+a library with strategies in it, must say what is missing and skip — failing
+there claims the code is wrong when the database is merely unseeded.
+
 ---
 
 ## Environment
@@ -301,9 +340,12 @@ layer, all seven canonical prompts installed, and build steps **10b and
 constraints, 50 triggers, 30 RLS tables, 60 policies — measured
 2026-09-10, with the counting queries recorded in `PROGRESS.md`; earlier
 figures used a different method and do not reconcile, so re-measure rather
-than adjust. **Twenty-two test suites**, passing from an empty database,
-idempotent on a re-run, and verified in three capability configurations:
-full, **no pgvector**, and **no optional extension at all**.
+than adjust. **Twenty-three test suites**, passing from an empty database,
+idempotent on a re-run, and verified in four configurations: full, **no
+pgvector**, **no optional extension at all**, and **`MODEL_EMBEDDING`
+unset with pgvector present** — the last is what the VPS actually runs,
+and it is enforced by `testing/test_optional_deps.py` rather than
+remembered (V3).
 
 Working end to end **on a live provider**, not only on the fixture:
 ```

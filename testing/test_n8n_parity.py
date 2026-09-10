@@ -34,6 +34,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "scripts"))
 
 import psycopg
+import preflight
 import load_handoffs as LH
 import run_engine as RE
 
@@ -127,8 +128,9 @@ def main() -> int:
     # one suite and not the other.
     ajv_modules = find_ajv()
     if node is None:
-        print("  SKIP  node not available; the Python half above ran in full")
-        print("        install Node to run the byte-parity comparison")
+        preflight.skip("node", "the byte-parity comparison cannot run; the "
+                       "Python half above ran in full. Install Node to "
+                       "compare the two implementations.")
     else:
         expected_by_key = {}
         for engine, mode in LH.HANDOFFS:
@@ -253,10 +255,10 @@ def main() -> int:
         # reports differences that are not differences -- then indexes a key
         # that is not there. Same shape as the pg_trgm floor: the degraded
         # branch has to be exercised, not assumed.
-        missing = "node" if node is None else "ajv"
-        print(f"  SKIP  {missing} not available; response parity not compared")
-        print("        run `bash scripts/local_n8n.sh install` or set "
-              "AJV_MODULE_PATH")
+        preflight.skip(
+            "node" if node is None else "ajv",
+            "response parity was not compared. Run `bash "
+            "scripts/local_n8n.sh install` or set AJV_MODULE_PATH.")
         print("        the Python half above ran in full; only the "
               "cross-implementation comparison was skipped")
     else:
@@ -411,7 +413,8 @@ def main() -> int:
     ]
 
     if node is None:
-        print("  SKIP  node not available; retry semantics not compared")
+        preflight.skip("node", "retry semantics were not compared against "
+                       "the workflow's own source.")
     else:
         proc = subprocess.run(
             [node, str(REPO / "testing" / "n8n_retry.js")],

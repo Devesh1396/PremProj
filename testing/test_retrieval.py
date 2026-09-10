@@ -43,6 +43,7 @@ import psycopg
 
 import embed_library as EL
 import embedding as EM
+import preflight
 import retrieval as RT
 
 FAILS: list[str] = []
@@ -246,7 +247,6 @@ def domains_covered(conn, result: dict, concepts: dict) -> set:
 
 def main() -> int:
     conn = psycopg.connect(os.environ["DATABASE_URL"], autocommit=True)
-    vector_on = RT.vector_available(conn)
     clear(conn)
     fixture = seed(conn)
     items = seed_chunks(conn)
@@ -255,9 +255,21 @@ def main() -> int:
     # ==================================================================
     print("\nembedding freshness (K14: do not regenerate unchanged embeddings)")
 
+    # TWO optional dependencies gate the vector half, not one. pgvector was
+    # guarded from the start; MODEL_EMBEDDING was not, and the suite raised
+    # BadVector halfway through instead of skipping (bug 64) -- which also
+    # left its fixtures behind, because it never reached clear(). Both go
+    # through preflight now, so both are NAMED when they are missing (V3).
+    # And they are DIFFERENT conditions, which the first version of this
+    # guard collapsed: pgvector absent means there is no embedding column
+    # and coverage is NULL, while pgvector present with no model means the
+    # column exists and is empty. The D15 assertions below key off the
+    # first; the embedding work keys off both.
+    pgvector_on = preflight.have_capability(conn, "vector")
+    model_set = pgvector_on and preflight.have_env("MODEL_EMBEDDING")
+    vector_on = pgvector_on and model_set
+
     if not vector_on:
-        print("  SKIP  pgvector is absent (D15): there is no embedding column, "
-              "so there is nothing to keep fresh.")
         print("        Retrieval below still runs on metadata + full text.")
     else:
         stub = Stub()
@@ -401,11 +413,12 @@ def main() -> int:
     # is -- in a library of 29 strategies a page of 10 reaches most of it,
     # and the check would pass or fail on the corpus size rather than on the
     # mechanism.
-    def rank_of(result, fragment):
+    def find(result, fragment):
+        """(position, score, channels) for the first matching row, or Nones."""
         for position, row in enumerate(result["results"]):
             if fragment in row["label"]:
-                return position
-        return None
+                return position, row["score"], row["channels"]
+        return None, None, None
 
     # "hepatic fat" so the full-text channel genuinely fires on BOTH
     # capability floors -- the point is what the spine adds on top of a
@@ -417,18 +430,27 @@ def main() -> int:
                              concept_ids=[fixture["concepts"]["SLEEP_QUALITY"]],
                              kinds=("strategy",), limit=40, embed_call=Stub())
     check("the lexical query does find the hepatic material on its own",
-          rank_of(without, "HEPATIC_FAT") is not None,
+          find(without, "HEPATIC_FAT")[0] is not None,
           str([r["label"][:40] for r in without["results"][:3]]))
-    before_rank = rank_of(without, "SLEEP_QUALITY")
-    after_rank = rank_of(with_spine, "SLEEP_QUALITY")
-    # `before_rank is None` is the STRONGER form of the same claim, and it
-    # is what happens without pgvector: the spine is the only way there at
-    # all. Both floors assert the same thing -- naming the concept is what
-    # puts the material on the page.
+    before_rank, before_score, _ = find(without, "SLEEP_QUALITY")
+    after_rank, after_score, after_channels = find(with_spine, "SLEEP_QUALITY")
+    # SCORE, not position. Position is a function of what else is on the
+    # page: here six hepatic strategies legitimately outrank the sleep row
+    # both with and without the spine, so its rank is 6 either way while
+    # its score goes 0.023 -> 0.414. The rank form of this check passed
+    # only because another suite's five strategies happened to sit in
+    # between -- a library-composition dependency, which is the same
+    # mistake as bug 62 in a third costume.
+    #
+    # `before_score is None` is the STRONGER form of the same claim, and is
+    # what happens without pgvector: the spine is the only way there at
+    # all. Both floors assert one thing -- naming the concept is what puts
+    # the material on the page, or lifts it once there.
     check("naming the concept is what puts its material on the page",
-          after_rank is not None and (before_rank is None
-                                      or after_rank < before_rank),
-          f"rank {before_rank} -> {after_rank}")
+          after_score is not None and (before_score is None
+                                       or after_score > before_score),
+          f"score {before_score} -> {after_score} "
+          f"(rank {before_rank} -> {after_rank})")
     # NOT "and it ranks first": a row the lexical AND vector channels both
     # found outranking one the spine alone reached is correct behaviour,
     # and asserting otherwise would be asserting a floor rather than an
@@ -439,8 +461,7 @@ def main() -> int:
     # embedded table, so it also "finds" the sleep row at a negligible
     # 0.047. That is correct -- a low score sorts low. The invariant is
     # which channel DRIVES the row onto the page.
-    sleep_row = with_spine["results"][after_rank] if after_rank is not None else {}
-    channels = sleep_row.get("channels", {})
+    channels = after_channels or {}
     check("and the spine is what drove it there",
           bool(channels) and max(channels, key=channels.get) == "concept",
           str({c: round(v, 3) for c, v in channels.items()}))
@@ -465,7 +486,10 @@ def main() -> int:
         check("the row whose text the query repeats ranks first",
               "INSULIN_SENSITIVITY strategy 0" in top, top)
     else:
-        print("  SKIP  no pgvector: the vector channel cannot run here (D15).")
+        preflight.skip(
+            "vector" if not pgvector_on else "MODEL_EMBEDDING",
+            "the vector channel cannot run, so this comparison is not "
+            "available. The named skip above says why.")
 
     # ==================================================================
     print("\nD15: degradation is loud, never silent")
@@ -474,6 +498,22 @@ def main() -> int:
     if vector_on:
         check("the vector diagnostic names what it searched",
               "embedded query against" in diag, diag)
+    elif pgvector_on and not model_set:
+        # The column exists but no model is configured. The diagnostic must
+        # name THAT -- "pgvector absent" would be a false explanation and
+        # "run the backfill" would be unactionable advice, since the
+        # backfill needs the same missing variable.
+        check("with no model configured the diagnostic names MODEL_EMBEDDING",
+              "MODEL_EMBEDDING is not set" in diag, diag)
+        check("the other channels still returned results",
+              bool(both["results"]), str(both["diagnostics"]))
+    elif pgvector_on:
+        # The column exists and is empty. Pointing at the backfill is the
+        # actionable answer here, and it is a different answer.
+        check("with nothing embedded the diagnostic names the backfill",
+              "no embeddings stored yet" in diag, diag)
+        check("the other channels still returned results",
+              bool(both["results"]), str(both["diagnostics"]))
     else:
         check("the vector diagnostic says pgvector is absent, and cites D15",
               "pgvector absent" in diag and "D15" in diag, diag)
@@ -485,7 +525,10 @@ def main() -> int:
         " where table_name='strategies'").fetchone()
     check("v_embedding_coverage exists in both configurations",
           coverage is not None)
-    if vector_on:
+    if pgvector_on:
+        # Keyed off the CAPABILITY, not off whether anything was embedded:
+        # the view reports what the column can hold, and an empty column
+        # is a count of zero, not "not applicable".
         check("coverage reports a count when vectors are possible",
               coverage[0] is not None and coverage[1] is True, str(coverage))
     else:

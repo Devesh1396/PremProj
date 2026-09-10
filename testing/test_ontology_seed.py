@@ -18,6 +18,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "scripts"))
 
 import psycopg
+import preflight
 import seed_ontology as K1
 import trigram
 
@@ -167,7 +168,8 @@ def main() -> int:
         check("...so the same pairs fall inside the confusable band",
               in_band == py_band, f"pg_trgm {in_band} vs python {py_band}")
     else:
-        print("  SKIP  pg_trgm absent: nothing to compare the Python score against")
+        preflight.skip("pg_trgm", "there is no SQL similarity() to compare "
+                       "the Python trigram score against.")
         check("the seed still generated confusable pairs without pg_trgm",
               generated > 0, str(generated))
 

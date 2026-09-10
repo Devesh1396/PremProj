@@ -27,13 +27,13 @@ not inspected by eye.**
 | | |
 |---|---|
 | Schema | 25 migrations, 90 tables, 31 views, 54 enums, 238 indexes, 85 check constraints, 50 triggers, 60 policies, 30 RLS tables |
-| Suites | **22**, green from an empty database, each run followed by a re-run, and on the D15 floor with no optional extension available |
+| Suites | **23**, green from an empty database, each run followed by a re-run, and in three configurations: full, no optional extension, and **`MODEL_EMBEDDING` unset with pgvector present** |
 | CI | `.github/workflows/tests.yml` — every push on every branch, **with and without pgvector** |
 | Engines | All seven canonical prompts installed; E6 → E1 Pass A → E7 → E1 Pass B proven **live** |
 | Ontology | 26 domains, 269 concepts seeded from the curriculum, hash-verified |
 | Registries | **Four**: prompts (`010`), contract (`012`), handoffs (`013`), prices (`016`) |
 | Backup | Restore drill performed 2026-09-10; roles gap found and fixed |
-| Bugs | 63 found and fixed, each with a regression test |
+| Bugs | 65 found and fixed, each with a regression test |
 
 *Counts measured 2026-09-10 against the local full-capability database, not
 carried forward: `pg_tables`, `pg_views`, `pg_type typtype='e'`,
@@ -1378,6 +1378,75 @@ being thin is the expected state of the system today.
     ranking check queried for. The two sections had been coupled since the
     suite was written and it surfaced only once full text started matching
     at all. The edit target is named now.
+
+64. **`test_retrieval.py` raised instead of skipping when `MODEL_EMBEDDING`
+    was unset** — pgvector present, no model configured, `BadVector`
+    halfway through. Reported by the practitioner.
+
+    **Third instance of one shape** — `pg_trgm`, then `ajv`, now this: a
+    suite that only passes where an optional dependency happens to be
+    configured, invisible in CI because CI configures it. `MODEL_EMBEDDING`
+    is unset **on the VPS on purpose**, so this is the configuration the
+    system is actually deployed into.
+
+    Fixed as a mechanism rather than a third patch:
+
+    - `testing/preflight.py` — one skip format, one registry of what is
+      optional and what its absence costs. `have_env`, `have_capability`,
+      `have`.
+    - `testing/test_optional_deps.py` — removes each registered variable,
+      finds the suites that reach it by **walking the import graph** (a
+      list would go stale the first time somebody added a suite), and runs
+      each one twice. The degraded run must exit 0, and every skip it
+      prints that the baseline did not must **name** the removed
+      dependency. It runs inside `run_all.sh`, so it holds on every floor.
+    - **Production degrades too.** `retrieval.by_vector` now returns
+      `"MODEL_EMBEDDING is not set: ..."` instead of raising, because the
+      VPS runs that way deliberately. `embedding.embed()` still refuses —
+      asking it to embed with no model pinned IS an error (D34); a query
+      is not asking it to.
+    - `run_all.sh` **prints every named skip**. Naming a dependency inside
+      a suite whose output the summary then throws away is not naming it to
+      anyone, and a reader could not tell which floor a green run was green
+      on.
+
+    Now **rule V3 in `CLAUDE.md`**.
+
+    *Found while fixing it, by the new suite and its static half:*
+
+    - `test_retrieval` collapsed two different conditions into one flag.
+      "No pgvector" means there is no embedding column and coverage is
+      NULL; "pgvector with no model" means the column exists and is empty.
+      Three assertions were keyed to the wrong one.
+    - `test_n8n_sql.py` skipped to **stderr** in a different wording, so
+      `run_all`'s summary never showed it and no floor could grep it. That
+      suite could skip its only real assertion and look identical to a full
+      pass.
+    - `test_retrieval`'s "naming the concept moves its material UP the
+      page" was **rank**-based, and rank is a function of what else is on
+      the page: six hepatic strategies legitimately outrank the sleep row
+      both with and without the spine. It passed only because another
+      suite's five strategies happened to sit in between. Now asserts the
+      **score** rises — the mechanism, not the seating plan. Bug 62's
+      lesson in a third costume.
+    - `test_evaluation` needed the K1 ontology seed and **failed** rather
+      than skipping when another suite had not run it first. A precondition
+      gets the same treatment as an optional dependency.
+
+65. **The K1 seeder silently dropped a concept's domain provenance.**
+
+    ```sql
+    update concepts set origin_detail = origin_detail || '; also DOMAIN B'
+     where concept_id = %s and origin_detail not like '%DOMAIN B%'
+    ```
+
+    `NULL not like ...` is **NULL**, so the `WHERE` excluded every concept
+    whose `origin_detail` was NULL — the update never ran, and the concept
+    gained a `concept_domains` edge with no provenance naming the domain.
+    Hard rule 7: provenance is enforced, not requested.
+
+    Surfaced by layer A's cross-check disagreeing 290 vs 286, which is what
+    that check is for. `coalesce(origin_detail, '')` on both sides.
 
 
 **Also, and recorded rather than amended away:** commit `c99ebf4` was made

@@ -43,6 +43,8 @@ sys.path.insert(0, str(REPO / "scripts"))
 sys.path.insert(0, str(REPO / "testing"))
 
 import psycopg
+
+import preflight
 import pricing
 import run_engine as RE
 from test_case_events import _role_password, _with_user  # noqa: E402
@@ -130,8 +132,14 @@ BIND_CTX = {
 
 def main() -> int:
     if shutil.which("node") is None:
-        print("\nSKIPPED: node is not installed. The workflow's SQL was NOT "
-              "executed.\n", file=sys.stderr)
+        # Was a differently-worded line on STDERR, which run_all.sh's summary
+        # never showed and no floor could grep -- so this suite could skip
+        # its only real assertion and look identical to a full pass (V3).
+        print()
+        preflight.skip("node", "the workflow's SQL expressions cannot be "
+                       "bound through n8n's own parameter algorithm, so NONE "
+                       "of them was executed against the database.")
+        print()
         return 0
 
     admin_dsn = os.environ["DATABASE_URL"]

@@ -281,6 +281,16 @@ def by_vector(conn, query: str, include_held_out: bool,
     if not vector_available(conn):
         return [], "pgvector absent (D15): metadata + full text only"
 
+    # The embedding model is optional CONFIGURATION, and its absence is a
+    # supported state -- it is deliberately unset on the VPS, where nothing
+    # is allowed to make a paid call yet. Retrieval degrades to metadata +
+    # full text and SAYS SO; it does not raise. `embedding.embed()` still
+    # refuses, correctly, because asking it to embed with no model pinned
+    # IS an error (D34) -- but a query is not asking it to.
+    if not os.environ.get("MODEL_EMBEDDING", "").strip():
+        return [], ("MODEL_EMBEDDING is not set: the query cannot be embedded, "
+                    "so the vector channel is skipped (metadata + full text only)")
+
     tables = [t for t in ("strategies", "knowledge_chunks", "concepts")
               if has_vectors(conn, t)]
     if not tables:

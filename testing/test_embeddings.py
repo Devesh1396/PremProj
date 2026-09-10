@@ -30,6 +30,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "scripts"))
 
 import psycopg
+import preflight
 import pricing as PR
 import embedding as EM
 
@@ -74,9 +75,10 @@ def main() -> int:
     enabled = conn.execute(
         "select enabled from system_capabilities where capability='vector'").fetchone()
     if not enabled or not enabled[0]:
-        print("\n  SKIP  pgvector is absent; there are no embedding columns to "
-              "guard (D15).")
-        print("        This is a supported configuration, not a degraded one.\n")
+        print()
+        preflight.skip("vector", "pgvector is absent (D15): there are no "
+                       "embedding columns to guard.")
+        print()
         return 0
 
     clear(conn)

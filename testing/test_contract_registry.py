@@ -36,6 +36,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "scripts"))
 
 import psycopg
+import preflight
 import load_contracts as LC
 import run_engine as RE
 
@@ -284,10 +285,12 @@ def main() -> int:
     modules = find_ajv()
     node = shutil.which("node")
     if node is None or modules is None:
-        print("  SKIP  node or ajv not available; run "
-              "`bash scripts/local_n8n.sh install` or set AJV_MODULE_PATH")
-        print("        the Python half above ran in full; only the "
-              "cross-library comparison was skipped")
+        preflight.skip(
+            "node" if node is None else "ajv",
+            "the control blocks cannot be validated against the real JSON "
+            "Schema, so only the cross-library comparison was skipped -- the "
+            "Python half above ran in full. Run `bash scripts/local_n8n.sh "
+            "install` or set AJV_MODULE_PATH.")
     else:
         payload = {"schema": document, "cases": [c for _, c, _ in CASES]}
         proc = subprocess.run(
