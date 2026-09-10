@@ -82,12 +82,34 @@ def main() -> int:
     check("the canonical name itself resolves", insulin in r.concept_ids, repr(r))
 
     print("\ntier 2: structured identifiers are not a similarity question")
-    conn.execute("update concepts set canonical_key='HBA1C' where concept_id=%s", (hba1c,))
+    # The structured tier maps a phrase to a canonical_key, so this needs a
+    # concept keyed HBA1C. K1 seeds one; if the ontology has not been seeded
+    # yet, create it here. Earlier this test RENAMED its own fixture to
+    # HBA1C and renamed it back, which collided with the seeded concept the
+    # moment K1 ran first -- a test mutating a globally meaningful key.
+    seeded = conn.execute(
+        "select concept_id from concepts where canonical_key='HBA1C'").fetchone()
+    borrowed = seeded is None
+    hba1c_real = str(seeded[0]) if seeded else str(conn.execute(
+        """insert into concepts (canonical_key, canonical_name, concept_type,
+                                 status, origin_method)
+           values ('HBA1C','glycated haemoglobin','BIOMARKER','SEEDED','SEED')
+           returning concept_id""").fetchone()[0])
+    # "HbA1c" is itself a canonical name once K1 has seeded it, so the ALIAS
+    # tier answers first -- cheapest tier first, working as designed. To
+    # exercise the structured tier specifically, use an identifier form that
+    # is not anyone's canonical name.
     r = NZ.resolve(conn, "HbA1c", llm=boom, use_cache=False)
-    check("a structured identifier maps directly", hba1c in r.concept_ids, repr(r))
-    check("...by the structured tier", r.method == "structured", r.method)
-    conn.execute("update concepts set canonical_key=%s where concept_id=%s",
-                 (PFX + "HBA1C", hba1c))
+    check("a structured identifier maps to the right concept",
+          hba1c_real in r.concept_ids, repr(r))
+    check("...via a deterministic tier, never similarity or an LLM",
+          r.method in ("alias", "structured"), r.method)
+
+    r = NZ.resolve(conn, "a1c", llm=boom, use_cache=False)
+    check("an identifier that is nobody's canonical name uses the structured tier",
+          r.method == "structured" and hba1c_real in r.concept_ids, repr(r))
+    if borrowed:
+        conn.execute("delete from concepts where concept_id=%s", (hba1c_real,))
 
     print("\ntier 3: trigram catches near-neighbours")
     r = NZ.resolve(conn, "c3test insulin sensitivty", llm=boom, use_cache=False)  # typo
