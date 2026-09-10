@@ -20,10 +20,12 @@ from __future__ import annotations
 EXTERNAL_REF_COMPLETE = "SYN-INTAKE-001"
 EXTERNAL_REF_SPARSE = "SYN-INTAKE-002"
 EXTERNAL_REF_MALE = "SYN-INTAKE-003"
+EXTERNAL_REF_MALFORMED = "SYN-INTAKE-004"
 
 DISPLAY_NAME_COMPLETE = "SYNTHETIC — intake, complete (not a real client)"
 DISPLAY_NAME_SPARSE = "SYNTHETIC — intake, sparse (not a real client)"
 DISPLAY_NAME_MALE = "SYNTHETIC — intake, male (not a real client)"
+DISPLAY_NAME_MALFORMED = "SYNTHETIC — intake, malformed values (not a real client)"
 
 
 COMPLETE_INTAKE = {
@@ -246,10 +248,72 @@ MALE_INTAKE = {
 }
 
 
+# Everything a person can plausibly type into a form that a typed column
+# cannot hold. Every value here caused a real failure before migration 011:
+# "about 170" killed extract() with InvalidTextRepresentation on a numeric
+# column, "probably fine" arrived at Engine 6 as RHT_STATUS "PROBABLY
+# FINE", a medication with a dose and no name violated a NOT NULL, and an
+# unrecognised section key raised InvalidTextRepresentation on the
+# intake_section enum inside submit() -- intake blocking a case over a typo.
+#
+# Not a catalogue of everything that could ever be wrong. These are the
+# shapes that BEAR SAFETY OR DATA INTEGRITY: what step 15 writes into typed
+# columns, and what an engine would read as clinical fact (D22 -- no giant
+# rigid schema).
+MALFORMED_INTAKE = {
+    "measured_on": "last Tuesday",
+    "sections": {
+        "BASIC_PROFILE": {
+            "year_of_birth": 1979,
+            "biological_sex": "F",
+            "height_cm": "about 170",     # a hedge, not a measurement
+            "weight_kg": "78.5",          # a number as a string: VALID
+            "waist_cm": 1700,             # millimetres in the centimetres box
+            "region": "Karnataka",
+        },
+        "LABS_REPORTS": {
+            "lab_dates": "2026-08-14",
+            "lab_values": [
+                {"marker": "HbA1c", "value": "high", "date": "2026-08-14"},
+                {"marker": "", "value": 5.2, "date": "2026-08-14"},
+                {"marker": "Fasting glucose", "value": 104, "date": "14/08/2026"},
+                {"marker": "TSH", "value": 2.1},          # dated from the panel
+                {"marker": "LDL", "value": 128, "date": "2026-08-14"},
+            ],
+        },
+        "MEDICATIONS": {
+            "medications": [
+                {"dose": "500mg", "timing": "with food"},  # a dose, no drug
+                {"name": "metformin", "dose": "500mg"},
+                "",
+            ],
+            "supplements": [{"name": "vitamin D3", "dose": "60000 IU weekly"}],
+        },
+        "SYMPTOMS": {
+            "current_symptoms": [
+                {"symptom": "afternoon fatigue", "severity": "very"},
+                {"symptom": "bloating", "severity": 6},
+                {"severity": 4},                          # a severity for nothing
+            ],
+        },
+        "FOOD_LOG": {
+            "food_log_days": [
+                "yesterday I had idli and sambar",        # a day as a string
+                {"date": "sometime last week", "raw_text": "rice, dal"},
+                {"date": "2026-08-12", "raw_text": "idli, sambar, filter coffee"},
+            ],
+        },
+        "RHT_LINKAGE": {"rht_status": "probably fine"},
+        "NOT_A_SECTION": {"invented": True},
+    },
+}
+
+
 FIXTURES = {
     EXTERNAL_REF_COMPLETE: (DISPLAY_NAME_COMPLETE, COMPLETE_INTAKE),
     EXTERNAL_REF_SPARSE: (DISPLAY_NAME_SPARSE, SPARSE_INTAKE),
     EXTERNAL_REF_MALE: (DISPLAY_NAME_MALE, MALE_INTAKE),
+    EXTERNAL_REF_MALFORMED: (DISPLAY_NAME_MALFORMED, MALFORMED_INTAKE),
 }
 
 

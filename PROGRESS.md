@@ -12,13 +12,13 @@ before 2026-09-09; all of it has now.
 
 | | |
 |---|---|
-| Schema | 11 migrations, 75 tables, 18 views, 51 enums, 201 indexes, 42 triggers, 58 policies, 29 RLS tables |
+| Schema | 12 migrations, 75 tables, 19 views, 51 enums, 202 indexes, 42 triggers, 58 policies, 29 RLS tables |
 | Suites | **11**, green from an empty database three consecutive times, each run followed by a re-run against the used database |
 | CI | `.github/workflows/tests.yml` — every push on every branch, **with and without pgvector** |
 | Engines | All seven canonical prompts installed; E6 → E1 Pass A → E7 → E1 Pass B proven **live** |
 | Ontology | 26 domains, 269 concepts seeded from the curriculum, hash-verified |
 | Backup | Restore drill performed 2026-09-10; roles gap found and fixed |
-| Bugs | 43 found and fixed, each with a regression test |
+| Bugs | 46 found and fixed, each with a regression test |
 
 **D5 is ANSWERED and Engine 1 is not to be staged.** Measured on a live
 provider 2026-09-09 (see *D5 ANSWERED* below):
@@ -213,6 +213,37 @@ RHT `NOT_ASSESSED` carries "absence is not evidence of normality" and no
 scores; a `COMPLETED` claim with nothing linked is downgraded to
 `NOT_ASSESSED`; a male client is not asked the reproductive questions while
 a female client with no answers is.
+
+### Step 14 value validation `ADDED 2026-09-10`
+009 proved **completeness** — which applicable fields had no answer — and
+said nothing about whether a supplied answer was **usable**. `011` closes
+that, and D22 records the boundary.
+
+Three outcomes and never a fourth: **missing** is a gap, exactly as
+before; **valid** is accepted; **supplied but unreadable** becomes an issue
+in `intake_submissions.validation_issues` and is treated as unknown or
+dropped. Intake still never blocks a case — nothing here can refuse a
+submission.
+
+- `raw_payload` stays **raw**. Sanitizing happens on the way out, at
+  extraction and at E6 conversion, so what was actually submitted stays
+  recoverable and stays comparable against what was made of it.
+- Nothing is repaired. `"14/08/2026"` is a different day in Mumbai and in
+  New York, so an ambiguous date is unknown; a lab result dated today
+  because its own date was unreadable would be a false fact that outlives
+  everyone who remembers why. **Removing is allowed, defaulting is not.**
+- The allowed RHT statuses are read from the `assessment_status` enum via
+  `v_assessment_status_values`, not from a list in Python that would drift.
+- A field whose only answer was unusable becomes a **gap**, so Engine 5
+  asks the question again. `UNUSABLE_ANSWERS` travels to Engine 6
+  separately from `HIGH_PRIORITY_MISSING_DATA`: "not asked" and "answered
+  unusably" are different facts, and only the second says the question
+  needs asking differently.
+
+Only the shapes that bear safety or data integrity are checked — what step
+15 writes into typed columns and what an engine reads as clinical fact. A
+validate-everything layer would freeze the field registry D22 keeps as
+data.
 
 ### Step 13 — C3 normalization layer `BUILT 2026-09-10`
 `scripts/normalize.py`. Resolves a Pass A `NORMALIZATION_PHRASES` entry
@@ -637,6 +668,36 @@ does not.
     is also the more honest number: it reports the size of the
     specification that actually ran, not the size of an unloaded edit
     sitting in `prompts/`.
+44. **Steps 12 and 13 broke the D15 degradation guarantee and nothing
+    noticed for two build steps.** `seed_ontology.py` called `similarity()`
+    with no capability gate and died with `UndefinedFunction` on a database
+    without pg_trgm; `test_normalization.py` asserted a trigram tier had
+    answered when it could not have. Step 10b had proved that path worked.
+    **CI could not have caught it**: pg_trgm and btree_gin are contrib and
+    ship in both matrix images, so the `degraded` job only ever removed
+    pgvector. There is now a `bare` job that deletes the contrib control
+    files inside the service container, and `testing/run_bare.sh` for the
+    same thing locally. K1 seeds the identical ontology either way —
+    `scripts/trigram.py` reproduces pg_trgm's similarity exactly, checked
+    against the real function over 5000 seeded pairs whenever it is
+    available.
+45. **A malformed intake value killed extraction hundreds of lines from
+    where it was accepted.** `height_cm: "about 170"` reached a numeric
+    column as `InvalidTextRepresentation`; a medication with a dose and no
+    name hit a NOT NULL; an unrecognised section key raised on the
+    `intake_section` enum inside `submit()` itself, which is intake
+    blocking a case over a typo. 009 proved completeness and never asked
+    whether a supplied answer was usable.
+46. **`rht_status: "probably fine"` reached Engine 6 as `RHT_STATUS
+    "PROBABLY FINE"`.** The worse half of 45 and the reason it is a
+    separate entry: a field whose entire job is to say whether these
+    signals are known was accepting a value that is neither known nor
+    unknown, in the one place D22 insists `NOT_ASSESSED` means unknown.
+    Now validated against the `assessment_status` enum read from the
+    database — not a list in Python, which would drift — and an
+    unrecognised status becomes `NOT_ASSESSED` **with a `DISCREPANCY` note
+    naming what was declared**, because silently defaulting it would hide
+    that someone answered the question badly.
 
 **Also, and recorded rather than amended away:** commit `c99ebf4` was made
 on a red suite. `run_all.sh` printed `FAILURES PRESENT` and the command

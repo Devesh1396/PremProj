@@ -632,6 +632,38 @@ introduces transcription error into the data the engines trust most.
   reclassifying a field in V2 is an `INSERT` or an `UPDATE` — the same
   principle as `source_kinds` in D19.
 - **V1 is deliberately not final.** Real engine runs teach us what V2 needs.
+- **Completeness and usability are different questions, and only the second
+  one is new.** V1 shipped proving which applicable fields had no answer,
+  and nothing checking whether a supplied answer could be used. That let
+  `height_cm: "about 170"` kill extraction on a numeric column hundreds of
+  lines from where intake accepted it, and — worse — let
+  `rht_status: "probably fine"` reach Engine 6 as `RHT_STATUS
+  "PROBABLY FINE"`, in the one field this decision makes load-bearing.
+  Migration `011` adds `intake_submissions.validation_issues`, and the
+  rule is three outcomes and never a fourth: **missing** is a gap as
+  before; **valid** is accepted; **supplied but unreadable** becomes an
+  issue and is treated as unknown or dropped. Never guessed at, never
+  corrected, never accepted as given, and never a reason to refuse the
+  submission.
+
+  *Rejected:* validating every field. Only the shapes that bear safety or
+  data integrity are checked — what step 15 writes into typed columns, and
+  what an engine would read as clinical fact. A validate-everything layer
+  would freeze the field registry that this decision deliberately keeps as
+  data.
+
+  *Rejected:* repairing values. "14/08/2026" is a different day in Mumbai
+  and in New York and intake cannot know which was meant; a lab result
+  dated today because its own date was unreadable is a false fact that
+  outlives everyone who remembers why. Removing is allowed, defaulting is
+  not.
+
+  *Rejected:* letting an unrecognised RHT status through as itself, or
+  silently rewriting it to `NOT_ASSESSED`. It becomes `NOT_ASSESSED` **with
+  a `DISCREPANCY` note naming what was declared** — the same treatment
+  `COMPLETED`-with-nothing-linked already gets. An unrecognised status is
+  not evidence of anything, and hiding that someone answered the question
+  badly is its own kind of dishonesty.
 
 *Rejected outright:* building intake to cover everything Engine 1 §15–§37
 can reason about. Engine 1 reasons about far more than any client should be
