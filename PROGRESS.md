@@ -33,7 +33,7 @@ not inspected by eye.**
 | Ontology | 26 domains, 269 concepts seeded from the curriculum, hash-verified |
 | Registries | **Four**: prompts (`010`), contract (`012`), handoffs (`013`), prices (`016`) |
 | Backup | Restore drill performed 2026-09-10; roles gap found and fixed |
-| Bugs | 60 found and fixed, each with a regression test |
+| Bugs | 61 found and fixed, each with a regression test |
 
 **D5 is ANSWERED and Engine 1 is not to be staged.** Measured on a live
 provider 2026-09-09 (see *D5 ANSWERED* below):
@@ -1133,6 +1133,27 @@ being thin is the expected state of the system today.
     network `code` exactly as statuses are classified by number; a
     programming error has no such code, fails once, and is reported as
     itself. A bug in that node must be loud, not slow.
+
+
+61. **The n8n SQL parity suite compared two things it had invented.** It
+    ran the workflow with `MODE: "PASS_A"` — which no caller produces, and
+    which is not a mode at all; E1 has one handoff mode, `SINGLE`, and its
+    pass is a separate column — and then hand-wrote a "reference" row to
+    match. Both halves were mine, so they agreed, and the suite reported
+    field-for-field parity while proving nothing.
+
+    Exposed by migration 020 making the coherence trigger look the mode up
+    in the registry: `no active handoff is registered for E1 in mode
+    PASS_A`. The suite now runs the real caller's mode and builds the
+    reference row by calling `run_engine()` rather than by writing a second
+    INSERT. **A harness that differs from production proves nothing about
+    production** — the same lesson as bug 49, bug 57 and bug 59, and the
+    fourth time in this build.
+
+    *Checked and NOT a bug:* the workflow requires an explicit `MODE` where
+    Python defaults for E1–E5, and `Build request` throws `HandoffMissing`
+    when the registry returns nothing. n8n is stricter than the reference in
+    the safe direction, which is a documented difference rather than a gap.
 
 
 **Also, and recorded rather than amended away:** commit `c99ebf4` was made

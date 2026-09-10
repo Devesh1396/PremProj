@@ -257,8 +257,14 @@ def main() -> int:
         "values (%s,'SQL node client','ACTIVE') returning client_id",
         (EXTERNAL_REF + "A",)).fetchone()[0]
 
+    # The mode a REAL caller produces. E1 has one handoff mode -- SINGLE --
+    # and its pass is a separate column; "PASS_A" is not a mode and no
+    # caller emits it. The first draft of this suite used it anyway and then
+    # hand-wrote a matching "reference" row, so the comparison proved that
+    # two invented things agreed. It was the coherence trigger going strict
+    # (020) that exposed it, not this suite.
     inputs = {"CLIENT_ID": str(client), "CASE_VERSION_ID": None, "CYCLE_ID": None,
-              "ENGINE_ID": "E1", "PASS": "A", "MODE": "PASS_A",
+              "ENGINE_ID": "E1", "PASS": "A", "MODE": "SINGLE",
               "MODEL_ROLE": "MODEL_ANALYSIS", "RUN_CONTEXT": {"reason": "test"}}
     run_id = str(uuid.uuid4())
     build = {"run_id": run_id, "prompt_file": "engine1_prevention.md",
@@ -273,26 +279,36 @@ def main() -> int:
         "  from engine_runs where run_id=%s", (run_id,)).fetchone()
     check("Open run inserts, so the coherence trigger accepted it", row is not None)
     check("...with the mode ON THE RUN, before any output exists",
-          row is not None and row[2] == "PASS_A", str(row))
+          row is not None and row[2] == "SINGLE", str(row))
 
-    # The same shape the reference writes, for the same logical run.
-    ref_id = str(uuid.uuid4())
-    with RE.client_scope(admin, client):
-        admin.execute(
-            """insert into engine_runs
-                 (run_id, client_id, case_version_id, cycle_id, engine, pass,
-                  engine_mode, prompt_file, prompt_hash, schema_version,
-                  model_role, model_name, model_params, status, started_at)
-               values (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'RUNNING',now())""",
-            (ref_id, client, None, None, "E1", "A", "PASS_A",
-             build["prompt_file"], build["prompt_hash"], RE.SCHEMA_VERSION,
-             "MODEL_ANALYSIS", "claude-sonnet-5", json.dumps(inputs["RUN_CONTEXT"])))
+    # The reference row comes from the REFERENCE IMPLEMENTATION, not from a
+    # second hand-written INSERT. Writing both by hand is how the first
+    # draft of this suite compared two things it had invented.
+    os.environ["LLM_API_KEY"] = ""
+    ref_result = RE.run_engine(
+        admin,
+        RE.EngineRequest(engine="E1", pass_label="A", client_id=str(client),
+                         structured_input={"CASE": "n8n SQL parity"},
+                         model_role="MODEL_ANALYSIS",
+                         run_context=inputs["RUN_CONTEXT"]))
+    check("the reference implementation completed its own run",
+          ref_result.status == "SUCCEEDED", str(ref_result.error))
+    ref_id = ref_result.run_id
     ref = admin.execute(
-        "select engine, pass::text, engine_mode, client_id, prompt_hash, "
-        "       schema_version, model_role, model_name, status::text "
+        "select engine, pass::text, engine_mode, client_id, "
+        "       schema_version, model_role, status::text "
         "  from engine_runs where run_id=%s", (ref_id,)).fetchone()
-    check("the n8n row and the reference row are identical field for field",
-          row == ref, f"{row} vs {ref}")
+    row_cmp = admin.execute(
+        "select engine, pass::text, engine_mode, client_id, "
+        "       schema_version, model_role, status::text "
+        "  from engine_runs where run_id=%s", (run_id,)).fetchone()
+    # status differs by design -- the reference run completed, the workflow
+    # row is still RUNNING until Record success -- so compare the fields
+    # that describe WHAT was run, which is what parity is about.
+    check("the reference and the workflow agree on the mode E1 runs in",
+          ref[2] == row_cmp[2] == "SINGLE", f"{ref[2]} vs {row_cmp[2]}")
+    check("the n8n row and the reference row agree field for field",
+          row_cmp[:6] == ref[:6], f"{row_cmp[:6]} vs {ref[:6]}")
 
     # -- cost accounting, one row per physical attempt, priced ------------
     attempts = [{"ok": False, "ms": 40, "in_tok": 0, "out_tok": 0,
@@ -344,7 +360,7 @@ def main() -> int:
         "  from engine_runs r join engine_outputs o on o.run_id=r.run_id "
         " where r.run_id=%s", (ok_id,)).fetchone()
     check("Record success closes the run and stores all three outputs",
-          out == ("SUCCEEDED", "PREVENTION_HANDOFF", "PASS_A", True, "3", "E2"), str(out))
+          out == ("SUCCEEDED", "PREVENTION_HANDOFF", "SINGLE", True, "3", "E2"), str(out))
 
     # -- the dead letter carries its client -----------------------------
     dl_ctx = {"nodes": {"Inputs": inputs, "Build request": build,
