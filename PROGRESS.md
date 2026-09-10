@@ -12,13 +12,13 @@ before 2026-09-09; all of it has now.
 
 | | |
 |---|---|
-| Schema | 10 migrations, 74 tables, 17 views, 51 enums, 197 indexes, 40 triggers, 58 policies, 29 RLS tables |
+| Schema | 11 migrations, 75 tables, 18 views, 51 enums, 201 indexes, 42 triggers, 58 policies, 29 RLS tables |
 | Suites | **11**, green from an empty database three consecutive times, each run followed by a re-run against the used database |
 | CI | `.github/workflows/tests.yml` — every push on every branch, **with and without pgvector** |
 | Engines | All seven canonical prompts installed; E6 → E1 Pass A → E7 → E1 Pass B proven **live** |
 | Ontology | 26 domains, 269 concepts seeded from the curriculum, hash-verified |
 | Backup | Restore drill performed 2026-09-10; roles gap found and fixed |
-| Bugs | 42 found and fixed, each with a regression test |
+| Bugs | 43 found and fixed, each with a regression test |
 
 **D5 is ANSWERED and Engine 1 is not to be staged.** Measured on a live
 provider 2026-09-09 (see *D5 ANSWERED* below):
@@ -627,6 +627,14 @@ does not.
     test now cleans up after itself, and the assertion is scoped to its own
     fixtures. A global count assertion cannot survive a seeder whose job is
     to add rows.
+43. **Removing `PROMPTS_DIR` broke the D5 call-size report.** Nothing
+    else read it, so the loss did not surface until `test_measurement.py`
+    ran the report's exit path — the same corner of `measure_engine1.py`
+    that bug 32 lived in, which is a hint that the report is under-covered
+    rather than unlucky. Fixed by reading `v_active_engine_prompts`, which
+    is also the more honest number: it reports the size of the
+    specification that actually ran, not the size of an unloaded edit
+    sitting in `prompts/`.
 
 **Also, and recorded rather than amended away:** commit `c99ebf4` was made
 on a red suite. `run_all.sh` printed `FAILURES PRESENT` and the command
