@@ -1512,6 +1512,83 @@ copy with extra steps. The columns already know.
 
 ---
 
+## D35 — The Claim Cards are their own handoff, and they are strict JSON
+**SETTLED 2026-09-10**
+
+K09 is "Engine 7 in claim-extraction mode. Strict JSON." Engine 7's INBOX
+mode already had a registered handoff — `<RESEARCH_PRACTICE_INBOX_HANDOFF>`,
+§R10 — and it deliberately carries **§55's information GAIN and not the
+claims**: how many were identified, how many were already known, what
+extended the library.
+
+So an INBOX run could report *"7 claims identified"* and leave **nothing**
+for K09 to normalize, retrieve evidence for, or synthesise from. The
+substance was described and never emitted. That is D24's failure in a new
+place: a summary is not the reasoning any more than a control block is.
+
+`<RESEARCH_PRACTICE_CLAIMS>` (§R11) carries the Claim Cards themselves, and
+both blocks are **required** on an INBOX run. `engine_handoffs` already
+supported several tags per mode — E6 REBUILD has two — so registering it
+was an INSERT, not a mechanism.
+
+### Strict JSON without touching frozen step 11
+
+Handoff blocks are line-oriented `KEY: value`; a Claim Card has eleven
+fields and there may be dozens of cards. The obvious move was to teach
+`RUN_ENGINE` and the workflow that a handoff body can be JSON — and that
+is a change to **step 11, which is frozen**, and to both sides of D26's
+byte parity and D31's SQL parity.
+
+It was not needed. `parse_handoff_block` already handles **continuation
+lines**: a line that is not `KEY:` is appended to the current field. So a
+single `CLAIMS_JSON:` field followed by pretty-printed JSON round-trips
+losslessly — verified against the real parser before the format was
+chosen. A JSON line begins with a brace, a bracket, a quote or whitespace,
+never with an ALL-CAPS key, so it cannot be mistaken for a new field.
+
+**Zero changes to `run_engine.py`, the workflow, or either parity suite.**
+The frozen thing stayed frozen because the constraint was checked first
+rather than worked around.
+
+### What K09 may not do
+
+* **No evidence records.** `evidence_referenced_by_source` holds what the
+  SOURCE cited. It is text, it stays text, and
+  `envelope_derived_records.discovery_only` is `true`: this envelope
+  surfaced the claim, it does not evidence it (D10). A video that gave us
+  an idea has not proved it.
+* **No strategies.** That is K11, after synthesis has actually compared the
+  claim against the library.
+* **No `POTENTIAL_NEW_STRATEGY` verdict.** §54's classification here is
+  derived from what was *written*, not from the model's own counts, and
+  only three outcomes are decidable at this stage: no claims →
+  `LOW_INFORMATION_GAIN`; claims and no new concepts → `SUPPORTS_EXISTING`;
+  claims and new concepts → `NEW_CLAIM_REQUIRES_RESEARCH`. `ALREADY_KNOWN`
+  is withheld too — at this point "nothing new was proposed" has been
+  established, which is not the same thing.
+* **Nothing from a held-out source.** A3: those are the retrieval answer
+  key. The envelope goes to `SKIPPED` with the reason recorded on the row.
+
+### Extraction confidence is not authorisation
+
+Hard rule 4, restated in §R11 because this is exactly where it would be
+forgotten: `extraction_confidence` is confidence that **the source says
+this**. Not that it is true, not an evidence grade, and not permission to
+promote anything. §5 keeps claim strength and claim truth separate.
+
+*Rejected:* a second, narrower extraction prompt. Hard rule 7 — an output
+that cannot be traced to a specification is worse than no output — and
+K09 says *Engine 7* in claim-extraction mode.
+
+*Rejected:* parsing the claims out of the human-readable output. That is
+prose parsing to route, wearing a different hat.
+
+*Rejected:* making `<RESEARCH_PRACTICE_CLAIMS>` optional so a source with
+nothing in it need not emit it. An empty array is an answer and an absent
+block is a failed run, and those must not look the same.
+
+---
+
 ## OPEN
 
 **O1 — Intake form. `RESOLVED FOR V1` — see D22.** Core Intake V1 is built:

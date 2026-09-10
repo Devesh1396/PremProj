@@ -26,7 +26,7 @@ finished it must keep working on n8n + PostgreSQL + an LLM API alone.
 
 | File | When |
 |---|---|
-| `docs/DECISIONS.md` | **Before proposing any structural change.** 34 settled decisions with rationale and rejected alternatives. |
+| `docs/DECISIONS.md` | **Before proposing any structural change.** 35 settled decisions with rationale and rejected alternatives. |
 | `docs/MASTER_SPEC.md` | The 40-phase build specification plus amendments. |
 | `BUILD_PLAN.md` | Milestones, dependencies, acceptance criteria. |
 | `PROGRESS.md` | What actually works, tests passed, bugs fixed, next exact task. |
@@ -318,14 +318,29 @@ a fabricated price corrupts every total built on it. `load_prices.py` names
 the gap on every run and `v_unpriced_spend` counts what has been spent
 without one.
 
-**Next:** step 16, the Knowledge Factory. **K07 and K08 are built** —
-`scripts/knowledge_ingest.py` takes a file from `knowledge/inbox/` to
-heading-located `knowledge_chunks`, deterministically, with no model call.
-K09 claim extraction is the next task, then K10 and K11, then discovery
-K02–K06.
+**Next:** step 16, the Knowledge Factory. **K07, K08 and K09 are built.**
+`knowledge_ingest.py` takes a file from `knowledge/inbox/` to
+heading-located chunks deterministically with no model call;
+`knowledge_extract.py` runs E7 INBOX over those chunks and writes Claim
+Cards, normalizes the concepts they mention, and records a §54 delta.
+**K10 evidence analysis and K11 strategy synthesis are next**, then
+discovery K02–K06.
 
-Until K09 and K11 run, Engine 7 retrieves from a library with no claims or
-strategies in it and Pass B reasons from an empty retrieval set — that is
+**K09 may not create an evidence record or a strategy (D35).**
+`evidence_referenced_by_source` is what the SOURCE cited — text, and it
+stays text; the provenance edge is `discovery_only` because a video that
+surfaced an idea has not evidenced it (D10). The §54 classification is
+derived from what was written, never echoed from the model's counts, and
+`POTENTIAL_NEW_STRATEGY` is K11's verdict, not K09's. A held-out source is
+`SKIPPED`, never extracted (A3).
+
+**`<RESEARCH_PRACTICE_CLAIMS>` is strict JSON in one `CLAIMS_JSON` field**,
+because `parse_handoff_block` already handles continuation lines — so K09
+needed **no change to frozen step 11**, to `run_engine.py`, or to either
+parity suite. Check the constraint before working around it.
+
+Until K11 runs, Engine 7 retrieves from a library with claims but no
+strategies and Pass B reasons from a near-empty retrieval set — that is
 expected, not a bug, and `PROGRESS.md` says so before the first full case
 is run.
 

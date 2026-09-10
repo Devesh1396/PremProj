@@ -99,7 +99,15 @@ HANDOFFS: dict[tuple[str, str], list[tuple[str, bool, str, str]]] = {
         "report and described it in prose, so an INBOX run had no "
         "substantive output contract and the runtime had nothing but a "
         "control block to record. Reusing the control block would be D24 "
-        "all over again.")],
+        "all over again."),
+        ("RESEARCH_PRACTICE_CLAIMS", True, "engine7 §R11",
+         "The Claim Cards themselves, as strict JSON in one CLAIMS_JSON "
+         "field. §R10 reports the information GAIN and deliberately not the "
+         "claims, so an INBOX run could say '7 claims identified' and leave "
+         "nothing for K09 to normalize, retrieve evidence for or synthesise "
+         "from. Required, because a run that extracted nothing emits "
+         "CLAIMS_JSON: [] -- an empty array is an answer, an absent block "
+         "is a failed run.")],
 }
 
 # Which mode an engine runs in when the caller does not say. Five engines

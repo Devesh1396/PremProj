@@ -3286,6 +3286,74 @@ promotes anything: `CANDIDATE_STRATEGIES_CREATED` names strategies at
 
 ---
 
+## R11. MACHINE-READABLE CLAIM CARDS <RESEARCH_PRACTICE_CLAIMS>
+
+*Added by the build. §17 requires a source to move SOURCE → CLAIM →
+CONCEPT NORMALIZATION → EVIDENCE, and §39 says what a Claim Card must
+retain. `<RESEARCH_PRACTICE_INBOX_HANDOFF>` reports §55's information
+GAIN — how many claims, how many already known — and deliberately not the
+claims themselves. Nothing carried the claims, so an INBOX run could
+report "7 claims identified" and leave nothing for the pipeline to
+normalize, retrieve evidence for, or synthesise from.*
+
+Emitted in **INBOX** mode, alongside `<RESEARCH_PRACTICE_INBOX_HANDOFF>`.
+The counts in that block and the contents of this one describe the same
+run and must agree.
+
+**Strict JSON**, as a single `CLAIMS_JSON` field. The value is a JSON
+array — pretty-printed across several lines is fine — and every object in
+it is one Claim Card:
+
+<RESEARCH_PRACTICE_CLAIMS>
+MODE:
+SOURCE_REFERENCE:
+CLAIMS_JSON:
+</RESEARCH_PRACTICE_CLAIMS>
+
+### The Claim Card object
+
+| field | §39 | |
+|---|---|---|
+| `claim_text` | exact meaning | **Required.** What the source actually asserts, in one sentence, in the source's own terms. Not a paraphrase that improves it. |
+| `claim_type` | — | `INTERVENTION_EFFECT`, `MECHANISM`, `ASSOCIATION`, `SAFETY`, `IMPLEMENTATION`, `DEFINITIONAL`, or `OTHER`. |
+| `target` | target / outcome | The measured or claimed outcome. |
+| `intervention` | intervention / exposure | What is being done or taken. Null for a claim that is not about an intervention. |
+| `population` | population | Who the claim is about, as stated. Null when the source does not say. |
+| `magnitude` | claimed magnitude | As stated, with units. Never estimated, never converted. |
+| `mechanism` | claimed mechanism | The mechanism the source proposes, if any. |
+| `context` | exposure, dose, duration | The conditions under which the claim is made. |
+| `evidence_referenced_by_source` | evidence cited | What the SOURCE cites, verbatim enough to find. **Not** what you know about the topic. |
+| `extraction_confidence` | confidence | 0.0–1.0. How confident you are that you read the source correctly. |
+| `location` | source | The heading path or timestamp this claim came from, so it can be checked. |
+
+### What extraction_confidence means, and does not
+
+It is confidence that **the source says this**. It is not confidence that
+the claim is true, not an evidence grade, and not permission to promote
+anything. §5 keeps claim strength and claim truth separate, and a
+confidently-extracted claim from a confident creator is still
+`EXTRACTED_UNVERIFIED` until evidence is retrieved.
+
+### The source of the idea is not the source of the evidence
+
+§17's closing line is a hard rule here (D10). `evidence_referenced_by_source`
+records what the source pointed at. It never becomes an evidence record,
+and this block never emits one. A video that surfaced an idea does not
+evidence it.
+
+### Extract nothing rather than invent something
+
+- A source with no extractable claims emits `CLAIMS_JSON: []`. That is a
+  legitimate, common and useful answer — it is what
+  `LOW_INFORMATION_GAIN` looks like from the extraction side.
+- Never fill a field the source did not supply. `null` is correct and
+  `population: "adults"` guessed from context is not.
+- Never merge two claims into one because they are related, and never
+  split one claim into two because it is long. The Claim Card is what the
+  source asserted, at the granularity it asserted it.
+
+---
+
 ## 88. ORCHESTRATION CONTROL BLOCK — REQUIRED
 
 *Added by the build. The runtime cannot route without this.*

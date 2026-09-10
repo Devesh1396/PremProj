@@ -496,8 +496,31 @@ def fixture_handoffs(engine: str, mode: str, params: dict) -> dict[str, str]:
     if engine == "E7":
         if mode == "INBOX":
             # §R10, added by the build because §55 described the information
-            # gain in prose and no machine block carried it.
-            return {"RESEARCH_PRACTICE_INBOX_HANDOFF": (
+            # gain in prose and no machine block carried it -- and §R11, the
+            # Claim Cards themselves, because §R10 reports the information
+            # GAIN and deliberately not the claims. A sentinel claim rather
+            # than an empty array: an empty array is legitimate output but it
+            # proves nothing about the path from a claim to a claims row.
+            claims = json.dumps([{
+                "claim_text": s("CLAIM-TEXT"),
+                "claim_type": "INTERVENTION_EFFECT",
+                "target": s("CLAIM-TARGET"),
+                "intervention": s("CLAIM-INTERVENTION"),
+                "population": None,
+                "magnitude": None,
+                "mechanism": s("CLAIM-MECHANISM"),
+                "context": s("CLAIM-CONTEXT"),
+                "evidence_referenced_by_source": s("CLAIM-CITED"),
+                "extraction_confidence": 0.77,
+                "location": s("CLAIM-LOCATION"),
+            }], indent=2)
+            return {
+                "RESEARCH_PRACTICE_CLAIMS": (
+                    f"MODE: {mode}\n"
+                    f"SOURCE_REFERENCE: {s('SOURCE')}\n"
+                    f"CLAIMS_JSON:\n{claims}"
+                ),
+                "RESEARCH_PRACTICE_INBOX_HANDOFF": (
                 f"MODE: {mode}\n"
                 f"SOURCE_REFERENCE: {s('SOURCE')}\n"
                 "SOURCE_KIND: OTHER\n"
@@ -511,7 +534,8 @@ def fixture_handoffs(engine: str, mode: str, params: dict) -> dict[str, str]:
                 "SOURCE_VERSION: 1\n"
                 "PROCESSING_VERSION: 1\n"
                 "REPROCESSING_OF:"
-            )}
+                ),
+            }
         # FOUNDATION and UPDATE share the foundation contract (§R8): an
         # UPDATE is a smaller foundation pass, not a different output.
         tag = ("RESEARCH_PRACTICE_CASE_HANDOFF" if mode == "CASE"

@@ -28,6 +28,8 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "scripts"))
 
 import psycopg
+import run_engine as RE
+import knowledge_extract as KX
 
 FAILS: list[str] = []
 PREFIX = "kftest-"
@@ -62,6 +64,12 @@ def clear(conn) -> None:
     conn.execute("delete from knowledge_sources where source_name like %s",
                  (PREFIX + "%",))
     conn.execute("delete from source_kinds where source_kind = 'KFTEST_ZINE'")
+    conn.execute(
+        "delete from claims where claim_id in "
+        "  (select derived_id from envelope_derived_records)"
+        "  and item_id is null")
+    conn.execute("delete from concept_proposals where raw_phrase like %s",
+                 ("SENT-%",))
 
 
 def drop(inbox: Path, name: str, body: str, meta: dict | None = None) -> Path:
@@ -74,6 +82,12 @@ def drop(inbox: Path, name: str, body: str, meta: dict | None = None) -> Path:
 
 
 def main() -> int:
+    # The fixture provider, always. K07 and K08 call no model at all and
+    # K09's assertions are about the pipeline around the call, not about
+    # what a model says — a suite that spends money to prove a provenance
+    # edge is a suite nobody runs.
+    os.environ["LLM_API_KEY"] = ""
+
     conn = psycopg.connect(os.environ["DATABASE_URL"], autocommit=True)
     clear(conn)
 
@@ -293,6 +307,170 @@ def main() -> int:
     check("an empty inbox produces nothing", KI.inbox_files() == [])
     check("...and no chunk appeared from nowhere",
           conn.execute("select count(*) from knowledge_chunks").fetchone()[0] == before)
+
+    # ==================================================================
+    # K09 — claim extraction (D35)
+    # ==================================================================
+    print("\nK09: one source through the whole loop")
+
+    body = (
+        f"# {PREFIX}Berberine\n\n## Mechanism\n\n"
+        "Berberine activates AMPK and reduces hepatic gluconeogenesis.\n\n"
+        "## Interactions\n\nIt inhibits CYP3A4.\n")
+    path = drop(inbox, PREFIX + "k09.md", body)
+    ingested = KI.ingest_one(conn, path)
+    envelope = conn.execute(
+        "select envelope_id, source_title, source_kind, source_role::text, "
+        "       rights::text, content_hash, source_version "
+        "  from source_envelopes where envelope_id=%s",
+        (ingested.envelope_id,)).fetchone()
+
+    out = KX.extract_one(conn, envelope)
+    check("the envelope reaches EXTRACTED", out["outcome"] == "EXTRACTED", str(out))
+    check("claims were written", out["claims"] >= 1, str(out))
+
+    claim = conn.execute(
+        "select c.claim_id, c.claim_text, c.claim_type, c.extraction_confidence, "
+        "       c.evidence_referenced_by_source, c.item_id "
+        "  from claims c join envelope_derived_records r "
+        "    on r.derived_id = c.claim_id and r.derived_kind='CLAIM' "
+        " where r.envelope_id=%s", (ingested.envelope_id,)).fetchone()
+    check("...linked to the envelope they came from", claim is not None)
+    check("...and to the source item, so they can be traced to a document",
+          claim is not None and claim[5] is not None)
+
+    # D10. The source of the IDEA is not the source of the EVIDENCE.
+    edge = conn.execute(
+        "select discovery_only from envelope_derived_records "
+        " where envelope_id=%s and derived_kind='CLAIM'",
+        (ingested.envelope_id,)).fetchone()
+    check("the provenance edge is DISCOVERY ONLY — the source surfaced the "
+          "claim, it does not evidence it (D10)", edge == (True,), str(edge))
+    check("...and what the source cited stays TEXT, never an evidence record",
+          claim is not None and claim[4] is not None
+          and conn.execute(
+              "select count(*) from envelope_derived_records "
+              " where envelope_id=%s and derived_kind='EVIDENCE'",
+              (ingested.envelope_id,)).fetchone()[0] == 0)
+
+    # Hard rule 12: every derived object registers by trigger.
+    check("the claim is registered in knowledge_entities by trigger",
+          conn.execute(
+              "select count(*) from knowledge_entities "
+              " where entity_id=%s and entity_kind='CLAIM'",
+              (claim[0],)).fetchone()[0] == 1)
+
+    # K11 has not run. Nothing here may create a strategy.
+    check("extraction creates NO strategy — that is K11's decision",
+          conn.execute(
+              "select count(*) from envelope_derived_records "
+              " where envelope_id=%s and derived_kind='STRATEGY'",
+              (ingested.envelope_id,)).fetchone()[0] == 0)
+
+    run = conn.execute(
+        "select engine, engine_mode, client_id, status::text from engine_runs "
+        " where run_id=%s", (out["run_id"],)).fetchone()
+    check("the extraction ran E7 in INBOX mode with NO client (D18, D27)",
+          run == ("E7", "INBOX", None, "SUCCEEDED"), str(run))
+
+    delta = conn.execute(
+        "select classification::text, claims_extracted, genuinely_new_count "
+        "  from source_delta_analyses where envelope_id=%s",
+        (ingested.envelope_id,)).fetchone()
+    check("a delta analysis is recorded (§54)", delta is not None, str(delta))
+    check("...counting the claims that were actually WRITTEN",
+          delta is not None and delta[1] == out["claims"], str(delta))
+    check("...and never POTENTIAL_NEW_STRATEGY, which is K11's verdict",
+          delta is not None and delta[0] != "POTENTIAL_NEW_STRATEGY", str(delta))
+
+    # ------------------------------------------------------------------
+    print("\nK09: extracting nothing is an answer, not a failure")
+
+    def responder(blocks_json, inbox_extra=""):
+        def provider(system_prompt, user_prompt, params):
+            return (
+                "the report\n"
+                "<RESEARCH_PRACTICE_CLAIMS>\n"
+                "MODE: INBOX\n"
+                "SOURCE_REFERENCE: x\n"
+                f"CLAIMS_JSON:\n{blocks_json}\n"
+                "</RESEARCH_PRACTICE_CLAIMS>\n"
+                "<RESEARCH_PRACTICE_INBOX_HANDOFF>\n"
+                "MODE: INBOX\nSOURCE_REFERENCE: x\nSOURCE_KIND: OTHER\n"
+                f"CLAIMS_IDENTIFIED: 0\n{inbox_extra}"
+                "INFORMATION_GAIN_SUMMARY: none\n"
+                "</RESEARCH_PRACTICE_INBOX_HANDOFF>\n"
+                '<CONTROL_BLOCK>\n{"CASE_VERSION": 0, "ENGINE_RUN_STATUS": '
+                '"SUCCEEDED"}\n</CONTROL_BLOCK>\n'), 10, 10
+        return provider
+
+    def with_provider(provider, envelope):
+        original = RE.select_provider
+        RE.select_provider = lambda: (provider, "fixture")
+        try:
+            return KX.extract_one(conn, envelope)
+        finally:
+            RE.select_provider = original
+
+    empty = drop(inbox, PREFIX + "empty.md",
+                 f"# {PREFIX}Nothing new\n\nA restatement of what we know.\n")
+    e2 = KI.ingest_one(conn, empty)
+    env2 = conn.execute(
+        "select envelope_id, source_title, source_kind, source_role::text, "
+        "       rights::text, content_hash, source_version "
+        "  from source_envelopes where envelope_id=%s", (e2.envelope_id,)).fetchone()
+    out2 = with_provider(responder("[]"), env2)
+    check("an empty CLAIMS_JSON extracts zero claims and still succeeds",
+          out2["outcome"] == "EXTRACTED" and out2["claims"] == 0, str(out2))
+    check("...and is classified LOW_INFORMATION_GAIN, not a failure",
+          conn.execute(
+              "select classification::text from source_delta_analyses "
+              " where envelope_id=%s", (e2.envelope_id,)).fetchone()[0]
+          == "LOW_INFORMATION_GAIN")
+
+    # ------------------------------------------------------------------
+    print("\nK09: malformed extraction is refused, not half-kept")
+
+    bad = drop(inbox, PREFIX + "bad.md", f"# {PREFIX}Bad\n\nSomething.\n")
+    e3 = KI.ingest_one(conn, bad)
+    env3 = conn.execute(
+        "select envelope_id, source_title, source_kind, source_role::text, "
+        "       rights::text, content_hash, source_version "
+        "  from source_envelopes where envelope_id=%s", (e3.envelope_id,)).fetchone()
+    claims_before = conn.execute("select count(*) from claims").fetchone()[0]
+    try:
+        with_provider(responder('[{"claim_text": "half a claim"'), env3)
+        check("invalid CLAIMS_JSON raises rather than storing what parsed", False,
+              "no error raised")
+    except KX.ExtractionFailed as exc:
+        check("invalid CLAIMS_JSON raises rather than storing what parsed",
+              "not valid JSON" in str(exc), str(exc)[:120])
+    check("...and NOTHING was written from it",
+          conn.execute("select count(*) from claims").fetchone()[0] == claims_before)
+
+    # ------------------------------------------------------------------
+    print("\nK09: a held-out source is never synthesised from (A3)")
+
+    ho = drop(inbox, PREFIX + "heldout.md", f"# {PREFIX}Held out\n\nAnswer key.\n")
+    e4 = KI.ingest_one(conn, ho)
+    conn.execute("update source_items set held_out=true, held_out_batch='KFTEST' "
+                 " where content_hash=(select content_hash from source_envelopes "
+                 "                      where envelope_id=%s)", (e4.envelope_id,))
+    env4 = conn.execute(
+        "select envelope_id, source_title, source_kind, source_role::text, "
+        "       rights::text, content_hash, source_version "
+        "  from source_envelopes where envelope_id=%s", (e4.envelope_id,)).fetchone()
+    out4 = KX.extract_one(conn, env4)
+    check("a held-out source is SKIPPED, not extracted",
+          out4["outcome"] == "HELD_OUT" and out4["claims"] == 0, str(out4))
+    check("...and produced no claims at all",
+          conn.execute(
+              "select count(*) from envelope_derived_records where envelope_id=%s",
+              (e4.envelope_id,)).fetchone()[0] == 0)
+    check("...with the reason on the envelope, not just in a log",
+          "held out" in (conn.execute(
+              "select failure_reason from source_envelopes where envelope_id=%s",
+              (e4.envelope_id,)).fetchone()[0] or ""))
 
     clear(conn)
     shutil.rmtree(root, ignore_errors=True)

@@ -92,8 +92,8 @@ def main() -> int:
     check("header does not claim R1-R4", "§R1–§R4" not in e7)
     check("header does not claim R5-R9", "§R5–§R9" not in e7)
     r_secs = re.findall(r"^## (R\d+)\.", e7, re.M)
-    check("R sections run R1..R10 exactly",
-          r_secs == [f"R{i}" for i in range(1, 11)], str(r_secs))
+    check("R sections run R1..R11 exactly",
+          r_secs == [f"R{i}" for i in range(1, 12)], str(r_secs))
     check("control block points at R2 for the dimensions, not R3",
           "§R3 domain-depth" not in e7 and "§R2 domain-depth" in e7)
 

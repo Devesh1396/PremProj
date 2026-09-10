@@ -120,9 +120,14 @@ def main() -> int:
     check("UPDATE shares the foundation contract: it builds the library",
           LH.expected(conn, "E7", "UPDATE")
           == LH.expected(conn, "E7", "FOUNDATION"))
-    check("INBOX has its own block, not the control block reused (D24)",
-          LH.expected(conn, "E7", "INBOX")
-          == [("RESEARCH_PRACTICE_INBOX_HANDOFF", True)],
+    # Two blocks, both required, and they carry different things: §R10 is
+    # §55's information GAIN, §R11 is the Claim Cards themselves. A run that
+    # reported "7 claims identified" and carried no claims would leave K09
+    # nothing to normalize (D35).
+    check("INBOX has its own blocks, not the control block reused (D24)",
+          sorted(LH.expected(conn, "E7", "INBOX"))
+          == [("RESEARCH_PRACTICE_CLAIMS", True),
+              ("RESEARCH_PRACTICE_INBOX_HANDOFF", True)],
           str(LH.expected(conn, "E7", "INBOX")))
     check("...carrying the §55 information gain",
           all(f in (REPO / "prompts" / "engine7_research_practice.md").read_text()

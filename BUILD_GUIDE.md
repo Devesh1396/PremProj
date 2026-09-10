@@ -398,9 +398,25 @@ on all five vector tables, a unit-norm check on write, and one model pinned
 per column. `EMBEDDING_DIM`'s three unchecked copies are gone —
 `embedding_dim()` reads the catalog.
 
-**Next in this step:** K09 claim extraction (Engine 7 in claim-extraction
-mode over the chunks), then K10 evidence analysis and K11 strategy
-synthesis with deterministic dedup before any LLM merge call.
+**K09 BUILT.** `scripts/knowledge_extract.py` runs E7 in INBOX mode over a
+normalized envelope's chunks and writes §39 Claim Cards, then normalizes
+the concepts those claims mention through the same tiers as any other
+phrase, then records a §54 delta analysis derived from what was **written**
+rather than from the model's own counts (D35).
+
+The claims arrive as strict JSON in a single `CLAIMS_JSON` field of
+`<RESEARCH_PRACTICE_CLAIMS>` (§R11, added by the build because §R10 carries
+the information *gain* and deliberately not the claims). That format was
+chosen because `parse_handoff_block` already handles continuation lines, so
+K09 required **no change to frozen step 11** and none to either parity
+suite.
+
+Boundaries, all asserted: no evidence record, no strategy, no
+`POTENTIAL_NEW_STRATEGY` verdict, `discovery_only` provenance (D10), and a
+held-out source is `SKIPPED` rather than extracted (A3).
+
+**Next in this step:** K10 evidence analysis, then K11 strategy synthesis
+with deterministic dedup before any LLM merge call.
 
 `MODEL_EXTRACTION` on the cheapest capable model — highest volume.
 Use the **Batch API** where the provider offers it: the knowledge clock is
