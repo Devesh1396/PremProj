@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import random
 import time
 import uuid
@@ -36,6 +37,7 @@ import psycopg
 from jsonschema import Draft202012Validator
 
 import load_contracts
+import load_handoffs
 import load_prompts
 import pricing
 
@@ -68,6 +70,8 @@ CONTROL_TAG = "CONTROL_BLOCK"
 # latent bug. Re-exported so existing callers keep working.
 ENGINE_PROMPTS = load_prompts.ENGINE_PROMPTS
 PromptMissing = load_prompts.PromptMissing
+HandoffMissing = load_handoffs.HandoffMissing
+HandoffModeUnknown = load_handoffs.HandoffModeUnknown
 
 
 class ModelRoleUnset(RuntimeError):
@@ -88,6 +92,11 @@ class EngineRequest:
     case_version_id: str | None = None
     cycle_id: str | None = None
     pass_label: str = "SINGLE"
+    # What the engine was asked to do, which decides WHICH substantive
+    # handoff it owes (D24). E1-E5 have one mode and default to it; E6 and
+    # E7 have no safe default, because guessing means expecting a delta
+    # where a full state was needed, or the reverse.
+    mode: str | None = None
     model_role: str = "MODEL_ANALYSIS"
     run_context: dict[str, Any] = field(default_factory=dict)
 
@@ -98,9 +107,17 @@ class EngineResult:
     status: str
     control: dict[str, Any] | None
     human_output: str | None
+    # The engine's substantive reasoning, parsed from its handoff block.
+    # NEVER the control block: that is `control`, it is for routing and
+    # gating, and the two are not interchangeable (D24).
     structured: dict[str, Any] | None
     attempts: int
     error: str | None = None
+    handoff_tag: str | None = None
+    handoff_mode: str | None = None
+    # Registered blocks the same response carried beyond the primary one,
+    # keyed by tag. E6 rebuilding state may also emit its delta.
+    secondary_handoffs: dict[str, Any] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------
@@ -155,6 +172,82 @@ def validator(conn: psycopg.Connection) -> Draft202012Validator:
     return _validators[digest]
 
 
+# A handoff block is line-oriented KEY: text, not JSON, and that is the
+# prompts' format rather than a choice made here. The parser therefore has
+# to answer one question well: which lines are keys and which are the
+# continuation of the previous value.
+#
+# The rule is a key is an ALL-CAPS identifier followed by a colon AT COLUMN
+# ZERO. It is deliberately narrow, because the alternatives fail on real
+# content:
+#
+#   "Note: take with food"      not a key -- mixed case
+#   "  IMPORTANT: ..."          not a key -- indented, so it is a value line
+#   "- STRATEGY_A: ..."         not a key -- prefixed
+#   "HbA1c: 6.1"                not a key -- lowercase letters
+#
+# NOTHING IS DISCARDED. `_raw` keeps the block verbatim, so a value this
+# parser splits wrongly is still recoverable, and anything before the first
+# key is kept as `_preamble` rather than dropped. Unknown keys are kept as
+# they come; the registry says which BLOCK is expected, never which fields
+# are permitted inside it.
+_HANDOFF_KEY = re.compile(r"^([A-Z][A-Z0-9_]{2,}):[ \t]*(.*)$")
+
+
+def parse_handoff_block(body: str) -> dict[str, Any]:
+    """A line-oriented handoff block as a dict. Lossless by construction."""
+    fields: dict[str, Any] = {}
+    order: list[str] = []
+    preamble: list[str] = []
+    current: str | None = None
+
+    for line in body.splitlines():
+        match = _HANDOFF_KEY.match(line)
+        if match:
+            current = match.group(1)
+            first = match.group(2).strip()
+            if current in fields:
+                # A repeated key is a malformed block, not a reason to lose
+                # half of it. Keep both, in order.
+                fields[current] = f"{fields[current]}\n{first}".strip()
+            else:
+                fields[current] = first
+                order.append(current)
+            continue
+        if current is None:
+            if line.strip():
+                preamble.append(line)
+            continue
+        fields[current] = (f"{fields[current]}\n{line}".strip()
+                           if fields[current] else line.strip())
+
+    # Lowercase, so these can never collide with a real ALL-CAPS field.
+    fields["_field_order"] = order
+    fields["_raw"] = body
+    if preamble:
+        fields["_preamble"] = "\n".join(preamble)
+    return fields
+
+
+def extract_handoff(raw: str, tag: str) -> dict[str, Any] | None:
+    """The parsed `<tag>` block from a model response, or None if absent."""
+    open_tag, close_tag = f"<{tag}>", f"</{tag}>"
+    if open_tag not in raw or close_tag not in raw:
+        return None
+    body = raw.split(open_tag, 1)[1].split(close_tag, 1)[0]
+    # A model that fenced the block is still emitting the block.
+    stripped = body.strip()
+    if stripped.startswith("```"):
+        body = stripped.split("\n", 1)[1].rsplit("```", 1)[0]
+    parsed = parse_handoff_block(body)
+    # A block with a tag and nothing usable inside it is not a handoff. It
+    # must fail like an absent one rather than record an empty dict as
+    # though the engine had reasoned.
+    if not [k for k in parsed if not k.startswith("_")]:
+        return None
+    return parsed
+
+
 def extract_control(raw: str) -> dict[str, Any] | None:
     """Pull the JSON control block out of a model response.
 
@@ -206,6 +299,139 @@ def repair_instruction(errors: list[str]) -> str:
 Provider = Callable[[str, str, dict], tuple[str, int, int]]
 
 
+def sentinel(engine: str, mode: str, what: str) -> str:
+    """A value that exists in exactly one handoff block and nowhere else.
+
+    `SENT-E7-CASE-STRATEGY` appearing in Engine 1 Pass B's input is proof
+    that Engine 7's reasoning reached it. `{}` being non-empty is not.
+    """
+    return f"SENT-{engine}-{mode}-{what}"
+
+
+def fixture_handoffs(engine: str, mode: str, params: dict) -> dict[str, str]:
+    """Substantive handoff bodies for the fixture provider, keyed by tag.
+
+    Shaped like the real blocks -- line-oriented KEY: values, the format
+    every prompt specifies -- and carrying the fields the next engine
+    actually consumes, not a token field per block.
+    """
+    s = lambda what: sentinel(engine, mode, what)  # noqa: E731 - reads better inline
+    version = params.get("case_version", 1)
+
+    if engine == "E6" and mode in ("INIT", "REBUILD"):
+        state = (
+            f"CLIENT_ID_IF_AVAILABLE: {params.get('client_id', 'unknown')}\n"
+            f"CASE_VERSION: {version}\n"
+            "CURRENT_PHASE: PHASE_1\n"
+            f"PRIMARY_HEALTH_PROBLEM: {s('PRIMARY-PROBLEM')}\n"
+            f"CONFIRMED_FACTS: {s('FACT')}\n"
+            f"CURRENT_HYPOTHESIS: {s('HYPOTHESIS')}\n"
+            f"ACTIVE_INTERVENTIONS: {s('INTERVENTION')}\n"
+            f"OPEN_QUESTIONS: {s('OPEN-QUESTION')}\n"
+            "ROUTING_RECOMMENDATION: NONE\n"
+            "ROUTING_REASON: initial state established"
+        )
+        blocks = {"CASE_MEMORY_HANDOFF": state}
+        if mode == "REBUILD":
+            blocks["CASE_MEMORY_DELTA"] = (
+                f"NEW_FACTS: {s('DELTA-NEW-FACT')}\n"
+                f"UPDATED_FACTS: {s('DELTA-UPDATED-FACT')}\n"
+                f"NEW_INTERVENTIONS: {s('DELTA-INTERVENTION')}\n"
+                "RESOLVED_ITEMS:\n"
+                "ROUTING_TRIGGERED: NONE"
+            )
+        return blocks
+
+    if engine == "E6" and mode == "UPDATE":
+        return {"CASE_MEMORY_DELTA": (
+            f"NEW_FACTS: {s('DELTA-NEW-FACT')}\n"
+            f"UPDATED_FACTS: {s('DELTA-UPDATED-FACT')}\n"
+            "RESOLVED_ITEMS:\n"
+            "ROUTING_TRIGGERED: NONE"
+        )}
+
+    if engine == "E7":
+        tag = ("RESEARCH_PRACTICE_CASE_HANDOFF" if mode == "CASE"
+               else "RESEARCH_PRACTICE_FOUNDATION_HANDOFF")
+        if mode == "CASE":
+            return {tag: (
+                f"MODE: {mode}\n"
+                f"CASE_RESEARCH_QUESTION: {s('QUESTION')}\n"
+                "EXISTING_KNOWLEDGE_SUFFICIENT: YES\n"
+                "LIVE_RESEARCH_PERFORMED: NO\n"
+                f"HIGHEST_PRIORITY_STRATEGIES: {s('STRATEGY')}\n"
+                f"ALTERNATIVE_STRATEGIES: {s('ALT-STRATEGY')}\n"
+                f"EVIDENCE_SUMMARY: {s('EVIDENCE')}\n"
+                f"EXPECTED_EFFECTS: {s('EFFECT-MAGNITUDE')}\n"
+                f"POPULATION_APPLICABILITY: {s('APPLICABILITY')}\n"
+                f"IMPLEMENTATION_NOTES: {s('IMPLEMENTATION')}\n"
+                f"OUTCOMES_TO_TRACK: {s('OUTCOME')}\n"
+                f"IMPORTANT_LIMITATIONS: {s('LIMITATION')}\n"
+                f"ENGINE1_HANDOFF: {s('TO-E1')}"
+            )}
+        return {tag: (
+            f"MODE: {mode}\n"
+            f"STRATEGIES_ADDED: {s('STRATEGY')}\n"
+            f"KNOWLEDGE_GAPS: {s('GAP')}\n"
+            "LAST_UPDATED: fixture"
+        )}
+
+    tag = {
+        "E1": "PREVENTION_INTELLIGENCE_HANDOFF",
+        "E2": "BEHAVIOUR_INTELLIGENCE_HANDOFF",
+        "E3": "NUTRITION_IMPLEMENTATION_HANDOFF",
+        "E4": "PROGRESS_INTELLIGENCE_HANDOFF",
+        "E5": "CLIENT_COMMUNICATION_HANDOFF",
+    }[engine]
+
+    if engine == "E1":
+        # Pass A and Pass B are the same specification (D4) and emit the
+        # same block; the sentinel says which pass produced it, so a test
+        # can prove Pass B's finalized picture reached E2, not Pass A's.
+        p = params.get("pass_label", "SINGLE")
+        return {tag: (
+            f"CLIENT_PROFILE: {sentinel('E1', p, 'PROFILE')}\n"
+            f"PRIMARY_HEALTH_PROBLEM: {sentinel('E1', p, 'PRIMARY-PROBLEM')}\n"
+            f"MAJOR_MODIFIABLE_DRIVERS: {sentinel('E1', p, 'DRIVER')}\n"
+            f"FOUR_WEEK_INTERNAL_TARGETS: {sentinel('E1', p, 'TARGET')}\n"
+            f"TOP_INTERVENTIONS: {sentinel('E1', p, 'STRATEGY')}\n"
+            f"NUTRITION_OBJECTIVES: {sentinel('E1', p, 'NUTRITION-OBJECTIVE')}\n"
+            f"BEHAVIOUR_REQUIRED: {sentinel('E1', p, 'BEHAVIOUR-REQUIRED')}\n"
+            f"MOVEMENT_OBJECTIVES: {sentinel('E1', p, 'MOVEMENT-OBJECTIVE')}\n"
+            f"HIGH_PRIORITY_MISSING_DATA: {sentinel('E1', p, 'MISSING-DATA')}\n"
+            f"ALTERNATIVE_HYPOTHESES: {sentinel('E1', p, 'ALT-HYPOTHESIS')}"
+        )}
+
+    if engine == "E2":
+        return {tag: (
+            f"BEHAVIOUR_PLAN: {s('BEHAVIOUR-PLAN')}\n"
+            f"IMPLEMENTATION_STEPS: {s('IMPLEMENTATION-STEP')}\n"
+            f"ADHERENCE_RISKS: {s('ADHERENCE-RISK')}\n"
+            f"CLIENT_CAPACITY_NOTES: {s('CAPACITY')}"
+        )}
+
+    if engine == "E3":
+        return {tag: (
+            f"MEAL_STRUCTURE: {s('MEAL-STRUCTURE')}\n"
+            f"PROTEIN_PLAN: {s('PROTEIN-PLAN')}\n"
+            f"FOOD_SUBSTITUTIONS: {s('SUBSTITUTION')}\n"
+            f"SHOPPING_IMPLICATIONS: {s('SHOPPING')}"
+        )}
+
+    if engine == "E4":
+        return {tag: (
+            f"RESPONSE_SUMMARY: {s('RESPONSE')}\n"
+            f"CURRENT_DECISION_REASON: {s('DECISION-REASON')}\n"
+            f"WHAT_WE_LEARNED: {s('LEARNING')}"
+        )}
+
+    return {tag: (
+        f"CLIENT_MESSAGE: {s('MESSAGE')}\n"
+        f"WHAT_TO_DO_THIS_WEEK: {s('ACTION')}\n"
+        f"WHAT_TO_EXPECT: {s('EXPECTATION')}"
+    )}
+
+
 def fixture_provider(system_prompt: str, user_prompt: str, params: dict) -> tuple[str, int, int]:
     """Deterministic stand-in used when no API key is configured.
 
@@ -237,9 +463,23 @@ def fixture_provider(system_prompt: str, user_prompt: str, params: dict) -> tupl
         control["KNOWLEDGE_SUFFICIENT"] = True
         control["LIVE_RESEARCH_REQUIRED"] = False
 
+    # The substantive handoff, which is the whole point of a run and was
+    # missing from this fixture until D24. A fixture that emits only a
+    # control block cannot distinguish a pipeline that carries reasoning
+    # downstream from one that carries routing metadata and calls it
+    # reasoning -- which is exactly the bug that went unnoticed.
+    #
+    # Every value carries a SENTINEL derived from the engine and mode. The
+    # sentinels exist nowhere else, so a test can prove that E7's strategies
+    # reached Engine 1 Pass B rather than that something non-empty did.
+    handoff_mode = params.get("handoff_mode") or "SINGLE"
+    blocks = fixture_handoffs(engine, handoff_mode, params)
+
     body = (
         f"(fixture output for {engine})\n\n"
-        f"<{CONTROL_TAG}>\n{json.dumps(control, indent=2)}\n</{CONTROL_TAG}>\n"
+        + "".join(f"<{tag}>\n{fields}\n</{tag}>\n\n"
+                  for tag, fields in blocks.items())
+        + f"<{CONTROL_TAG}>\n{json.dumps(control, indent=2)}\n</{CONTROL_TAG}>\n"
     )
     # Rough character-based estimate covering the WHOLE request. It counted
     # only the system prompt before, which silently omitted the structured
@@ -395,7 +635,16 @@ def _call_provider(conn, req: EngineRequest, provider: Provider, system_prompt: 
 
 def run_engine(conn: psycopg.Connection, req: EngineRequest) -> EngineResult:
     prompt_file, prompt_content, prompt_hash = load_prompt(conn, req.engine)
-    provider, mode = select_provider()
+
+    # Which substantive handoff this run owes, resolved BEFORE the provider
+    # is called (D24). An unregistered engine/mode is a build error, and
+    # discovering it after a 300-second call has been paid for helps nobody.
+    handoff_mode = load_handoffs.resolve_mode(req.engine, req.mode)
+    expected_handoffs = load_handoffs.expected(conn, req.engine, handoff_mode)
+
+    # `provider_mode` is fixture-vs-live. Named apart from `handoff_mode`
+    # because they are unrelated and one of them used to be called `mode`.
+    provider, provider_mode = select_provider()
     # A fixture run is recorded under a `fixture:` model name even when a
     # real model is configured, and that prefix is load-bearing rather than
     # cosmetic.
@@ -409,7 +658,7 @@ def run_engine(conn: psycopg.Connection, req: EngineRequest) -> EngineResult:
     # exactly what migration 008 documents: no rate configured for THIS
     # model name.
     configured = os.environ.get(req.model_role, "").strip()
-    if mode == "live":
+    if provider_mode == "live":
         if not configured:
             raise ModelRoleUnset(
                 f"{req.model_role} is not set, but LLM_API_KEY is. A live run "
@@ -418,7 +667,7 @@ def run_engine(conn: psycopg.Connection, req: EngineRequest) -> EngineResult:
             )
         model_name = configured
     else:
-        model_name = f"fixture:{configured or mode}"
+        model_name = f"fixture:{configured or provider_mode}"
 
     run_id = str(uuid.uuid4())
     conn.execute(
@@ -439,12 +688,18 @@ def run_engine(conn: psycopg.Connection, req: EngineRequest) -> EngineResult:
         "pass_label": req.pass_label,
         "model_name": model_name,
         "case_version": req.structured_input.get("CASE_VERSION", 1),
+        # The fixture provider needs the mode to know which block to emit;
+        # a live provider ignores it, because the PROMPT tells the model
+        # which block to produce.
+        "handoff_mode": handoff_mode,
+        "client_id": req.client_id,
     }
 
     attempts = 0
     errors: list[str] = []
     raw = ""
     control: dict[str, Any] | None = None
+    handoffs: dict[str, dict[str, Any]] = {}
     # engine_runs has carried input_tokens / output_tokens / duration_ms
     # since 004 and nothing ever wrote them. They are the per-run totals
     # across every attempt, which is what a repair retry actually cost.
@@ -476,8 +731,31 @@ def run_engine(conn: psycopg.Connection, req: EngineRequest) -> EngineResult:
             errors = [f"no parseable <{CONTROL_TAG}> block in response"]
         else:
             errors = validate_control(conn, control)
-            if not errors:
-                break
+
+        # The substantive reasoning, which is a SEPARATE thing from the
+        # control block and not a substitute for it. A response can route
+        # perfectly and contain no thinking at all; before D24 that counted
+        # as a successful run.
+        #
+        # A missing required handoff joins the same `errors` list as a
+        # contract violation on purpose: it then travels the repair retry
+        # and the dead-letter path that already exist, rather than adding a
+        # third way for a run to fail.
+        handoffs = {}
+        for tag, _required in expected_handoffs:
+            parsed = extract_handoff(raw, tag)
+            if parsed is not None:
+                handoffs[tag] = parsed
+        errors = errors + [
+            f"no parseable <{tag}> block in response. The control block "
+            "routes; this is the reasoning the next engine needs, and a "
+            "response without it is not a completed run."
+            for tag, required in expected_handoffs
+            if required and tag not in handoffs
+        ]
+
+        if control is not None and not errors:
+            break
 
         conn.execute(
             "update engine_runs set status='REPAIR_RETRY', attempts=%s where run_id=%s",
@@ -509,7 +787,24 @@ def run_engine(conn: psycopg.Connection, req: EngineRequest) -> EngineResult:
         return EngineResult(run_id, "DEAD_LETTER", None, raw, None, attempts,
                             "; ".join(errors))
 
-    human_output = raw.split(f"<{CONTROL_TAG}>", 1)[0].strip()
+    # The human-readable report is what precedes the FIRST machine block,
+    # whichever that is. Splitting on the control tag alone left every
+    # handoff block sitting inside `human_output`, so the practitioner view
+    # ended with a wall of KEY: lines.
+    boundaries = [raw.find(f"<{t}>") for t in
+                  [CONTROL_TAG] + [tag for tag, _ in expected_handoffs]]
+    first = min([b for b in boundaries if b >= 0], default=-1)
+    human_output = (raw[:first] if first >= 0 else raw).strip()
+
+    # The primary handoff is the first REQUIRED tag the registry lists;
+    # anything else the response carried is kept beside it rather than
+    # dropped. E6 rebuilding state emits the full state and may also report
+    # what changed, and that delta is the only record of the change.
+    primary_tag = next((tag for tag, required in expected_handoffs
+                        if required and tag in handoffs),
+                       next(iter(handoffs), None))
+    structured = handoffs.get(primary_tag, {}) if primary_tag else {}
+    secondary = {tag: body for tag, body in handoffs.items() if tag != primary_tag}
 
     conn.execute(
         """update engine_runs
@@ -519,13 +814,21 @@ def run_engine(conn: psycopg.Connection, req: EngineRequest) -> EngineResult:
         (attempts, totals["input_tokens"], totals["output_tokens"],
          totals["duration_ms"], run_id),
     )
+    # `structured` held json.dumps(structured_input.get("_echo", {})) from
+    # 004 until D24 -- the INPUT's `_echo` key, which nothing has ever set,
+    # so every run since the engine layer was built stored `{}`. It holds
+    # the engine's own reasoning now.
     conn.execute(
-        """insert into engine_outputs (run_id, human_output, structured, control, schema_valid)
-           values (%s,%s,%s,%s,true)""",
-        (run_id, human_output, json.dumps(req.structured_input.get("_echo", {})),
-         json.dumps(control)),
+        """insert into engine_outputs
+             (run_id, human_output, structured, control, schema_valid,
+              handoff_tag, handoff_mode, secondary_handoffs)
+           values (%s,%s,%s,%s,true,%s,%s,%s)""",
+        (run_id, human_output, json.dumps(structured), json.dumps(control),
+         primary_tag, handoff_mode, json.dumps(secondary)),
     )
-    return EngineResult(run_id, "SUCCEEDED", control, human_output, None, attempts)
+    return EngineResult(run_id, "SUCCEEDED", control, human_output, structured,
+                        attempts, handoff_tag=primary_tag,
+                        handoff_mode=handoff_mode, secondary_handoffs=secondary)
 
 
 def _record_cost(conn, req: EngineRequest, model_name: str, run_id: str,

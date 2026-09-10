@@ -142,12 +142,21 @@ def main() -> int:
           conn.execute("select get_current_client_state(%s)",
                        (client,)).fetchone()[0]["case_version"] == 2)
 
-    state = conn.execute(
-        "select canonical_state from client_case_versions where case_version_id=%s",
-        (outcome.final_case_version_id,)).fetchone()[0]
-    check("the final state carries what E1, E2 and E3 decided",
-          all(k in state for k in ("E1_CONTROL", "E2_CONTROL", "E3_CONTROL")),
+    state, final_delta = conn.execute(
+        "select canonical_state, delta from client_case_versions "
+        "where case_version_id=%s", (outcome.final_case_version_id,)).fetchone()
+    # Before D24 this asserted the state carried E1_CONTROL / E2_CONTROL /
+    # E3_CONTROL -- which was the bug written down as a test: the version
+    # was built from the INPUT we handed Engine 6, and what it carried were
+    # control blocks. The state is now Engine 6's own <CASE_MEMORY_HANDOFF>.
+    check("the final state is Engine 6's own canonical state",
+          state.get("PRIMARY_HEALTH_PROBLEM")
+          == RE.sentinel("E6", "REBUILD", "PRIMARY-PROBLEM"), str(sorted(state))[:200])
+    check("...not the input the rebuild was given",
+          "E1_HANDOFF" not in state and "NORMALIZED_CONCEPTS" not in state,
           str(sorted(state))[:200])
+    check("...and the delta Engine 6 also reported is kept beside it",
+          final_delta and final_delta.get("NEW_FACTS"), str(final_delta)[:120])
 
     # ------------------------------------------------------------------
     print("\nno client identity reaches an engine")
@@ -205,15 +214,28 @@ def main() -> int:
     check("a sparse intake reaches the review queue",
           sparse.status == "AWAITING_REVIEW",
           sparse.stopped_because or sparse.status)
+    # The gaps live in missing_data_reports and travel to Engine 6 in its
+    # INPUT; the canonical state is Engine 6's answer, not that input. So
+    # assert the gaps where they actually are, and assert that the sparse
+    # intake still produced a state at all.
+    sparse_e6_input = IN.to_e6_input(conn, sparse_sub)
+    check("the sparse intake still reported its gaps to Engine 6",
+          len(sparse_e6_input["HIGH_PRIORITY_MISSING_DATA"]) >= 3,
+          str(len(sparse_e6_input["HIGH_PRIORITY_MISSING_DATA"])))
+    check("...and unasked sections were UNKNOWN, never defaulted",
+          sparse_e6_input["FOOD_ENVIRONMENT"] == IN.UNKNOWN,
+          str(sparse_e6_input["FOOD_ENVIRONMENT"]))
+    check("...and the gaps are recorded against the submission",
+          conn.execute(
+              """select count(*) from missing_data_reports
+                  where submission_id=%s and severity in ('CRITICAL','HIGH')""",
+              (sparse_sub,)).fetchone()[0] >= 3)
     sparse_state = conn.execute(
         "select canonical_state from client_case_versions "
         "where client_id=%s and case_version=1", (sparse_client,)).fetchone()[0]
-    check("the case records what was missing rather than defaulting it",
-          len(sparse_state["HIGH_PRIORITY_MISSING_DATA"]) >= 3,
-          str(len(sparse_state.get("HIGH_PRIORITY_MISSING_DATA", []))))
-    check("...and unasked sections are UNKNOWN",
-          sparse_state["FOOD_ENVIRONMENT"] == IN.UNKNOWN,
-          str(sparse_state["FOOD_ENVIRONMENT"]))
+    check("an incomplete intake still yields a real canonical state",
+          sparse_state.get("PRIMARY_HEALTH_PROBLEM")
+          == RE.sentinel("E6", "INIT", "PRIMARY-PROBLEM"), str(sorted(sparse_state))[:160])
 
     # ------------------------------------------------------------------
     print("\na failed engine stops the pipeline rather than guessing")
@@ -225,9 +247,18 @@ def main() -> int:
         # is still a failure, and the pipeline must read the field rather
         # than the fact that a response arrived.
         if params.get("engine") == "E7":
-            return ('no\n<CONTROL_BLOCK>\n'
-                    '{"CASE_VERSION":1,"ENGINE_RUN_STATUS":"FAILED",'
-                    '"ERROR_STATE":"library unreachable"}\n</CONTROL_BLOCK>'), 10, 10
+            # A COMPLETE response -- handoff and all -- whose control block
+            # declares FAILED. Since D24 a response without its handoff
+            # dead-letters, which would stop the pipeline for a different
+            # reason and stop this test proving what it claims: that the
+            # pipeline reads the declared status rather than the fact that
+            # a well-formed response arrived.
+            blocks = RE.fixture_handoffs("E7", "CASE", params)
+            return ("no\n"
+                    + "".join(f"<{t}>\n{b}\n</{t}>\n" for t, b in blocks.items())
+                    + '<CONTROL_BLOCK>\n'
+                      '{"CASE_VERSION":1,"ENGINE_RUN_STATUS":"FAILED",'
+                      '"ERROR_STATE":"library unreachable"}\n</CONTROL_BLOCK>'), 10, 10
         return RE.fixture_provider(system, user, params)
 
     original = RE.select_provider

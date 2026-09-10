@@ -160,7 +160,9 @@ def _run(conn: psycopg.Connection, outcome: Outcome, name: str, **kwargs) -> Any
     result = RE.run_engine(conn, RE.EngineRequest(
         client_id=outcome.client_id, cycle_id=outcome.cycle_id,
         case_version_id=outcome.case_version_id, **kwargs))
-    outcome.step(name, result.status, result.run_id, result.error or "")
+    outcome.step(name, result.status, result.run_id,
+                 result.error or (f"handoff {result.handoff_tag}"
+                                  if result.handoff_tag else "NO HANDOFF"))
     if result.status != "SUCCEEDED":
         raise PipelineStopped(
             f"{name} did not succeed ({result.status}): {result.error}. "
@@ -174,30 +176,53 @@ def _run(conn: psycopg.Connection, outcome: Outcome, name: str, **kwargs) -> Any
         raise PipelineStopped(
             f"{name} reported {declared}: "
             f"{(result.control or {}).get('ERROR_STATE') or 'no reason given'}")
+    # Belt and braces over RUN_ENGINE's own enforcement. A run that
+    # SUCCEEDED carries a handoff by construction since D24, and if that
+    # ever stops being true this pipeline must not be the thing that
+    # quietly passes a control block downstream as reasoning.
+    if not result.structured:
+        raise PipelineStopped(
+            f"{name} succeeded but produced no substantive handoff. The "
+            "control block routes; it is not what the next engine reasons "
+            "over, and passing it on as though it were is the failure this "
+            "check exists to make impossible.")
     return result
 
 
-def _new_case_version(conn: psycopg.Connection, client_id: str, state: dict,
-                      phase: str, reason: str) -> str:
+def _new_case_version(conn: psycopg.Connection, client_id: str,
+                      state: dict | None, phase: str, reason: str,
+                      delta: dict | None = None) -> str:
     """Append a case version and make it current.
 
     Never overwrites history (MASTER_SPEC phase 6): the previous row stays,
     with is_current cleared. The version number is derived inside the same
     statement pair so two callers cannot both think they are version 2.
+
+    `state` must be a FULL state -- Engine 6's <CASE_MEMORY_HANDOFF>. A
+    <CASE_MEMORY_DELTA> goes in `delta`, which 004 created for it, and is
+    never passed here as `state`: get_current_client_state() would then
+    return a description of a change as though it were the case.
     """
+    if not state:
+        raise PipelineStopped(
+            "Engine 6 produced no full canonical state, so there is nothing "
+            "to record as this version. A delta describes a change and is "
+            "not a case; refusing to store one as canonical_state.")
     conn.execute(
         "update client_case_versions set is_current=false "
         "where client_id=%s and is_current", (client_id,))
     return str(conn.execute(
         """insert into client_case_versions
-             (client_id, case_version, canonical_state, phase, change_reason,
-              created_by, is_current)
+             (client_id, case_version, canonical_state, delta, phase,
+              change_reason, created_by, is_current)
            values (%s,
                    (select coalesce(max(case_version), 0) + 1
                       from client_case_versions where client_id=%s),
-                   %s,%s,%s,'E6',true)
+                   %s,%s,%s,%s,'E6',true)
            returning case_version_id""",
-        (client_id, client_id, json.dumps(state), phase, reason)).fetchone()[0])
+        (client_id, client_id, json.dumps(state),
+         json.dumps(delta) if delta else None,
+         phase, reason)).fetchone()[0])
 
 
 def run_new_client(conn: psycopg.Connection, submission_id: str,
@@ -240,23 +265,58 @@ def run_new_client(conn: psycopg.Connection, submission_id: str,
         # ------------------------------------------------------------------
         # E6 initial state. Runs on whatever intake produced, complete or
         # not: an incomplete intake gets a case, not a rejection (D22).
-        _run(conn, outcome, "E6_INIT", engine="E6", structured_input=e6_input)
+        #
+        # canonical_state comes from E6's OWN <CASE_MEMORY_HANDOFF>, not
+        # from the input we handed it. Migration 004 calls the column "Full
+        # canonical state (CASE_MEMORY_HANDOFF)" and it means it: storing
+        # the pre-E6 input there recorded the question rather than Engine
+        # 6's answer, and every engine downstream read it through
+        # get_current_client_state().
+        e6_init = _run(conn, outcome, "E6_INIT", engine="E6", mode="INIT",
+                       structured_input=e6_input)
         outcome.case_version_id = _new_case_version(
-            conn, client_id, e6_input, "PHASE_1",
-            f"Initialized from intake submission {submission_id}")
+            conn, client_id, e6_init.structured, "PHASE_1",
+            f"Initialized from intake submission {submission_id}",
+            delta=e6_init.secondary_handoffs.get("CASE_MEMORY_DELTA"))
         IN.mark_converted(conn, submission_id, outcome.case_version_id)
         outcome.step("CASE_VERSION_1", "OK", detail=outcome.case_version_id)
 
+        # Read back through the same column every engine reads, so what the
+        # pipeline hands downstream is what get_current_client_state()
+        # would return rather than a local variable that happens to agree.
         case_state = conn.execute(
             "select canonical_state from client_case_versions where case_version_id=%s",
             (outcome.case_version_id,)).fetchone()[0]
+
+        # What each engine hands the next is its SUBSTANTIVE handoff, never
+        # its control block. The control block is ~17 typed routing fields
+        # (D14); it contains no strategies, no evidence, no targets. Passing
+        # it as `E7_HANDOFF` and `E1_HANDOFF` -- which is what this pipeline
+        # did before D24 -- meant the sequence executed while almost none of
+        # the reasoning moved.
+        #
+        # CASE_VERSION comes from the DATABASE, not from the handoff.
+        #
+        # A handoff block is line-oriented `KEY: text` -- the format every
+        # prompt specifies -- so every value in it is a STRING. Engine 6
+        # writes `CASE_VERSION: 1` and it parses as "1", which the control
+        # contract then rejects as not an integer, correctly. The lesson is
+        # not to coerce per field: it is that typed values come from typed
+        # places. `client_case_versions.case_version` is an integer column
+        # assigned by the insert, and D18 rests on stored versions starting
+        # at 1. Engine 6's line is its claim; the row is the fact.
+        case_version = conn.execute(
+            "select case_version from client_case_versions where case_version_id=%s",
+            (outcome.case_version_id,)).fetchone()[0]
+        case_input = {"CASE_VERSION": case_version,
+                      "CANONICAL_STATE": case_state}
 
         # ------------------------------------------------------------------
         # E1 Pass A. Same specification as Pass B, different context and
         # stopping point (D4) -- the two runs must record one prompt hash,
         # and trg_enforce_two_pass rejects the insert if they do not.
         pass_a = _run(conn, outcome, "E1_PASS_A", engine="E1", pass_label="A",
-                      structured_input={**case_state, "MODE": "PASS_A"})
+                      structured_input={**case_input, "MODE": "PASS_A"})
 
         # ------------------------------------------------------------------
         # C3. Pass A emits clinical phrases; Engine 7 should retrieve on
@@ -272,11 +332,19 @@ def run_new_client(conn: psycopg.Connection, submission_id: str,
         # E7 in CASE mode. CASE_VERSION is the real version here, not 0:
         # 0 is reserved for knowledge-clock runs (D18), and this run is
         # about one client's case.
-        e7 = _run(conn, outcome, "E7", engine="E7", model_role="MODEL_RESEARCH",
+        #
+        # RESEARCH_QUESTIONS is one of the few things that legitimately
+        # comes from the control block: it is a typed control-contract
+        # field, and Pass A's substantive picture travels alongside it so
+        # Engine 7 retrieves against the case rather than against a list of
+        # questions with no context.
+        e7 = _run(conn, outcome, "E7", engine="E7", mode="CASE",
+                  model_role="MODEL_RESEARCH",
                   structured_input={
-                      "CASE_VERSION": case_state.get("CASE_VERSION", 1),
+                      **case_input,
                       "CASE_RESEARCH_QUESTIONS": pass_a.control.get(
                           "RESEARCH_QUESTIONS", []),
+                      "E1_PASS_A_HANDOFF": pass_a.structured,
                       "NORMALIZED_CONCEPTS": [
                           {"phrase": r.phrase, "concept_ids": r.concept_ids,
                            "method": r.method}
@@ -285,11 +353,15 @@ def run_new_client(conn: psycopg.Connection, submission_id: str,
 
         # ------------------------------------------------------------------
         # E1 Pass B, with the E7 slot populated. Not a smaller Engine 1.
+        # The E7 slot, populated. This is the entire reason Engine 1 runs
+        # twice (D4), and it was being filled with E7's control block --
+        # eight routing booleans instead of strategies, evidence, expected
+        # effects, applicability and implementation notes.
         pass_b = _run(conn, outcome, "E1_PASS_B", engine="E1", pass_label="B",
                       structured_input={
-                          **case_state, "MODE": "PASS_B",
-                          "E7_HANDOFF": e7.control,
-                          "PASS_A_CONTROL": pass_a.control,
+                          **case_input, "MODE": "PASS_B",
+                          "E7_HANDOFF": e7.structured,
+                          "E1_PASS_A_HANDOFF": pass_a.structured,
                       })
 
         # ------------------------------------------------------------------
@@ -297,27 +369,47 @@ def run_new_client(conn: psycopg.Connection, submission_id: str,
         # Both run: a new client needs both, and this is not the place to
         # let an engine decide otherwise.
         e2 = _run(conn, outcome, "E2", engine="E2",
-                  structured_input={**case_state, "E1_HANDOFF": pass_b.control})
+                  structured_input={**case_input,
+                                    "E1_HANDOFF": pass_b.structured})
         e3 = _run(conn, outcome, "E3", engine="E3",
-                  structured_input={**case_state, "E1_HANDOFF": pass_b.control,
-                                    "E2_HANDOFF": e2.control})
+                  structured_input={**case_input,
+                                    "E1_HANDOFF": pass_b.structured,
+                                    "E2_HANDOFF": e2.structured})
 
         # ------------------------------------------------------------------
         # E6 update. A new version, never an overwrite.
+        # REBUILD, not UPDATE.
+        #
+        # Engine 6 §A1: the full <CASE_MEMORY_HANDOFF> establishes or
+        # REBUILDS state; the <CASE_MEMORY_DELTA> records an incremental
+        # change and "is the normal path on follow-up". This is not a
+        # follow-up -- the case is still being established, across this one
+        # cycle, and version 2 must carry a complete state because
+        # canonical_state is NOT NULL and every engine reads it through
+        # get_current_client_state().
+        #
+        # A delta cannot be mechanically merged into a state: its fields
+        # (NEW_FACTS, UPDATED_FACTS, RESOLVED_ITEMS) describe changes and do
+        # not map onto the state's fields. Doing it anyway would be
+        # inventing E6's semantics. So REBUILD asks for the full state, and
+        # the delta -- optional in that mode -- is kept in the `delta`
+        # column 004 created for it rather than discarded. CLIENT_FOLLOWUP
+        # is where UPDATE and the delta path belong.
         e6_update_input = {
-            **case_state,
-            "CASE_VERSION": case_state.get("CASE_VERSION", 1) + 1,
-            "E1_CONTROL": pass_b.control,
-            "E2_CONTROL": e2.control,
-            "E3_CONTROL": e3.control,
+            **case_input,
+            "CASE_VERSION": case_version + 1,
+            "E1_HANDOFF": pass_b.structured,
+            "E2_HANDOFF": e2.structured,
+            "E3_HANDOFF": e3.structured,
             "NORMALIZED_CONCEPTS": [
                 {"phrase": r.phrase, "concept_ids": r.concept_ids} for r in resolved],
         }
-        _run(conn, outcome, "E6_UPDATE", engine="E6",
-             structured_input=e6_update_input)
+        e6_rebuild = _run(conn, outcome, "E6_UPDATE", engine="E6", mode="REBUILD",
+                          structured_input=e6_update_input)
         outcome.final_case_version_id = _new_case_version(
-            conn, client_id, e6_update_input, "PHASE_1",
-            "Updated after E1 Pass B, E2 and E3")
+            conn, client_id, e6_rebuild.structured, "PHASE_1",
+            "Rebuilt after E1 Pass B, E2 and E3",
+            delta=e6_rebuild.secondary_handoffs.get("CASE_MEMORY_DELTA"))
         outcome.step("CASE_VERSION_2", "OK", detail=outcome.final_case_version_id)
 
         # ------------------------------------------------------------------

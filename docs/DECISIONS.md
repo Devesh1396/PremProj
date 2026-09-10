@@ -734,6 +734,101 @@ keeps the old text readable.
 
 ---
 
+## D24 — The control block routes; the handoff is the reasoning. Never interchangeable
+**SETTLED — found in review, before the n8n port**
+
+Every prompt defines **two** machine-readable outputs, not one:
+
+| | |
+|---|---|
+| `<..._HANDOFF>` | The substantive reasoning — strategies, evidence, effect magnitude, applicability, targets, implementation. What the next engine thinks with. |
+| `<CONTROL_BLOCK>` | ~17 typed fields. What n8n routes and gates on (D14). |
+
+`RUN_ENGINE` parsed only the second. `EngineResult.structured` was `None`
+on every return path; `engine_outputs.structured` was written from
+`req.structured_input.get("_echo", {})` — the **input's** `_echo` key,
+which nothing has ever set, so it stored `{}` on every run since the engine
+layer was built. `CLIENT_NEW` then passed control blocks downstream as
+`E7_HANDOFF` and `E1_HANDOFF`, and built both case versions out of the
+input it had handed Engine 6 rather than Engine 6's answer.
+
+The pipeline executed correctly end to end and almost none of the reasoning
+moved. Engine 1 Pass B — which exists solely to see Engine 7's retrieval
+(D4) — was receiving eight routing booleans where the strategies and
+evidence should have been.
+
+**A valid control block is not evidence that an engine did its work.** That
+is now structural: a response missing a required handoff joins the same
+`errors` list as a contract violation, so it travels the repair retry and
+dead-letters. It does not add a third failure path.
+
+**The expected tags are a registry**, the third instance of the pattern
+`010` gave the prompts and `012` gave the contract. `engine_handoffs` is
+keyed `(engine, mode, tag)` with a `required` flag, modes are rows rather
+than an enum (D19), and the loader **verifies every tag against the
+registered prompt** before loading — a renamed tag fails the load instead
+of registering a block no engine will ever emit. n8n reads the same rows.
+
+**Modes exist because two engines emit different blocks.** E6 §A1: the full
+`<CASE_MEMORY_HANDOFF>` establishes or rebuilds state, the
+`<CASE_MEMORY_DELTA>` records an incremental change and is the normal path
+on follow-up. E7 emits a CASE or a FOUNDATION handoff. **E6 and E7 have no
+default mode** — guessing means expecting a delta where a state was needed,
+or the reverse, and both write a case record that is quietly wrong.
+
+**A delta is not a state.** `004` created two columns for this:
+`canonical_state` is "Full canonical state (CASE_MEMORY_HANDOFF)", `delta`
+is "Only what changed". `get_current_client_state()` returns the former, so
+storing a delta there would hand every engine a description of a change as
+though it were the case. `_new_case_version` refuses to write a version
+without a full state.
+
+**CLIENT_NEW's second Engine 6 call runs in `REBUILD`, not `UPDATE`.** This
+is a deviation worth stating plainly. Version 2 needs a complete state
+because `canonical_state` is `NOT NULL` and every engine reads it, and a
+delta cannot be mechanically merged into a state — its fields
+(`NEW_FACTS`, `UPDATED_FACTS`, `RESOLVED_ITEMS`) describe changes and do
+not map onto the state's fields, so merging would mean inventing Engine 6's
+semantics. §A1's own word for this is *rebuilding*: the case is still being
+established, across one cycle. The delta is **optional** in `REBUILD` mode
+and is kept in the `delta` column rather than discarded. `CLIENT_FOLLOWUP`
+is where `UPDATE` and the delta path belong.
+
+**Typed values come from typed places.** A handoff block is line-oriented
+`KEY: text`, so every value in it is a **string** — Engine 6 writes
+`CASE_VERSION: 1` and it parses as `"1"`, which the control contract
+correctly rejects as not an integer. The fix is not per-field coercion: it
+is that `client_case_versions.case_version` is an integer column assigned
+by the insert, and D18 rests on stored versions starting at 1. Engine 6's
+line is its claim; the row is the fact.
+
+**The parser discards nothing.** A key is an ALL-CAPS identifier followed
+by a colon **at column zero** — narrow on purpose, because `Note: take with
+food`, an indented `IMPORTANT:` and a prefixed `- STRATEGY_A:` are all
+values, not keys. `_raw` keeps the block verbatim so a mis-split value is
+recoverable, text before the first key is kept as `_preamble`, a repeated
+key keeps both values, and unknown keys are kept as they come: the registry
+says which BLOCK is expected, never which fields are permitted inside it.
+
+*Rejected:* treating the control block as the handoff when a handoff is
+absent. It is the bug, written down as a policy.
+
+*Rejected:* a dict in `run_engine.py` mapping engine to tag. This is the
+third time the same question has come up — which specification, which
+schema, which handoff — and a third bespoke mechanism would be the point at
+which the pattern stopped being a pattern.
+
+*Rejected:* asking Engine 6 for a full state on every update. §A1 says
+plainly not to restate unchanged state as though it were new, and
+`CLIENT_FOLLOWUP` will run many updates per case.
+
+*Rejected:* requiring handoffs to be JSON. The prompts specify a
+line-oriented format, they are authoritative (hard rule 1), and changing
+seven master specifications to suit a parser is the wrong direction. The
+parser was made lossless instead.
+
+---
+
 ## OPEN
 
 **O1 — Intake form. `RESOLVED FOR V1` — see D22.** Core Intake V1 is built:

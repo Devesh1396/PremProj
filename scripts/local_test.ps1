@@ -17,10 +17,13 @@ python scripts/load_prompts.py | Select-Object -Last 9
 if ($LASTEXITCODE -ne 0) { $fail = 1 }
 python scripts/load_contracts.py | Select-Object -Last 3
 if ($LASTEXITCODE -ne 0) { $fail = 1 }
+python scripts/load_handoffs.py | Select-Object -Last 12
+if ($LASTEXITCODE -ne 0) { $fail = 1 }
 foreach ($t in @('concept_layer','knowledge_layer','client_layer','run_engine',
                  'case_events','knowledge_inbox','prompt_contracts',
                  'contract_registry','measurement',
-                 'intake','client_new','normalization','ontology_seed')) {
+                 'intake','client_new','handoff_flow',
+                 'normalization','ontology_seed')) {
     Write-Host ""
     Write-Host "=== $t ==="
     python "testing/test_$t.py"

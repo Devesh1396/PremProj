@@ -17,7 +17,13 @@ echo "=== contract registry ==="
 # against a ROW now, and a migrated database with an empty registry raises
 # ContractMissing on the first control block.
 python3 scripts/load_contracts.py | tail -3 || fail=1
-for t in concept_layer knowledge_layer client_layer run_engine case_events knowledge_inbox prompt_contracts contract_registry measurement intake client_new normalization ontology_seed; do
+echo
+echo "=== handoff registry ==="
+# D24: which substantive handoff each engine owes, per mode. Verified
+# against the registered prompts, so a renamed tag fails here rather than
+# registering a block no engine will ever emit.
+python3 scripts/load_handoffs.py | tail -12 || fail=1
+for t in concept_layer knowledge_layer client_layer run_engine case_events knowledge_inbox prompt_contracts contract_registry measurement intake client_new handoff_flow normalization ontology_seed; do
   echo
   echo "=== $t ==="
   out=$(python3 "testing/test_$t.py" 2>&1); rc=$?

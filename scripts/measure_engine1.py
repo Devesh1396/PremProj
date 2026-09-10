@@ -77,7 +77,7 @@ def run_primary_path(conn) -> dict:
     ).fetchone()[0]
 
     e6 = RE.run_engine(conn, RE.EngineRequest(
-        engine="E6", structured_input=intake,
+        engine="E6", mode="INIT", structured_input=intake,
         client_id=client_id, cycle_id=cycle_id, model_role="MODEL_ANALYSIS"))
     if e6.status != "SUCCEEDED":
         raise SystemExit(f"E6 failed: {e6.error}")
@@ -100,7 +100,7 @@ def run_primary_path(conn) -> dict:
         raise SystemExit(f"E1 Pass A failed: {pass_a.error}")
 
     e7 = RE.run_engine(conn, RE.EngineRequest(
-        engine="E7",
+        engine="E7", mode="CASE",
         structured_input={
             "CASE_RESEARCH_QUESTIONS": pass_a.control.get("RESEARCH_QUESTIONS", []),
             "NORMALIZATION_PHRASES": pass_a.control.get("NORMALIZATION_PHRASES", []),
