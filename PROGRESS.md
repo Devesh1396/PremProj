@@ -2046,15 +2046,56 @@ failed attempt's tokens included in the run total.
 
 ## Next task
 
-**As of 2026-09-11, after the first real source through the complete loop
-(`docs/evidence/first_source_loop.md`): fix concept normalization before
-ingesting anything else.** One source produced 71 concept proposals and
-exactly one resolution against a 269-concept seed that contains the right
-concepts. Twenty sources would bury the ontology. The three causes and the
-one that is a plain gap — `normalize_claim_concepts()` passing `llm=None`,
-so the resolver's LLM tier is unreachable from K09 — are in §3 of that
-document. It is a spending decision and a change to D2's cheapest-first
-ordering, so it needs a decision recorded, not just a patch.
+**As of 2026-09-11: fix concept normalization before ingesting anything
+else.** One source produced 71 concept proposals and exactly one
+resolution against a 269-concept seed that contains the right concepts.
+
+**The diagnosis is done — `docs/evidence/normalization_diagnosis.md`.**
+It cost $0.000301 and it changes what the fix is. The headline:
+
+**`normalize._tier_semantic()` IS A STUB.** Its last line is
+`return [], 0.0`, unconditionally, after two guards that both pass. Its
+comment says "neither is true until K14" — K14 has been built since step
+17. Proven live: pgvector 0.6.0 installed, all 269 concepts embedded with
+real 1536-dim vectors, and `resolve()` still returns **0 of 71**, with
+the tier answering for none of them. Embedding the library buys exactly
+zero resolutions until the tier is written.
+
+**It is not a length problem and no threshold fixes it.** `postprandial
+walking` is 20 characters and trigram's best is `postprandial glucose` at
+0.448 — it matched the wrong word. Cosine puts `post-meal movement` first
+at 0.833. Two vocabularies for one idea share almost no trigrams. To admit
+`Light-to-moderate continuous walking -> walking` on trigram needs a
+threshold of 0.216, below which `soleus pushup -> sodium` (0.105) also
+gets in.
+
+**The measured cosine knee is 0.82** — 23 admitted, 16 right, 6 partial,
+1 wrong; below 0.80 the wrong merges triple. At the current
+`ALIAS_THRESHOLD` of 0.92 the semantic tier would resolve 1 of 56. **0.92
+is a trigram number and the two tiers cannot share one constant.**
+
+**Most wrong merges are category crossings** — a TIME WINDOW, a DRUG
+CLASS, a MOLECULE and a MECHANISM all mapped to a BIOMARKER.
+`concepts.concept_type` already distinguishes these and the resolver never
+consults it. A type check is cheaper and sharper than a threshold.
+
+**The tier must return a candidate SET, not a top-1.** `confusable_with()`
+fires only on a span. The single wrong merge at 0.80
+(`carbohydrate-rich meal -> carbohydrate quality`) has BOTH halves of the
+do-not-merge pair in its top-3, so the existing guard would catch it — and
+a top-1 implementation would silently defeat a guard that already works.
+
+**The long phrases are NOT an extraction-prompt bug.** All seven
+`mechanism` values are over 60 characters because §39 specifies
+`mechanism` as "the mechanism the source proposes" — a proposition. The
+engine complied. The bug is that `normalize_claim_concepts()` sends
+`mechanism` to a concept resolver at all. **Do not touch `prompts/` for
+this.**
+
+**The LLM tier is worth about 2 calls in 56** once the above is done — the
+rest of the residue is either genuinely new concepts that SHOULD
+auto-create, or compound phrases needing a deterministic splitter. So
+wiring it into K09 is not the fix and was the wrong first instinct.
 
 Then, and only then, the 20-video pilot.
 
