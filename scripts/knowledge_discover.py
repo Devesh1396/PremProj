@@ -490,6 +490,13 @@ def discover_video(conn, source, transport=None, urls=None) -> dict:
             # captions we could not read. Nothing is delivered, so nothing
             # downstream can mistake an empty string for a source that
             # taught us nothing.
+            #
+            # The item IS registered, exactly as K05 registers a podcast
+            # with no published transcript: without a row it is rediscovered
+            # and re-paid-for on every run. `note` carries the ACTOR'S own
+            # wording — "No transcript available for this video" tells a
+            # reader six months from now which thing went wrong, and a
+            # generic message does not.
             vid = (item.get("videoId") or "").strip()
             register_item(
                 conn, str(source_id),
