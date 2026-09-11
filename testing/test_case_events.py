@@ -14,10 +14,14 @@ from __future__ import annotations
 import json
 import os
 import sys
+from pathlib import Path
 
 from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+
 import psycopg
+import run_engine as RE_SCOPE
 
 FAILS: list[str] = []
 
@@ -144,6 +148,49 @@ def main() -> int:
     runtime_dsn = _with_user(admin_dsn, "phi_runtime",
                              _role_password("POSTGRES_RUNTIME_PASSWORD"))
     runtime = psycopg.connect(runtime_dsn)
+
+    # ------------------------------------------------------------------
+    print("\nthe client/clock rule comes from the registry, not a second list")
+
+    # 015 hard-coded ('FOUNDATION','UPDATE','INBOX') inside the trigger,
+    # under a comment saying not to. Harmless until a fifth clock mode is
+    # registered, at which point every correct call to it is rejected with
+    # a message about a case with no case. 020 moved the rule to
+    # engine_handoffs.client_required, so registering a mode is enough.
+    admin.execute("delete from engine_handoffs where mode='COHTEST'")
+    admin.execute(
+        "insert into engine_handoffs (engine, mode, tag, required, prompt_ref, "
+        "                             note, client_required) "
+        "values ('E7','COHTEST','RESEARCH_PRACTICE_FOUNDATION_HANDOFF',true,"
+        "        'test','a clock mode registered at runtime',false)")
+    run_id = str(__import__("uuid").uuid4())
+    admin.execute(
+        "insert into engine_runs (run_id, engine, engine_mode, prompt_file, "
+        "                         prompt_hash, model_role) "
+        "values (%s,'E7','COHTEST','engine7_research_practice.md','x','MODEL_RESEARCH')",
+        (run_id,))
+    check("a newly registered clock mode runs with NO client, no code change",
+          admin.execute("select client_id from engine_runs where run_id=%s",
+                        (run_id,)).fetchone()[0] is None)
+    expect_error(
+        admin,
+        "insert into engine_runs (engine, engine_mode, client_id, prompt_file, "
+        "                         prompt_hash, model_role) "
+        "values ('E7','COHTEST',gen_random_uuid(),'x','y','MODEL_RESEARCH')",
+        (),
+        "...and is still refused a client",
+        "knowledge-clock run")
+    admin.execute("delete from engine_runs where run_id=%s", (run_id,))
+    admin.execute("delete from engine_handoffs where mode='COHTEST'")
+
+    expect_error(
+        admin,
+        "insert into engine_runs (engine, engine_mode, prompt_file, prompt_hash, "
+        "                         model_role) "
+        "values ('E7','NOSUCHMODE','x','y','MODEL_RESEARCH')",
+        (),
+        "an UNREGISTERED mode is refused, and says that is the problem",
+        "no active handoff is registered")
 
     print("\nrole configuration")
     # Assert the identity of the connection, not just the properties of the
@@ -519,7 +566,7 @@ def main() -> int:
 
     admin.execute(
         """insert into case_flags (client_id, rule_key, severity, source, detail)
-           values (%s,'CRITICAL_LAB_THRESHOLD','HOLD','DETERMINISTIC','ALT 340 U/L')""",
+           values (%s,'CRITICAL_LAB','HOLD','DETERMINISTIC','ALT 340 U/L')""",
         (a,))
     expect_error(
         admin,
@@ -583,6 +630,221 @@ def main() -> int:
     unclassified = admin.execute(
         "select count(*) from missing_data_reports where classification is null").fetchone()[0]
     check("reporting a gap never auto-changes intake", unclassified == 5, str(unclassified))
+
+    # ------------------------------------------------------------------
+    # D25. The test that is close to meaningless in Python and essential in
+    # n8n: n8n's Postgres node POOLS connections, so the same physical
+    # connection serves Client A's run and then Client B's. Scope is
+    # transaction-local (005 passes `true` to set_config) precisely so that
+    # cannot leak, and this proves it on ONE connection rather than
+    # trusting the flag.
+    #
+    # Until D25 nothing exercised this at all: RUN_ENGINE connects as
+    # phi_admin, which is SUPERUSER and bypasses RLS entirely, so every
+    # engine run this system has made went around the policies rather than
+    # through them.
+    print("\nengine runs are client-scoped on a POOLED connection (D25)")
+    os.environ["LLM_API_KEY"] = ""
+    assert RE_SCOPE.select_provider()[1] == "fixture", \
+        "this suite must never call a live provider"
+    # A SEPARATE connection, autocommit, standing in for one n8n Postgres
+    # node's pooled connection serving two clients in turn.
+    pooled = psycopg.connect(runtime_dsn, autocommit=True)
+    try:
+        check("the pooled connection is phi_runtime, not a superuser",
+              pooled.execute("select current_user, "
+                             "(select rolsuper from pg_roles where rolname=current_user)"
+                             ).fetchone() == ("phi_runtime", False))
+
+        run_a = RE_SCOPE.run_engine(pooled, RE_SCOPE.EngineRequest(
+            engine="E6", mode="INIT", client_id=a,
+            structured_input={"CASE_VERSION": 1}))
+        run_b = RE_SCOPE.run_engine(pooled, RE_SCOPE.EngineRequest(
+            engine="E6", mode="INIT", client_id=b,
+            structured_input={"CASE_VERSION": 1}))
+        check("two clients ran back to back on ONE connection",
+              run_a.status == "SUCCEEDED" and run_b.status == "SUCCEEDED",
+              f"{run_a.status} / {run_b.status}")
+
+        # The leak this guards: after B's run, the connection must not be
+        # able to see A's row. No client_id filter -- the policy is the
+        # only thing that can exclude it.
+        with pooled.transaction():
+            pooled.execute("select set_client_scope(%s)", (b,))
+            visible = {str(r[0]) for r in pooled.execute(
+                "select run_id from engine_runs").fetchall()}
+        check("under B's scope, A's run is invisible",
+              run_b.run_id in visible and run_a.run_id not in visible,
+              f"{len(visible)} runs visible")
+
+        with pooled.transaction():
+            pooled.execute("select set_client_scope(%s)", (a,))
+            visible_a = {str(r[0]) for r in pooled.execute(
+                "select run_id from engine_runs").fetchall()}
+        check("...and under A's scope, B's run is invisible",
+              run_a.run_id in visible_a and run_b.run_id not in visible_a)
+
+        # No scope at all is default-deny, not "everything". The one
+        # exception is a knowledge-clock run, which has no client by design.
+        unscoped = pooled.execute(
+            "select count(*) from engine_runs where client_id is not null").fetchone()[0]
+        check("with no scope set, no client run is visible", unscoped == 0, str(unscoped))
+
+        # A knowledge-clock run has no client and must still be writable
+        # and readable -- migration 014. Before it, this raised
+        # InsufficientPrivilege no matter what scope was set.
+        clock = RE_SCOPE.run_engine(pooled, RE_SCOPE.EngineRequest(
+            engine="E7", mode="FOUNDATION", model_role="MODEL_RESEARCH",
+            structured_input={"CASE_VERSION": 0}))
+        check("a knowledge-clock run writes with no client at all",
+              clock.status == "SUCCEEDED", clock.error or clock.status)
+        check("...and is readable without a scope",
+              str(clock.run_id) in {str(r[0]) for r in pooled.execute(
+                  "select run_id from engine_runs where client_id is null").fetchall()})
+        check("...and its output is readable too",
+              pooled.execute("select count(*) from engine_outputs where run_id=%s",
+                             (clock.run_id,)).fetchone()[0] == 1)
+
+        # 015. The four shapes a run's client and mode can disagree in.
+        # 014's guard only caught one of them and permitted an E7 CASE run
+        # with no client, which is a case with no case.
+        print("\n  client/mode coherence is enforced BEFORE the insert (015)")
+        for label, engine, mode, client, role in (
+                ("E7 CASE with no client", "E7", "CASE", None, "MODEL_RESEARCH"),
+                ("E7 FOUNDATION with a client", "E7", "FOUNDATION", a, "MODEL_RESEARCH"),
+                ("E7 UPDATE with a client", "E7", "UPDATE", a, "MODEL_RESEARCH"),
+                ("E7 INBOX with a client", "E7", "INBOX", a, "MODEL_RESEARCH"),
+                ("E1 with no client", "E1", None, None, "MODEL_ANALYSIS"),
+                ("E6 INIT with no client", "E6", "INIT", None, "MODEL_ANALYSIS")):
+            try:
+                RE_SCOPE.run_engine(pooled, RE_SCOPE.EngineRequest(
+                    engine=engine, mode=mode, client_id=client, model_role=role,
+                    structured_input={"CASE_VERSION": 1 if client else 0}))
+                check(f"{label} is rejected", False, "the insert was accepted")
+            except psycopg.errors.CheckViolation as exc:
+                check(f"{label} is rejected",
+                      "client" in str(exc).lower(), str(exc)[:90])
+
+        for label, engine, mode, client, role in (
+                ("E7 CASE with a client", "E7", "CASE", a, "MODEL_RESEARCH"),
+                ("E7 FOUNDATION with none", "E7", "FOUNDATION", None, "MODEL_RESEARCH"),
+                ("E7 INBOX with none", "E7", "INBOX", None, "MODEL_RESEARCH"),
+                ("E6 REBUILD with a client", "E6", "REBUILD", a, "MODEL_ANALYSIS")):
+            ok = RE_SCOPE.run_engine(pooled, RE_SCOPE.EngineRequest(
+                engine=engine, mode=mode, client_id=client, model_role=role,
+                structured_input={"CASE_VERSION": 1 if client else 0}))
+            check(f"{label} is accepted", ok.status == "SUCCEEDED",
+                  ok.error or ok.status)
+
+        check("the mode is on the RUN, not only on a successful output",
+              admin.execute(
+                  "select engine_mode from engine_runs where run_id=%s",
+                  (run_a.run_id,)).fetchone()[0] == "INIT")
+        check("nothing incoherent was written",
+              admin.execute(
+                  "select count(*) from v_engine_run_incoherent "
+                  "where engine_mode is not null").fetchone()[0] == 0,
+              str(admin.execute(
+                  "select engine::text, engine_mode, problem "
+                  "from v_engine_run_incoherent limit 3").fetchall()))
+
+        # ------------------------------------------------------------------
+        # 015. A failed CASE response is the client's clinical record in a
+        # different shape. dead_letter_jobs had no client_id and no RLS at
+        # all, so every raw payload was readable under ANY scope.
+        print("\n  dead-letter payloads are client-scoped (015)")
+
+        def refuses(system, user, params):
+            # Prose, no machine blocks: the run dead-letters and the RAW
+            # RESPONSE is what lands in dead_letter_jobs.raw_payload.
+            #
+            # It echoes the case back, which is what makes this a PHI test
+            # rather than a column test. A model that fails mid-analysis
+            # routinely restates what it was given -- "for this client,
+            # HbA1c 6.4, I cannot..." -- and that restatement is the
+            # client's clinical record sitting in a table that had no
+            # client_id and no RLS at all.
+            return f"I could not complete this. The case as given: {user}", 10, 10
+
+        secret_a = "SENTINEL-LABS-CLIENT-A-HbA1c-6.4"
+        secret_b = "SENTINEL-LABS-CLIENT-B-HbA1c-5.1"
+        original_provider = RE_SCOPE.select_provider
+        RE_SCOPE.select_provider = lambda: (refuses, "fixture")
+        try:
+            dead_a = RE_SCOPE.run_engine(pooled, RE_SCOPE.EngineRequest(
+                engine="E6", mode="INIT", client_id=a,
+                structured_input={"CASE_VERSION": 1, "LABS": secret_a}))
+            dead_b = RE_SCOPE.run_engine(pooled, RE_SCOPE.EngineRequest(
+                engine="E6", mode="INIT", client_id=b,
+                structured_input={"CASE_VERSION": 1, "LABS": secret_b}))
+        finally:
+            RE_SCOPE.select_provider = original_provider
+
+        check("both runs dead-lettered",
+              dead_a.status == "DEAD_LETTER" and dead_b.status == "DEAD_LETTER")
+        check("the dead letter records which client's data it holds",
+              admin.execute(
+                  "select client_id from dead_letter_jobs where entity_id=%s",
+                  (dead_a.run_id,)).fetchone()[0] is not None)
+
+        # The leak. No client_id filter -- RLS is the only thing that can
+        # exclude the other client's clinical text.
+        with pooled.transaction():
+            pooled.execute("select set_client_scope(%s)", (b,))
+            payloads = " ".join(
+                json.dumps(r[0]) for r in pooled.execute(
+                    "select raw_payload from dead_letter_jobs").fetchall())
+        check("under B's scope, A's failed payload is invisible",
+              secret_b in payloads and secret_a not in payloads,
+              f"A leaked: {secret_a in payloads}")
+
+        with pooled.transaction():
+            pooled.execute("select set_client_scope(%s)", (a,))
+            payloads_a = " ".join(
+                json.dumps(r[0]) for r in pooled.execute(
+                    "select raw_payload from dead_letter_jobs").fetchall())
+        check("...and under A's scope, B's is invisible",
+              secret_a in payloads_a and secret_b not in payloads_a)
+
+        unscoped = " ".join(json.dumps(r[0]) for r in pooled.execute(
+            "select raw_payload from dead_letter_jobs").fetchall())
+        check("with no scope set, no client payload is visible at all",
+              secret_a not in unscoped and secret_b not in unscoped)
+
+        check("RLS is FORCED, so even a table owner cannot read past it",
+              admin.execute(
+                  "select relforcerowsecurity from pg_class "
+                  "where relname='dead_letter_jobs'").fetchone()[0])
+
+        # A dead letter that genuinely has no client stays global -- a
+        # knowledge-clock failure carries no client data and hiding it
+        # would make the knowledge track undebuggable.
+        RE_SCOPE.select_provider = lambda: (refuses, "fixture")
+        try:
+            clock_dead = RE_SCOPE.run_engine(pooled, RE_SCOPE.EngineRequest(
+                engine="E7", mode="FOUNDATION", model_role="MODEL_RESEARCH",
+                structured_input={"CASE_VERSION": 0}))
+        finally:
+            RE_SCOPE.select_provider = original_provider
+        check("a knowledge-clock dead letter has no client and stays readable",
+              pooled.execute(
+                  "select count(*) from dead_letter_jobs "
+                  "where entity_id=%s and client_id is null",
+                  (clock_dead.run_id,)).fetchone()[0] == 1)
+
+        # Triage without reading anyone's clinical text.
+        triage = admin.execute(
+            "select job_type, failures, clients_affected from v_dead_letter_triage "
+            "where job_type like 'RUN_ENGINE_%' order by failures desc limit 1"
+        ).fetchone()
+        check("triage counts failures without exposing raw_payload",
+              triage is not None and triage[1] >= 2, str(triage))
+        check("...and the view has no raw_payload column",
+              "raw_payload" not in {r[0] for r in admin.execute(
+                  "select column_name from information_schema.columns "
+                  "where table_name='v_dead_letter_triage'").fetchall()})
+    finally:
+        pooled.close()
 
     runtime.close()
     print()

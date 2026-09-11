@@ -253,24 +253,24 @@ def main() -> int:
 
     print("\ncontract validation")
     check("valid control passes",
-          RE.validate_control({"CASE_VERSION": 1, "ENGINE_RUN_STATUS": "SUCCEEDED"}) == [])
+          RE.validate_control(conn, {"CASE_VERSION": 1, "ENGINE_RUN_STATUS": "SUCCEEDED"}) == [])
     check("missing required field caught",
-          any("CASE_VERSION" in e for e in RE.validate_control({"ENGINE_RUN_STATUS": "SUCCEEDED"})))
+          any("CASE_VERSION" in e for e in RE.validate_control(conn, {"ENGINE_RUN_STATUS": "SUCCEEDED"})))
     check("bad enum caught",
-          RE.validate_control({"CASE_VERSION": 1, "ENGINE_RUN_STATUS": "MAYBE"}) != [])
+          RE.validate_control(conn, {"CASE_VERSION": 1, "ENGINE_RUN_STATUS": "MAYBE"}) != [])
     check("routing without a reason caught",
-          RE.validate_control({"CASE_VERSION": 1, "ENGINE_RUN_STATUS": "SUCCEEDED",
+          RE.validate_control(conn, {"CASE_VERSION": 1, "ENGINE_RUN_STATUS": "SUCCEEDED",
                                "ROUTING_RECOMMENDATION": "ENGINE2"}) != [])
     check("routing with a reason passes",
-          RE.validate_control({"CASE_VERSION": 1, "ENGINE_RUN_STATUS": "SUCCEEDED",
+          RE.validate_control(conn, {"CASE_VERSION": 1, "ENGINE_RUN_STATUS": "SUCCEEDED",
                                "ROUTING_RECOMMENDATION": "ENGINE2",
                                "ROUTING_REASON": "Adherence, not strategy"}) == [])
     check("live research without an insufficiency finding caught",
-          RE.validate_control({"CASE_VERSION": 1, "ENGINE_RUN_STATUS": "SUCCEEDED",
+          RE.validate_control(conn, {"CASE_VERSION": 1, "ENGINE_RUN_STATUS": "SUCCEEDED",
                                "LIVE_RESEARCH_REQUIRED": True,
                                "KNOWLEDGE_SUFFICIENT": True}) != [])
     check("FAILED without ERROR_STATE caught",
-          RE.validate_control({"CASE_VERSION": 1, "ENGINE_RUN_STATUS": "FAILED"}) != [])
+          RE.validate_control(conn, {"CASE_VERSION": 1, "ENGINE_RUN_STATUS": "FAILED"}) != [])
 
     # ------------------------------------------------------------------
     print("\nsynthetic client: E6 initialization")
@@ -297,7 +297,7 @@ def main() -> int:
     ).fetchone()[0]
 
     e6 = RE.run_engine(conn, RE.EngineRequest(
-        engine="E6", structured_input=intake, client_id=client, cycle_id=cycle,
+        engine="E6", mode="INIT", structured_input=intake, client_id=client, cycle_id=cycle,
         model_role="MODEL_ANALYSIS"))
     check("E6 run succeeded", e6.status == "SUCCEEDED", e6.error or "")
 
@@ -328,7 +328,7 @@ def main() -> int:
 
     print("\nE7 then E1 Pass B")
     e7 = RE.run_engine(conn, RE.EngineRequest(
-        engine="E7",
+        engine="E7", mode="CASE",
         structured_input={"CASE_RESEARCH_QUESTIONS": pass_a.control["RESEARCH_QUESTIONS"],
                           "CASE_VERSION": 1},
         client_id=client, case_version_id=v1, cycle_id=cycle, model_role="MODEL_RESEARCH"))
@@ -346,14 +346,29 @@ def main() -> int:
     check("both E1 passes recorded one prompt hash", len(hashes) == 1, str(hashes))
 
     print("\nrepair retry and dead letter")
+
+    def complete_response(engine: str) -> str:
+        """A response with BOTH machine blocks, which is what valid means.
+
+        These providers used to return a control block alone, and that was
+        accepted -- the bug D24 fixed. They are about retry and transport
+        mechanics, so they need a response that is genuinely complete;
+        otherwise every one of them now dead-letters for the right reason
+        and stops testing what it was written to test.
+        """
+        blocks = RE.fixture_handoffs(engine, "SINGLE", {"case_version": 1})
+        return ("ok\n"
+                + "".join(f"<{t}>\n{b}\n</{t}>\n" for t, b in blocks.items())
+                + '<CONTROL_BLOCK>\n{"CASE_VERSION":1,"ENGINE_RUN_STATUS":"SUCCEEDED"}\n'
+                  '</CONTROL_BLOCK>')
+
     calls = {"n": 0}
 
     def flaky(system, user, params):
         calls["n"] += 1
         if calls["n"] == 1:
             return "prose only, no control block", 10, 5
-        return ('ok\n<CONTROL_BLOCK>\n{"CASE_VERSION":1,"ENGINE_RUN_STATUS":"SUCCEEDED"}\n'
-                '</CONTROL_BLOCK>'), 10, 20
+        return complete_response("E2"), 10, 20
 
     original = RE.select_provider
     RE.select_provider = lambda: (flaky, "test")
@@ -398,8 +413,7 @@ def main() -> int:
             busy["n"] += 1
             if busy["n"] <= 2:
                 raise http_error(503)
-            return ('ok\n<CONTROL_BLOCK>\n{"CASE_VERSION":1,"ENGINE_RUN_STATUS":"SUCCEEDED"}\n'
-                    '</CONTROL_BLOCK>'), 11, 22
+            return complete_response("E2"), 11, 22
 
         RE.select_provider = lambda: (busy_twice, "test")
         recovered = RE.run_engine(conn, RE.EngineRequest(

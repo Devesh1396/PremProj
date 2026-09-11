@@ -1,24 +1,46 @@
 # PROGRESS
 
-## STATE AS OF 2026-09-10 — merged to `main` (`9c8c33a`)
+## STATE AS OF 2026-09-10 — RUNNING ON REAL INFRASTRUCTURE
 
 Read this first. The sections below are the working record and are written
 in the order things happened, so a few of them describe a position that a
 later section supersedes. Where they disagree, this summary is current.
 
-**Build steps 1–10b are complete and verified against a real PostgreSQL,
-not inspected by eye.** Nothing in this repo had ever run on a database
-before 2026-09-09; all of it has now.
+**The distinction this record now makes, and did not before:**
 
 | | |
 |---|---|
-| Schema | 12 migrations, 75 tables, 19 views, 51 enums, 202 indexes, 42 triggers, 58 policies, 29 RLS tables |
-| Suites | **11**, green from an empty database three consecutive times, each run followed by a re-run against the used database |
+| **Container-verified** | ran on a PostgreSQL this build controls, on a developer machine or in CI, usually with trust auth and a superuser DSN |
+| **Infrastructure-verified** | ran on the Hostinger VPS, on a database it does not control the surroundings of, with real roles, scram passwords over TCP, alongside three live business automations |
+
+They are not the same claim and the second is much stronger. Everything
+below is container-verified; the section *Deployed to the VPS* says what is
+now infrastructure-verified as well. **The reason to separate them is not
+bookkeeping.** Everything passed in containers for weeks while
+`RUN_ENGINE` could not have run as `phi_runtime` at all (D25) — trust auth
+and a superuser DSN hid it. Container-green is evidence about the code, not
+about the deployment.
+
+**Build steps 1–15 are complete and verified against a real PostgreSQL,
+not inspected by eye.**
+
+| | |
+|---|---|
+| Schema | 31 migrations, 97 tables, 41 views, 55 enums, 255 indexes, 103 check constraints, 54 triggers, 62 policies, 31 RLS tables |
+| Suites | **28** (`ls testing/test_*.py | wc -l`, and the same 28 names in `run_all.sh`'s loop), green from an empty database, each run followed by a re-run, and in three configurations: full, no optional extension, and **`MODEL_EMBEDDING` unset with pgvector present** |
 | CI | `.github/workflows/tests.yml` — every push on every branch, **with and without pgvector** |
 | Engines | All seven canonical prompts installed; E6 → E1 Pass A → E7 → E1 Pass B proven **live** |
 | Ontology | 26 domains, 269 concepts seeded from the curriculum, hash-verified |
+| Registries | **Four**: prompts (`010`), contract (`012`), handoffs (`013`), prices (`016`) |
 | Backup | Restore drill performed 2026-09-10; roles gap found and fixed |
-| Bugs | 46 found and fixed, each with a regression test |
+| Bugs | 68 found and fixed, each with a regression test |
+
+*Counts measured 2026-09-10 against the local full-capability database, not
+carried forward: `pg_tables`, `pg_views`, `pg_type typtype='e'`,
+`pg_indexes`, `pg_constraint contype='c'`, `pg_trigger NOT tgisinternal`,
+`pg_policies`, `pg_tables.rowsecurity`, all filtered to `public`. Earlier
+entries in this file used a different (unrecorded) method and do not
+reconcile with these; re-measure rather than adjusting them.*
 
 **D5 is ANSWERED and Engine 1 is not to be staged.** Measured on a live
 provider 2026-09-09 (see *D5 ANSWERED* below):
@@ -42,20 +64,569 @@ so a full 8-call new-client cycle lands near **$0.75–0.80** on
 `gemini-3.8-flash`. The free tier (20 requests/day/model) is not viable for
 this system — billing is a prerequisite, not an optimisation.
 
-**Steps 12, 13 and 14 are now BUILT** — K1 ontology seed, C3 normalization
-layer, and Core Intake V1 (exclusions first, `DECISIONS.md` D22). See their
-sections below.
+**Step 11 is COMPLETE and FROZEN.** `workflows/run_engine.json` is built,
+14 nodes, and proven byte-identical to `scripts/run_engine.py` on one
+golden corpus: 15 requests identical to the byte, 15 responses identical
+field for field, and the workflow's **SQL executed** against a real
+database as `phi_runtime` (D31). The JavaScript under test is extracted
+from the workflow at run time, so a copy cannot drift from it. No further
+step-11 work is to be started; changes to it are bug fixes only.
+
+**The case track runs end to end.** `scripts/client_new.py` takes a
+submitted intake to the practitioner's review queue: E6 → E1 Pass A →
+normalization → E7 → E1 Pass B → E2 → E3 → E6, on one prompt hash. It
+stops at the queue by design — Engine 5 is gated on a practitioner
+decision, and an open HOLD never stops the analysis (hard rule 9).
+
+### Before the first full synthetic case is run — set expectations now
+
+**Engine 7 will retrieve from an empty library, and Engine 1 Pass B will
+reason from an empty retrieval set.** That is expected and it is not a bug.
+The Knowledge Factory is step 16 and has not been built; until it has run,
+there is nothing in `strategies`, `evidence_records`, `claims` or
+`knowledge_chunks` to retrieve. A first full case will therefore produce a
+structurally complete report whose evidence citations are thin or absent.
+
+Read that as the library being empty, never as Engine 7 or Pass B being
+broken, and do not "fix" it by loosening a floor or a gate.
+
+**Step 16: K07–K11 are built and tested.** One source runs the complete
+loop, on the fixture provider, with every boundary asserted:
+
+```
+inbox → raw preserved → normalized → claims extracted → concepts
+normalized → delta analysis → evidence researched → strategy decided
+                                        (CREATE / UPDATE / MERGE / NO_CHANGE)
+```
+
+| | |
+|---|---|
+| K07 + K08 | `knowledge_ingest.py` — deterministic, **no model call** |
+| K09 | `knowledge_extract.py` — E7 `INBOX` → Claim Cards, concepts, §54 delta |
+| K10 | `knowledge_research.py` — E7 `EVIDENCE` → independent evidence + the claim's reading |
+| K11 | `knowledge_synthesize.py` — E7 `SYNTHESIS` → four decisions, dedup done first |
+
+**Discovery (K02–K06) is built too** — `knowledge_discover.py` and the
+`acquisition.py` chokepoint. Five ways to arrive, no new way to process.
+
+### The embedding endpoint is live — verified 2026-09-10
+
+`gemini-embedding-2` was called through `embedding.embed()` — the
+production path, no stub — and returned:
+
+```
+model gemini-embedding-2   dims 1536 (column 1536)   L2 norm 1.000000028
+```
+
+Every check passed at the call: text-only, dimension against
+`embedding_dim()`, unit norm inside `embedding_norm_tolerance()` (1e-3),
+and the cost row priced `PRICE_REGISTRY` at the TEXT rate — 7 tokens,
+$0.000001. So **D34 Option A is confirmed on the live provider**, not only
+in the probe: 1536 dimensions come back already normalised, which is the
+single thing `gemini-embedding-001` did not do.
+
+Two calls in total, both incidental to a CLI smoke test. This is a
+one-call verification of the wire format and **not** evidence about
+throughput, rate limits or cost at corpus scale.
+
+**K06: the YouTube adapter, shaped by the actor's REAL output.**
+
+The actor `automation-lab/youtube-transcript` was run live on 2026-09-10
+before any code was written against it. **The first guess at the input
+field was `videoUrls`; it is `urls`.** One video cost **$0.01** — the
+per-run start fee dominates a single-video run, so `run_actor()` takes a
+list and the suite asserts two videos cost one run.
+
+| | |
+|---|---|
+| `030` | the authorization note, `allowed_hosts`, transcript provenance columns, `uq_item_source_external`, creator external identity, `v_asr_derived_claims` |
+| `youtube_apify.py` | de-overlap, canonicalisation, the timestamped markdown |
+| `test_youtube.py` | 59 checks |
+
+**The authorization is with APIFY, not from YouTube**, and the registry
+note says so in those words. `allowed_hosts` is `api.apify.com` alone and
+the suite asserts a youtube.com URL is refused by the same adapter.
+Clearing the note — or unsetting `APIFY_TOKEN` — returns it to refusing;
+both are the same finding, so a missing token is **recorded as a refusal**
+and the item is `ACCESS_DENIED`, never a crash that takes a run down.
+
+**There is no flat transcript field, and the segments OVERLAP.** Segment 1
+runs 0 → 2.16 and segment 2 *starts* at 1.04 — YouTube's rolling-caption
+format. Naive concatenation duplicates words throughout, and the damage
+does not look like a joining bug downstream: it looks like a rambling
+source, so claim extraction blames the speaker. The de-overlap gates on the
+**timings**, not the text, and the suite proves the distinction with the
+same words twice — with a time overlap (trimmed) and without one (kept
+intact), because a speaker who genuinely repeats themselves must survive.
+
+**`isAutoGenerated` was true — this is ASR.** It rides on the envelope,
+reaches every chunk's metadata, and `v_asr_derived_claims` answers "which
+conclusions rest on machine transcription?". NULL means *not a transcript*,
+never "human". The view joins through `envelope_derived_records`, the
+provenance registry hard rule 12 already requires — the obvious join via
+`source_items.source_id` looks right and silently returns nothing.
+
+**Identity is `videoId`.** The live input URL carried playlist and
+timestamp parameters and the canonical id does not.
+
+**`channelId` is the creator, not `channelName`** — a rename updates the
+same profile instead of starting a second one holding half the history.
+`creator_type` is `OTHER`: a channel id says who published, never whether
+they are a researcher, a clinician or a coach.
+
+**Timings reach the derived knowledge through the normalizer we already
+have.** The transcript is markdown whose block headings ARE timestamps, and
+`segment()` already turns a heading path into the chunk's `location`
+(§16, §42). A claim citing minute 14 is provenance — with no second
+ingestion path and no change to the chunker (D37).
+
+**The chokepoint grew rather than the adapter growing a socket.**
+`fetch()` gained `method`, `body` and `extra_headers`; the credential
+travels in a header and `redact()` now strips credential-bearing query
+parameters for every adapter, because `source_fetches.url` is permanent.
+
+**Bug 67: `register_item()` raised a unique violation on a second
+sighting**, taking the whole discovery run down — and seeing a source again
+is the normal case. It is an upsert now, and a re-discovery never moves a
+status backwards: resetting a `NORMALIZED` item to `QUEUED` would invite
+the pipeline to run over it again.
+
+**Bug 68: a suite left an adapter's authorization NULL.** The K06 section
+of `test_discovery.py` cleared the note inside `with conn.transaction():`
+and let it COMMIT, so every later suite ran against an adapter that had
+quietly lost its authorization. Restored in a `finally` now. The shape is
+V2's: the harness differed from production, and it differed *because of the
+harness*.
+
+**Step 23: practice intelligence — the fifth name with nothing behind it.**
+
+`practice_strategy_outcomes` has carried `ck_min_cohort CHECK (n_clients >=
+5)` since migration `003` and **had never held a row**. The constraint had
+been passing every insert it never saw, exactly like
+`client_interventions` (D42), `client_interventions.outcome` (D43),
+`client_followups` (D43) and `KNOWLEDGE_DAILY_TOKEN_BUDGET` (D44) before
+it. Step 21 is what changed: started interventions with recorded outcomes,
+and `intervention_outcome_history` holding what each one replaced.
+
+| | |
+|---|---|
+| `029` | four coherence constraints, `jsonb_counts_total()`, `adherence_band()`, `trg_practice_deidentified`, `uq_practice_generated`, `v_practice_cohort_candidates`, `v_practice_experience` |
+| `practice_intelligence.py` | the aggregation, the labelled block, `--plan` by default |
+| `test_practice.py` | 49 checks |
+
+**The cohort counts PEOPLE, once each.** `n_clients` is distinct clients
+with a recorded outcome, taking each client's latest — so five intervention
+rows from two clients is a cohort of two, and one client's three attempts
+is one observation. The database agrees rather than trusting the runner:
+`ck_practice_outcomes_account_for_cohort` refuses a distribution that does
+not sum to `n_clients`, and `jsonb_counts_total()` is `IMMUTABLE` so a
+per-row `CHECK` can call it.
+
+**The denominator travels with the numerator.** Five improved out of five
+assessed, where thirty started it and twenty-five were never looked at, is
+a selection effect with a number in front of it — and the two are the same
+row unless the exposed count is stored beside the cohort.
+`ck_practice_generated_complete` refuses a generated aggregate that cannot
+say out of how many, over what window, with what distribution.
+
+**Three states that all look like an absent row.**
+`v_practice_cohort_candidates` separates "nobody ran the aggregator" from
+"the cohort is three" from "eleven clients started it and **nobody has
+assessed one**". Only the last is a standing failure to look, and it is the
+one an absent row hides.
+
+**A proposal nobody started is not experience** (`started_on IS NOT NULL`).
+Counting proposals inflates every cohort with things that never happened.
+
+**Counts, never copied client text.** No stop reason, adherence note or
+outcome evidence leaves the client layer: at a cohort of five one verbatim
+sentence is quasi-identifying. `trg_practice_deidentified` is the backstop
+— a UUID, an email, a display name or an external ref is refused — and it
+is `SECURITY DEFINER` because `clients` is RLS-forced and a check running
+with the caller's visibility would compare against the one client in scope
+and pass. The suite writes a distinctive token into a client's
+`stop_reason` and asserts it reaches no column of the aggregate.
+
+**The runtime reads aggregates and cannot create one.** `005` granted
+`phi_runtime` DML on every global table before anything wrote to this one,
+but aggregation is a cross-client read and `phi_runtime` is
+single-client-scoped: the cohort would always be one person or zero. `029`
+revokes INSERT/UPDATE/DELETE and keeps SELECT.
+
+**Adherence never folds into outcome** (D43), at cohort scale too. Where
+adherence is unrecorded for the majority the summary says a neutral result
+there is *untested, not ineffective*. The suite asserts both directions —
+a measured cohort carries no such caveat, so it is not boilerplate.
+
+**The label is a column, not a caption.** `basis` and `evidence_status` are
+fields on every row and on every block entry. The block reaches E7 and E1
+Pass B as a **top-level key**, never nested inside `E7_HANDOFF`, and E4 on
+the follow-up path; the suite drives the real CLIENT_NEW pipeline and
+asserts both. Engine 1's Pass B section, Engine 7 §A4 and Engine 4 all
+already said how to weigh practice experience — nothing had ever produced
+it.
+
+**Bug 66: `count(*)` over a LEFT JOIN counts the outer row.**
+`v_practice_cohort_candidates` reported **one intervention for every
+strategy nobody had ever started**. Caught by the fixture that gives six
+clients a proposal none of them started and asserts the cohort is zero —
+`count(e.intervention_id)` is the fix.
+
+**Step 22: K00_FOUNDATION_CONTROLLER — and the budget that was a name.**
+
+`KNOWLEDGE_DAILY_TOKEN_BUDGET` has been in `.env.example` since the
+beginning and **nothing had ever read it**. That mattered nowhere while
+every stage ran on fixtures or one item at a time under a human who could
+see the bill. K00 is where it matters — a loop across 26 domains,
+unattended — and an unenforced budget on that is the entire risk.
+
+| | |
+|---|---|
+| `028` | `knowledge_spend_today()`, `foundation_progress`, `foundation_batches`, `v_wave1_readiness`, `v_foundation_queue` |
+| `foundation_controller.py` | the loop: what runs next, where it is, when it stops |
+
+**The controller adds no new knowledge work.** Every stage it drives
+already exists (K02–K13). What it adds is the decision, the cursor and the
+stop.
+
+**It does not execute by default.** `--plan` is the default and
+`--execute` is an explicit act, because K00 is the one component that could
+begin mass ingestion unattended. `DISCOVER` and `INGEST` are not executable
+stages at all — reported as **MANUAL with the reason**, never quietly
+omitted.
+
+**The cap is measured from `cost_events`**, not a counter the controller
+keeps: a counter can be forgotten to increment, rows cannot. Client work is
+excluded in **both** directions — a case neither eats the foundation budget
+nor waits on it. **Unset means unbounded and says so**; no default is
+invented, because that is a spending decision.
+
+**Library stages are not per-domain, and pretending otherwise was a bug**
+the first `--plan` caught: a claim belongs to a source, so running
+extraction per domain had three domains claim the same item.
+`CONTROVERSY` and `GAP` genuinely are per-domain (D41), so `Stage.scope`
+separates them.
+
+**The cursor is a row**, so a restart resumes rather than restarting every
+domain from `DISCOVER`. A domain failing repeatedly is **paused with its
+reason** rather than retried forever.
+
+**`WAVE1_FOUNDATION_READY` is computed, never stored** — A4's four
+dimensions at once, every one a floor. `foundation_stage` has no
+`COMPLETE` (§70); `IDLE` stays in the queue.
+
+**Step 21: CLIENT_FOLLOWUP and E4 — the second and every later cycle.**
+
+```
+follow-up -> E6 UPDATE -> E4 -> routing -> E1/E2/E3 -> E6 -> review
+```
+
+`client_followups` has existed since `004` and nothing ever read one;
+`client_interventions.outcome` has existed just as long and **nothing ever
+wrote one** — so `WORSENING_MARKER` read a column nobody had filled and
+could never fire for any client. Engine 4 now emits §64B
+`<PROGRESS_OUTCOMES>`, and the suite proves the rule finally fires.
+
+**A follow-up is a different pipeline, not CLIENT_NEW with a flag (D43).**
+Engine 4 is the routing authority: `ROUTING_RECOMMENDATION` — a **typed**
+control-block field, never prose — decides which of E1/E2/E3 run, and an
+unknown value **stops** rather than routing nowhere. The contract also
+refuses a recommendation carrying no `ROUTING_REASON`, which the suite
+asserts rather than merely satisfies.
+
+| | |
+|---|---|
+| `027` | `processed_at`, `intervention_outcome_history`, `record_intervention_outcome()`, `v_followup_queue`, `v_intervention_response` |
+| `client_followup.py` | the cycle, ending at the review queue |
+| §64B | one outcome per live intervention, as data |
+
+**An outcome that changes leaves what it changed from.** IMPROVING becoming
+WORSENING is arguably the most important fact a follow-up produces, and a
+bare `UPDATE` loses it. One function writes the history row **before** the
+column. `STOPPED` requires a reason. Adherence is stored **beside** the
+outcome, never folded into it — an intervention nobody carried out has not
+failed, it has not been tested.
+
+**`TOO_EARLY` and `NOT_TRACKED` are real answers.** An unreadable outcome
+lands at `NOT_TRACKED`, never `STABLE`: `STABLE` claims a measurement never
+made. `v_intervention_response.never_assessed` separates "nobody looked"
+from "looked and found nothing", which the column default otherwise makes
+identical.
+
+**A follow-up is processed once** and spends one routing hop;
+`ck_loop_bound` refuses the hop past `max_loops` (hard rule 3). The cycle
+ends at the review queue — E5 and release stay behind a practitioner
+decision and the safety gate.
+
+**Step 20: the safety gate finally has something to gate.**
+
+`trg_block_unapproved_communication` and `case_flags` have existed since
+migration `004` and **nothing ever evaluated a rule**, so no HOLD could
+open and the gate had never blocked anything.
+
+| | |
+|---|---|
+| `026` | `safety_rules`, `critical_lab_thresholds`, `safety_match_patterns`, `evaluate_safety_rules()`, `apply_safety_rules()`, `v_release_readiness` |
+| `client_release.py` | E5 draft, practitioner approval, gated release |
+| §60B / §70B | E2 and E3 emit their plans as strict JSON, not only as prose |
+
+**The acceptance case is a NEGATIVE, and it is asserted first.** A client
+on metformin, a statin, an ACE inhibitor, thyroid replacement and
+amlodipine — with abnormal-but-not-critical labs and a carbohydrate
+reduction proposed — passes **clean**. A gate that fires constantly is a
+rubber stamp (D6), so the thing worth testing is that it stays shut up.
+
+**A plan that leaves no row cannot be checked (D42).** Every rule that
+matters turns on what is being proposed, and matches on the intervention's
+NAME. `client_interventions` had existed since `004` with nothing writing
+to it, so those rules would have passed every client clean **having
+inspected nothing**. E2 and E3 now emit `<BEHAVIOUR_PLAN_ITEMS>` and
+`<NUTRITION_PLAN_ITEMS>` — the seventh and eighth build-added output
+contracts, same pattern as §R10–§R15.
+
+Two rules need **both halves**: insulin *and* a glucose-lowering
+intervention, warfarin *and* an interacting one. Either alone is an
+ordinary client, which is exactly why metformin passes.
+
+**Drug names are rows, not code** (hard rule 13). The suite proves it:
+an unregistered sulfonylurea is honestly not matched, and one INSERT later
+it is. `trg_flag_rule_registered` refuses a deterministic flag whose
+rule_key is not in the catalogue — which is how two existing suites were
+found writing invented keys.
+
+**Release is three conditions and none substitutes.** Drafting is never
+gated (hard rule 9) — the practitioner may need to see what would be said
+before deciding whether the HOLD matters. The approval check is in the
+script and the HOLD check is a trigger, deliberately: a workflow can be
+edited, a trigger cannot be forgotten.
+
+**Step 19: K12 and K13 are built — the two passes nothing else produces.**
+
+`controversies`, `controversy_positions` and `negative_knowledge` have
+existed since migration `003` and **nothing had ever written to them**.
+That is a property of the pipeline, not an oversight: K09 reads one source
+and K11 turns claims into strategies, and neither can produce "these two
+bodies of evidence contradict each other" or "this was examined and does
+not work", because no single source says either.
+
+| | | |
+|---|---|---|
+| K12 | `knowledge_controversy.py` | E7 `CONTROVERSY` (§R14) — per domain, over accumulated evidence |
+| K13 | `knowledge_gap.py` | E7 `GAP` (§R15) — per domain, plus capped escalation |
+
+Two new knowledge-clock modes, added as **registry rows** plus their output
+contracts. `v_controversy_state`, `v_knowledge_gap_queue`,
+`domain_controversy_assessments`. 41 checks, both capability floors.
+
+**Four refusals carry it** (D41):
+
+- **A controversy with one position is refused at COMMIT.** It is a
+  consensus statement or a gap, and stored here it is retrieved and shown
+  as a live disagreement. A CONSTRAINT TRIGGER, deferred, because the
+  positions are written after the parent — deleting one back down to a
+  single position is refused the same way.
+- **Negative knowledge needs `why_investigated`, `evidence_examined` and
+  `revisit_trigger`.** Its only job is to stop the same question being
+  researched twice, and it cannot without the first two. Without the
+  third, "this does not work" is a `COMPLETE` status by another name,
+  which §70 forbids.
+- **`knowledge_gaps.status` is a closed set now.** It was free text, and
+  `foundation_ready` turns on `status = 'OPEN'` — a row written `'open'`
+  would have hidden a CRITICAL gap and marked a domain ready, silently and
+  in the direction that hides the problem.
+- **"Nobody looked" is not "nothing found".** `domain_controversy_assessments`
+  gives K12 the record `domain_gap_assessments` already gave K13. Without
+  it both states are an absent row, and the second is the dangerous one
+  (hard rule 11).
+
+**Escalation is capped and ranks by impact** (hard rule 3), and
+`RESEARCHING` means a gap was **taken up, not researched** — wiring one
+into a live E7 run is step 21's continuous update, and a gap question is
+not a claim. Named rather than half-built.
+
+**Step 18: evaluation layers A-E are built, and layer A has a baseline.**
+
+D7's five layers, none of which asks the practitioner to author an answer:
+
+| | | |
+|---|---|---|
+| A | seeded domain structure | `generate_a` splits each family — probes in the query, the rest expected |
+| B | held-out sources | `holdout_answer_keys`, extracted separately, read-only resolution |
+| C | cross-domain synthetic cases | `DOMAIN_BREADTH` against the domains the library actually spans |
+| D | practitioner spot check | drawn automatically, capped, one sample at a time |
+| E | discovery value | a RATE per sample, denominator = items **reviewed** |
+
+**Measured, not asserted** (`docs/evidence/layer_a_baseline.md`):
+
+```
+full text only        mean recall 0.1372    3 of 14 tests pass
+full text + vector    mean recall 0.3255    9 of 14 tests pass
+```
+
+Same fourteen tests, same day; 269 concepts embedded in between, on the
+**live provider** — 283 calls, 1,204 tokens, **$0.000234**, 2m27s. Every
+vector unit-norm at 1536 dimensions, none rejected. The floor was 0.30
+before either run.
+
+**Layer A found bug 63 on its first run** — the full-text channel had been
+returning nothing for any query longer than a few words since step 17,
+silently, and every step 17 test passed because its fixture queries are
+three words long. That is what an evaluation layer is for, and it paid for
+itself before it was finished.
+
+**Three refusals hold the layers up**, each one a way this could have
+become decorative:
+- `ck_test_has_expectation` — recall over an empty expected set is
+  undefined, not 1.0. A young library must not score 100% for knowing
+  nothing.
+- `normalize.resolve(..., read_only=True)` — the ordinary resolver creates
+  PROPOSED concepts and trigram aliases, so building the layer B answer key
+  the ordinary way would have taught the library the held-out vocabulary it
+  is being measured against. Same tiers, no writes.
+- `UNSCORABLE` — a library spanning no domain has not failed retrieval, and
+  is excluded from the mean rather than counted as zero.
+
+**Step 17: K14 embedding and hybrid retrieval are built and tested.**
+
+```
+metadata filter → full text → vector → dedupe → rerank
+```
+
+| | |
+|---|---|
+| `023_embedding_freshness.sql` | `embedding_source_hash` + `embedded_at` on the five embeddable tables, `v_embedding_coverage` |
+| `embed_library.py` | the backfill. Chooses rows and text; never calls a provider — that is `embedding.py` (D38) |
+| `retrieval.py` | the four channels, the dedupe, and the rerank |
+| `test_retrieval.py` | 35 checks, green with pgvector and on the D15 floor without it, **ten consecutive runs on each** |
+
+**The acceptance criterion is met at the DEFAULT setting, which is the
+only version of it worth anything (D39).** The suite seeds a deliberately
+lopsided library — six strategies in each of three disease folders, one in
+each of six other domains, with the folders on PRIMARY concept links (1.0)
+and the rest on weaker ones (0.4) — and a page of twelve reaches all nine
+domains. The counterfactual runs **the same function** with the per-bucket
+cap lifted and returns **disease folders only**, so the breadth is
+attributable to the mechanism rather than to the fixture.
+
+The first version of this check passed on a coin flip. See **bug 62** —
+worth reading before writing any other ranking test.
+
+`per_bucket_cap` is **derived** (`limit // len(concepts)`), not a
+constant. A fixed 3 fails the criterion at a page of 12. An acceptance
+test that passes because the test chose the cap has tested the test.
+
+**"Do not regenerate unchanged embeddings" is proved by counting real
+calls**, not asserted: a second backfill pass makes **zero** provider
+calls and editing one row costs exactly one. The hash is of the embedded
+TEXT, not of the row — `retrieval_hits` moves on every retrieval, so a
+row hash would have made reading the library pay to re-embed it.
+
+**Without pgvector it degrades loudly (D15).** The vector channel is
+skipped, the diagnostics say why, weights renormalize over the channels
+that ran, and `v_embedding_coverage` reports NULL rather than zero —
+"not applicable", not "backfill has not run". Verified by running the
+suite on the no-extension floor, not by reading the branch.
 
 **What is NOT done, and should not be assumed:**
-- Step 11 (n8n `RUN_ENGINE` subworkflow) and steps 15–23.
-- Step 15 `CLIENT_NEW` is now the gating piece on the case track: intake →
-  E6 v1 already produces its input, so what remains is orchestration.
-- `scripts/backup.sh` has never run **on the VPS**, under cron, with GPG
-  encryption or an off-site target. The drill could not exercise those paths.
+- **No discovery adapter's WIRE FORMAT is verified from inside this
+  build.** The egress proxy blocks `eutils.ncbi.nlm.nih.gov`,
+  `api.crossref.org` and `pubmed.ncbi.nlm.nih.gov`; all three returned
+  `000`. The suites drive the real adapters with the transport stubbed, so
+  the policy, the cursor, the query history, the refusal paths, the parsing
+  and the handoff are verified — and **the wire format is not**. Treat the
+  first live `PUBMED` run as unverified code rather than as a regression.
+  **`YOUTUBE` is the exception and only partly**: the actor was run live
+  and its real output read, so the field names, the segment shape and the
+  input field are known rather than assumed — but the code was written
+  afterwards and has still never executed against the live endpoint.
+- **The no-captions payload has never been observed.** A video without
+  captions has not been run, so the `FULL_TEXT_NOT_AVAILABLE` path for
+  `YOUTUBE` is **UNVERIFIED against a real payload**. What is enforced is
+  the shape-independent invariant — no usable segments means no transcript
+  — and no fixture asserts a guessed shape. This is the honest limit of
+  step 16's K06 work and the first thing to check on the pilot.
+- **One element shape in the Apify request is assumed.** The input FIELD
+  is `urls`, confirmed live (`videoUrls` was the wrong first guess). Whether
+  each element is a plain string or a `{url: …}` object was not separately
+  confirmed. `youtube_apify.INPUT_ITEMS_AS_OBJECTS` is the one line to
+  change and the first place to look if a live batch returns empty.
+- **Bulk embedding has never been run on the live provider.** The wire
+  format now HAS been verified — see *The embedding endpoint is live* —
+  but every embedding in every suite still comes from an injected
+  transport, and no corpus has been embedded for real. The per-call
+  guarantees are proven; the throughput, the rate limits and the bill are
+  not.
+- **No real source has run the loop yet** — only fixtures and synthetic
+  documents. Do not begin mass ingestion; one real source first, then the
+  20-video pilot.
+- **Practice aggregates exist as a mechanism, not as data.** Step 23 is
+  built and `practice_strategy_outcomes` is still empty in production
+  terms: the minimum cohort is five assessed clients per strategy, and no
+  real client has been through a follow-up. The engines receive an empty
+  `PRACTICE_EXPERIENCE` block today, which is correct and is not the same
+  as the feature working on real data.
 - `STRIP_IDENTITY_FROM_ENGINE_PAYLOADS` is documented and **not enforced**
   in `RUN_ENGINE`.
-- No VPS exists yet. Everything above was verified on a local PostgreSQL 16
-  and in CI.
+- On the VPS specifically: the restore drill has not been run **on that
+  box**, the backup cron has not yet fired once, and SSH still allows
+  password authentication. See *Deployed to the VPS*.
+
+---
+
+## Deployed to the VPS — 2026-09-10
+
+The first time any of this has run on real infrastructure. Hostinger,
+`srv1498536`, Ubuntu, 2 vCPU / 7.8 GB RAM, 90 GB free.
+
+| | |
+|---|---|
+| Container | `phi-postgres`, `pgvector/pgvector:pg16`, healthy |
+| Network | joined to the existing `n8n-sdc9_default`; **no published port**; reachable only as `phi-postgres:5432` |
+| Migrations | deployed from `main` = **000–011 only**. `012`–`016` land on merge |
+| Roles | `phi_admin`, `phi_runtime`, `phi_practitioner` — verified, scram auth over TCP |
+| Prompts | all seven loaded; `load_prompts.py --check` exits 0; E7 hash `c1276c136368` |
+| Suites | `run_all.sh` — ALL SUITES PASSED (13 suites at that revision) **against the real roles**, not a superuser DSN |
+| Backup | `backup.sh` nightly, cron `30 2 * * *` UTC, GPG-encrypted; the private half is **not on the VPS**; decryption verified from a separate machine |
+| `BACKUP_REMOTE_TARGET` | unset — backups are on the same box as the database |
+| `LLM_API_KEY` | deliberately **EMPTY** on the VPS. Nothing there makes a paid call yet |
+
+### Do not touch the n8n side
+
+The existing stack runs **three live business automations** (GFG T1 v2,
+AiSensy, a detection PoC) on volume `n8n-sdc9_n8n_data`, backed up to
+`/root/n8n-data-2026-09-10.tar.gz`. That stack, that volume and its
+`docker-compose.yml` are out of scope for this build, permanently. This
+repo adds a database to the same network and nothing else.
+
+### The n8n version question is answered, and the pin follows the VPS
+
+**DECIDED: pin to 2.11.4, do not upgrade the VPS** (D32). Verifying against
+`n8n-nodes-base` 2.11.2 — what n8n 2.11.4 ships — found two things that
+would have failed on first import, neither of them a version regression:
+
+1. The Postgres node's `queryReplacement` **array branch does not exist in
+   2.11.2**. Every binding had been written to use it, and would have bound
+   **one** parameter where the statement wanted twelve.
+2. The Code node has **no `fetch`** — it runs in `vm2` — on 2.35.7 as much
+   as on 2.11.4 (D33). The provider call could never have run anywhere, and
+   the retry harness could not see it because it ran the extracted source in
+   plain Node.
+
+Both are fixed and both are now covered by tests that would catch a
+recurrence. See `docs/OPERATIONS.md` "n8n version".
+
+### Two things the deployment taught
+
+1. **GPG refused to encrypt to an untrusted key and `backup.sh` exited 2,
+   leaving the files unencrypted rather than reporting success.** That is
+   the correct failure: a backup script that claims success while writing
+   plaintext PHI is worse than one that stops.
+2. **Everything passing in containers passed on the VPS only because the
+   role and DSN bugs had already been found.** Trust auth and a superuser
+   DSN hid D25 for weeks. This is why the two verification claims are now
+   recorded separately.
+
+---
 
 ---
 
@@ -245,6 +816,120 @@ Only the shapes that bear safety or data integrity are checked — what step
 validate-everything layer would freeze the field registry D22 keeps as
 data.
 
+### D24 — the substantive handoffs now flow `FIXED 2026-09-10`
+Found in review, before the n8n port, and confirmed against the code rather
+than taken on trust.
+
+Every prompt defines **two** machine-readable outputs. `<CONTROL_BLOCK>` is
+~17 typed routing fields (D14); `<..._HANDOFF>` is the reasoning the next
+engine thinks with. `RUN_ENGINE` parsed only the first —
+`EngineResult.structured` was `None` on both return paths, and
+`engine_outputs.structured` was written from the **input's** `_echo` key,
+which nothing sets, so it stored `{}` on every run since the engine layer
+was built. `CLIENT_NEW` then passed control blocks downstream as
+`E7_HANDOFF` and `E1_HANDOFF`, and built both case versions from the input
+it had handed Engine 6.
+
+Engine 1 Pass B — which exists **solely** to see Engine 7's retrieval (D4)
+— was receiving eight routing booleans where strategies and evidence should
+have been. The sequence executed perfectly and the thinking did not move.
+
+- `013_handoff_registry.sql` — `engine_handoffs` keyed
+  `(engine, mode, tag)` with a `required` flag. The third instance of the
+  pattern `010` and `012` established, not a third bespoke mechanism. The
+  loader **verifies every tag against the registered prompt**, and caught a
+  real discrepancy on the first run.
+- **E6 and E7 have no default mode.** Guessing means expecting a delta
+  where a state was needed, or the reverse.
+- **A delta is never `canonical_state`.** `_new_case_version` refuses a
+  version without a full state; the delta goes in the column `004` created
+  for it. `CLIENT_NEW`'s second E6 call runs `REBUILD`, not `UPDATE` — see
+  D24 for why that is a deliberate deviation.
+- A missing required handoff joins the same `errors` list as a contract
+  violation, so it repairs and then dead-letters rather than adding a third
+  failure path.
+- `test_handoff_flow.py` — sentinels that exist in exactly one block,
+  asserted to reach specific downstream **inputs**, captured from what was
+  actually transmitted. Plus the negative: a perfect control block with no
+  handoff must dead-letter.
+
+### Step 11 — n8n `RUN_ENGINE` `BUILT 2026-09-10`
+`workflows/run_engine.json`, 13 nodes, mirroring `scripts/run_engine.py`
+rather than reinterpreting it: three registries read as rows, the runtime
+envelope, three separate outputs, the repair and dead-letter branch, cost
+accounting, and transaction-local client scope on every write.
+
+**Parity is byte-identical, not behavioural** (D26). One golden corpus,
+two implementations — the third use of the pattern the contract registry
+established, and the third time it caught something:
+
+- **15 requests, identical to the byte** — envelope, key order,
+  indentation, escaping. Covers every engine, every E6 and E7 mode, both
+  E1 passes, non-ASCII, integral floats, empty containers, every JSON
+  escape, deep nesting and large integers.
+- **15 responses, identical field for field** — valid execution, an
+  invalid control block three ways, a missing handoff, an empty handoff
+  block, the wrong block for the mode, a fenced control block, a handoff
+  whose value lines look like keys, an empty response, and token
+  accounting including reasoning tokens.
+- The JavaScript under test is **extracted from the workflow at run time**,
+  so a copy cannot drift from the thing it claims to test.
+
+No paid live calls were made to prove any of it.
+
+**Pinned to n8n 2.11.4** to match the VPS (D32) — see
+`docs/OPERATIONS.md` "n8n version" before deploying.
+
+### Step 15 — `CLIENT_NEW` `BUILT 2026-09-10`
+`scripts/client_new.py`. A submitted intake to the practitioner's queue in
+one call:
+
+```
+intake -> extract -> E6 v1
+       -> E1 Pass A -> normalization -> E7 -> E1 Pass B
+       -> E2 -> E3 -> E6 v2
+       -> practitioner review queue.  STOP.
+```
+
+Three properties are decisions, not transcription, and each is asserted:
+
+- **A fixed pipeline, not a routing loop.** Phase 4 is a sequence; phase 5
+  is the one that routes. `NEXT_ENGINE` is therefore not consulted to
+  choose what runs next — a new client always needs E1, E2 and E3, and
+  following the field would let an engine skip the nutrition plan. The
+  control block still **gates**: a run that did not succeed stops the
+  pipeline before anything downstream runs.
+- **It stops at the queue.** E5 is not part of it (hard rule 9: gates
+  release, not analysis), and E4 does not run because there is no response
+  data yet. An open **HOLD flag does not stop the analysis** — the suite
+  asserts that directly.
+- **A new client is queued whatever the control block says.** Engine 1
+  sets `REVIEW_REQUIRED` on its own analysis, but "the engines did not ask
+  for review" is not a reason to send a first plan to a client unseen.
+
+History is appended, never overwritten. The same submission cannot
+initialize a second case. A sparse intake still reaches the queue with its
+gaps recorded (D22).
+
+### Step 11 — control-contract registry `BUILT 2026-09-10`
+`012_contract_registry.sql` + `scripts/load_contracts.py`. The second half
+of D23: `run_engine.py` validated every control block against a file on the
+working tree, and hard rule 5 has n8n routing on exactly those typed
+fields, so a port with no access to the contract cannot route at all.
+
+**One document, two validators.** Python keeps `jsonschema`; the n8n Code
+node will use `ajv`, which ships inside n8n. Both read the same row, so the
+specification is single-sourced and only the library differs.
+`test_contract_registry.py` runs 26 control blocks through both and asserts
+identical verdicts **and identical blamed fields** — the blame matters as
+much as the verdict, because it is what goes into the repair prompt. CI
+installs `ajv@8` in all three jobs so this is a real gate.
+
+The corpus found something about the contract rather than the code:
+`additionalProperties` is **true**, so an engine emitting a field nobody has
+typed yet is not violating anything. That is D14, and it is now asserted
+rather than assumed.
+
 ### Step 13 — C3 normalization layer `BUILT 2026-09-10`
 `scripts/normalize.py`. Resolves a Pass A `NORMALIZATION_PHRASES` entry
 through the cheapest tier that can answer it and stops there:
@@ -299,8 +984,9 @@ clinically distinct state an alias.
 alias separation, the confusable mirrors, seed **quality**, and — per D13 —
 that the seed is explicitly **not complete**.
 
-### Step 11 — n8n `RUN_ENGINE`: feasibility settled, port not yet written
-`DETERMINED 2026-09-10`
+### Step 11 — n8n `RUN_ENGINE`: feasibility settled `DETERMINED 2026-09-10`
+*(historical — the port was written the same day; see* Step 11 — n8n
+`RUN_ENGINE` `BUILT 2026-09-10` *above)*
 
 The brief's first question was whether step 11 can be developed and
 validated from workflow JSON, a local n8n and the existing fixtures alone.
@@ -312,7 +998,7 @@ Determined by doing it, not by reading documentation:
 | | |
 |---|---|
 | Container registries | `docker.n8n.io` **403** at the egress proxy, Docker Hub's blob CDN blocked. The documented Docker route is unavailable here. |
-| npm registry | reachable. `npm install n8n` → **n8n 2.35.7**, ~2.5 GB, 3 minutes |
+| npm registry | reachable. `npm install n8n@2.11.4` → ~2.5 GB, 3 minutes. (Unpinned picks up 2.35.7; the pin follows the VPS, D32) |
 | Headless execution | works, with a caveat: n8n 2.x **dropped `execute --file`**. A workflow must be `import:workflow`-ed and then run by id, so workflow JSON in this repo carries a stable id |
 | Postgres node | connected as **`phi_runtime`** through a credential seeded from `.env.local`, and read the D23 prompt registry: seven rows, hashes identical to what `load_prompts.py` reported |
 | Credentials | seeded by `scripts/local_n8n.sh seed-credentials` from `.env.local`. Nothing is pasted anywhere, and nothing touches the VPS |
@@ -429,6 +1115,52 @@ TypeError. Client data was intact underneath — byte-identical, matching
 hashes — but every tool that touched it misbehaved. `docker-compose.yml`
 already gets this right via `POSTGRES_INITDB_ARGS`; a hand-built cluster
 does not.
+
+## Before the first full synthetic case: what E7 will and will not show
+
+Written **before** the run, so the result is not misread.
+
+**Engine 7 will return little or nothing, and that is correct.** The
+knowledge library is empty of the things E7 retrieves. K1 seeded the
+concept dictionary — 269 concepts — and nothing else:
+
+| | |
+|---|---|
+| concepts | 269 (K1 seed) |
+| strategies | 5 — **test fixtures**, not knowledge |
+| evidence records | 3 — **test fixtures** |
+| claims | 0 |
+| implementation patterns | 0 |
+
+Step 16 (Knowledge Factory K02–K11) builds strategies, claims and evidence.
+Step 17 (K14) makes them retrievable by embedding and hybrid search.
+Neither exists yet.
+
+**So Engine 1 Pass B will reason from an empty retrieval set.** Pass B is
+still worth running and its output is still worth reading — but it is
+reading its own Pass A picture with an empty E7 slot, not a library.
+
+What the first full case therefore **does** tell us:
+
+- whether the pipeline flows end to end on a live provider
+- whether Engine 1 produces a coherent 19-part report
+- whether Engine 2 and Engine 3 build on Pass B rather than restating it
+- whether the substantive handoffs propagate (D24) with real model output
+  rather than fixtures
+- what a real cycle costs
+
+What it **does not** tell us:
+
+- whether the retrieved knowledge is any good. There is none to retrieve.
+- whether E7's case retrieval works. An empty result from an empty library
+  is indistinguishable from a broken retriever until step 16 puts something
+  in it.
+
+**An empty `RESEARCH_PRACTICE_CASE_HANDOFF` is not a bug report.** The
+block must still be present and well-formed — D24 requires that, and a
+missing one still dead-letters — but its strategy and evidence fields
+being thin is the expected state of the system today.
+
 
 ## Bugs found and fixed during build
 1. **`norm_phrase` trailing whitespace.** Trimming before punctuation
@@ -698,12 +1430,373 @@ does not.
     unrecognised status becomes `NOT_ASSESSED` **with a `DISCREPANCY` note
     naming what was declared**, because silently defaulting it would hide
     that someone answered the question badly.
+47. **A phrase with punctuation could not be proposed as a concept, and
+    the phrase in question is D2's own example.** `normalize.py` built a
+    `canonical_key` as `phrase_norm.upper().replace(" ", "_")`, which
+    produced `LARGE_POST-MEAL_GLUCOSE_EXCURSIONS` and was rejected outright
+    by `ck_canonical_key_shape`. C3's suite never hit it because its
+    fixtures contain no punctuation; the first real `CLIENT_NEW` run hit it
+    immediately. Two places create concepts and were using different rules
+    — there is now one, in `scripts/concept_key.py`. Also fixed while
+    there: a phrase yielding no usable key is hashed rather than lost, and
+    a key collision after 80-character truncation disambiguates instead of
+    reusing the existing concept, which was a silent merge (D3).
+48. **`loop_count` is routing depth, not a count of engine calls.**
+    Migration 004 says so on the constraint — "Prevents Engine 4 → 1/2/3 →
+    4 cycling without bound" — and `max_loops` defaults to **3**, which is
+    fewer than `CLIENT_NEW` has engines. Charging a hop per engine made a
+    correct run exhaust its budget at E1 Pass B. One hop is one pass
+    through the engines, charged once on entry, so re-entering the same
+    cycle trips `ck_loop_bound` rather than running the engines again.
+
+49. **A relative module path made the parity check fail in CI and pass
+    everywhere else.** `find_ajv()` built its first candidate as
+    `Path(os.environ.get("N8N_HOME", "")) / "node_modules"`, and with
+    `N8N_HOME` unset that is the RELATIVE path `node_modules` — which
+    exists in CI, because CI installs ajv into the repository root. Node
+    resolves a relative `require()` against the requiring module rather
+    than the working directory, so the check found ajv, handed node a path
+    it could not use, and reported `ajv ran: exit 3`. Every candidate is
+    resolved to an absolute path now, empty roots are skipped instead of
+    silently becoming the current directory, and `ajv_validate.js` resolves
+    its own argument too. Reproduced locally by installing ajv exactly the
+    way the workflow does, rather than by reading the diff.
+
+50. **Every value in a handoff block is a string, and that killed the
+    first real run.** The format the prompts specify is line-oriented
+    `KEY: text`, so Engine 6's `CASE_VERSION: 1` parses as `"1"` — and the
+    control contract correctly rejected it as not an integer, dead-lettering
+    E1 Pass A the moment the pipeline ran on real handoffs. Not fixed by
+    coercing per field, which would invent a typing rule per key:
+    `client_case_versions.case_version` is an integer column assigned by the
+    insert, and D18 rests on stored versions starting at 1. Engine 6's line
+    is its claim; the row is the fact. The general form of the lesson —
+    typed values come from typed places, the handoff is prose-shaped and is
+    reasoning — is in D24 and matters for the n8n port too.
+
+51. **The selected mode was resolved and never transmitted.** It went into
+    provider `params`; the fixture read it and
+    `openai_compatible_provider` ignores `params` entirely, so `INIT`
+    versus `REBUILD` — Engine 6 emitting a full state versus a delta —
+    reached the wire as nothing. E1 looked fine only because
+    `client_new.py` hand-wrote `"MODE": "PASS_A"`, which is the accident
+    rather than the fix. `RUN_ENGINE` now injects a
+    `<RUNTIME_INVOCATION>` envelope for every engine and no call site
+    writes a mode. **The fixture could not have caught this** — it reads
+    the param the live path discards — so the test intercepts `urlopen`
+    and asserts against the bytes the live provider would have sent.
+52. **Two of Engine 7's four modes were unregistered, and one of them had
+    no output contract at all.** `ENGINE7_MODE` is
+    `FOUNDATION | UPDATE | CASE | INBOX` (§3262); only CASE and FOUNDATION
+    existed. UPDATE shares the foundation contract. **INBOX had no
+    substantive handoff block anywhere in the specification** — §55
+    describes the information gain in prose — so an INBOX run could only
+    ever have produced a control block, and reusing that as the handoff
+    would have been D24 again. §R10 was added (build-owned, D16).
+53. **`<RESEARCH_PRACTICE_FOUNDATION_HANDOFF>` and
+    `<RESEARCH_PRACTICE_CASE_HANDOFF>` had no standalone opening tag in
+    their field templates.** A model following either literally would emit
+    a block the runtime cannot find. The case tag passed the first check
+    only because it appears standalone in the §R3 *example*. Both are
+    build-owned (D16, Parts II/III), so the prompt was corrected rather
+    than the verifier taught to accept a formatting accident — and the
+    verifier now requires the standalone **opening** line, keeping the
+    closing-tag check as a second assertion.
+
+54. **`RUN_ENGINE` could not run as `phi_runtime` at all.** Connecting as
+    the role n8n uses and calling `run_engine()` failed on its FIRST
+    statement, both for a client run and for a knowledge-clock run:
+    `InsufficientPrivilege: new row violates row-level security policy for
+    table "engine_runs"`. Two causes. Nothing ever called
+    `set_client_scope()` — it appears only in `test_case_events.py`. And
+    the policy `client_id = current_client_scope()` can never match a
+    knowledge-clock run, which has no client (D18). **The Python reference
+    has only ever worked because `DATABASE_URL` connects as `phi_admin`,
+    which is SUPERUSER and bypasses RLS** — every engine run this system
+    has made went around the policies rather than through them. D25 and
+    migration `014`.
+55. **Python and JavaScript serialized the request differently, in two
+    measurable ways.** Python escaped non-ASCII to `\uXXXX` by default and
+    wrote integral floats as `78.0` where JavaScript wrote `78`. Either
+    would have produced a different model request from the same inputs
+    with nothing to notice, because the prompt hash plus the request IS
+    the call. `canonical_json()` fixes both (D26).
+56. **The two validators phrased the same violation differently, and that
+    string is not cosmetic.** `jsonschema` says `'CASE_VERSION' is a
+    required property`; `ajv` says `must have required property
+    'CASE_VERSION'`. It is persisted to `engine_runs.error_detail` and it
+    is what the repair prompt sends the model on attempt two — so n8n
+    would have asked the model to fix something in different words than
+    the reference does, on the one retry that matters.
+    `format_violation()` defines the wording and both sides build it from
+    their own library's structured error data.
+
+57. **`test_n8n_parity.py` crashed instead of skipping when node was
+    present and ajv was not.** The response-parity half runs the Validate
+    control node's own source, which requires ajv. Without it the
+    JavaScript returns one error dict per case — and the suite indexed
+    `["valid"]` on it, raising `KeyError` after first reporting fifteen
+    mismatches that were not mismatches.
+
+    **This is the pg_trgm shape one layer up.** All three CI jobs install
+    ajv, so all three were green and the degraded branch was reachable on a
+    developer machine and nowhere else — the same way an ungated
+    `similarity()` call survived steps 12 and 13 (bug 44). A branch that
+    only runs where nothing watches is a branch that is not tested.
+
+    `test_contract_registry.py` had always handled the condition correctly,
+    with a loud SKIP, so the fix is to match it: the response half is gated
+    on ajv as well as node; a per-case error is reported and the comparison
+    skipped rather than indexed; and `find_ajv()` is now imported from
+    `test_contract_registry` instead of being a second copy that did not
+    honour `AJV_MODULE_PATH`.
+
+    The floor is now tested. The bare job — the one whose purpose is
+    running with nothing optional available, and ajv is optional in exactly
+    that sense — deletes `node_modules/ajv` after the full suite and re-runs
+    both parity suites, **asserting a SKIP actually appears**: a suite that
+    passed for some other reason would prove nothing.
+    `testing/run_bare.sh` does the same locally and restores ajv on exit,
+    because a check that exists only in CI is how this class of gap forms
+    (bug 49).
+
+
+58. **Every Postgres binding in the workflow was written for a branch the
+    target version does not have.** D31's fix — one `{{ [a, b, c] }}` array
+    per node — was made against `n8n-nodes-base` 2.35.7. The VPS runs
+    2.11.4, whose 2.11.2 nodes have **no array branch**: an array is
+    `JSON.stringify`'d like any other object and pushed as ONE value.
+    Driving the real 2.11.2 module over the workflow's own expressions:
+    Open run bound 1 of 12, Record attempts 1 of 9, Record success 1 of 12,
+    Dead letter 1 of 10. Every Postgres node would have failed on the first
+    run.
+
+    Replaced with one resolvable per parameter, each a JSON literal,
+    unwrapped in SQL with `($n::jsonb #>> '{}')` — verified identical
+    against **both** real implementations. `test_n8n_sql.py` now asserts,
+    for every node on every run, that the bound count equals the highest
+    `$n` the statement uses, and that no node uses the array form. See D32.
+
+59. **The Call provider node used `fetch`, which the Code node does not
+    have.** n8n's Code node runs inside `vm2`; that sandbox provides
+    `setTimeout`, `Promise`, `Math`, `JSON`, `Date` and `helpers`, and
+    **not** `fetch` or `URL` — verified empirically, the same answer on
+    2.11.4 and 2.35.7. The node could never have run on any version.
+
+    Every retry assertion passed regardless, because `n8n_retry.js`
+    extracted the source and ran it with `new Function(...)` in plain Node,
+    where `fetch` is a global. **The harness was more capable than the
+    runtime it modelled** — bug 57 in different clothes. The node now uses
+    `helpers.httpRequest` with `returnFullResponse` and
+    `ignoreHttpStatusErrors`, read from n8n-core 2.11.1 rather than
+    guessed, and the harness runs the source in `node:vm` with only the
+    globals vm2 provides. See D33.
+
+60. **A `ReferenceError` in that node was retried five times with
+    exponential backoff and then dead-lettered as a transport failure.**
+    Found while proving the new harness catches bug 59: the node treated
+    every thrown error as a network error. Python retries `URLError`,
+    `TimeoutError` and `ConnectionError` and nothing else, so a `NameError`
+    there fails on the first attempt. Thrown errors are now classified by
+    network `code` exactly as statuses are classified by number; a
+    programming error has no such code, fails once, and is reported as
+    itself. A bug in that node must be loud, not slow.
+
+
+61. **The n8n SQL parity suite compared two things it had invented.** It
+    ran the workflow with `MODE: "PASS_A"` — which no caller produces, and
+    which is not a mode at all; E1 has one handoff mode, `SINGLE`, and its
+    pass is a separate column — and then hand-wrote a "reference" row to
+    match. Both halves were mine, so they agreed, and the suite reported
+    field-for-field parity while proving nothing.
+
+    Exposed by migration 020 making the coherence trigger look the mode up
+    in the registry: `no active handoff is registered for E1 in mode
+    PASS_A`. The suite now runs the real caller's mode and builds the
+    reference row by calling `run_engine()` rather than by writing a second
+    INSERT. **A harness that differs from production proves nothing about
+    production** — the same lesson as bug 49, bug 57 and bug 59, and the
+    fourth time in this build.
+
+    *Checked and NOT a bug:* the workflow requires an explicit `MODE` where
+    Python defaults for E1–E5, and `Build request` throws `HandoffMissing`
+    when the registry returns nothing. n8n is stricter than the reference in
+    the safe direction, which is a documented difference rather than a gap.
+
+62. **The step 17 acceptance test passed on a coin flip.** The fixture gave
+    every strategy an identical link weight of 1.0, and the query
+    (`insulin resistance with hepatic fat and raised triglycerides`) matched
+    **no** strategy under `websearch_to_tsquery`, which ANDs its terms — a
+    summary saying "insulin sensitivity" does not contain `resist`, `hepat`
+    and `triglycerid` at once. So the full-text channel returned nothing,
+    every result scored identically on the concept channel, and the page was
+    decided by the tie-break: `ORDER BY (-score, kind, id)` on freshly
+    generated UUIDs. The stub embedder made it worse rather than better —
+    hashing the whole string gives distinct texts a near-zero, effectively
+    random similarity, and per-channel normalization then rescales that
+    noise across the full range, so the vector channel voted at random too.
+
+    It was green four times running before the bare floor caught it, and
+    green is exactly what a coin flip looks like most of the time.
+
+    Two fixes, both making the fixture carry signal a real library has:
+    the presenting complaint's concepts are **PRIMARY** links (1.0) and the
+    concepts Engine 1 raised alongside them are weaker (0.4) — which makes
+    the breadth *harder* to achieve, not easier; and the stub embedder gives
+    each topic keyword its own direction so texts about insulin land near
+    texts about insulin. The counterfactual was also sharpened from "returns
+    fewer domains" to "returns **only** the three disease folders", because
+    "fewer" still passes on a tie. Verified deterministic over **20
+    consecutive runs**, ten on each capability floor.
+
+    This is **V2 in a fifth disguise**. Nothing was hand-written twice this
+    time; the harness simply had no signal in it, so the assertion measured
+    randomness and reported it as retrieval quality. *A test whose fixture
+    cannot distinguish the right answer from the wrong one proves nothing,
+    the same way one that constructs both halves does.*
+
+    **Putting signal in then exposed three more assertions that were
+    statements about the fixture rather than about retrieval**, each caught
+    by a capability floor or by running from an empty database:
+
+    - *"uncapped returns exactly the three folders"* — it returns **two**,
+      twelve slots taken by hepatic fat and triglycerides alone. A sharper
+      collapse than the criterion names. Now: folders **only**, and strictly
+      fewer domains than the capped page.
+    - *"with no concepts, the query cannot reach sleep"* — a statement about
+      library size. In a library of 29 strategies a page of 10 reaches most
+      of it. Now measured as rank movement, which is size-independent.
+    - *"named material ranks first"* — true without pgvector and **false
+      with it**, because a row that both the lexical and vector channels
+      found legitimately outranks one the spine alone reached. Asserting it
+      would have been asserting a capability floor. Now: the spine is the
+      channel that **drove** the row onto the page.
+
+    Every one of those passed on the floor it was written on. The floors are
+    not a formality — they are three different libraries, and an assertion
+    that is really about corpus shape survives exactly one of them.
+
+63. **The full-text channel had been returning nothing, for months of
+    build time, for any query longer than a few words.**
+    `websearch_to_tsquery` — and `plainto_tsquery`, and
+    `phraseto_tsquery` — **AND every term**. So
+
+    ```
+    'CONDITIONS & CLINICAL STATES: acne, adrenal fatigue, alopecia'
+      ->  'condit' & 'clinic' & 'state' & 'acn' & 'adren' & 'fatigu' & 'alopecia'
+    ```
+
+    and a document had to contain all seven. No real clinical query — which
+    is a paragraph — could ever match. The channel was not degraded; it was
+    off, silently, and `by_fts` returned `[]` with no error anywhere.
+
+    Every step 17 test passed regardless, because every fixture query in
+    that suite is two or three words. **Layer A found it on its first run**:
+    fourteen domain tests, all scoring exactly 0.00, which is not a number
+    retrieval produces by accident.
+
+    Fixed by ranking rather than filtering: the query becomes an **OR of its
+    lexemes**, taken from `to_tsvector`'s own output and quoted with
+    `quote_literal`, and `ts_rank_cd` — which was already there — separates
+    a document matching six terms from one matching one. ANDing is not a
+    relevance strategy; it is a filter that removes everything.
+
+    Layer A: **0.1372 -> 0.3255** mean recall after the fix and the
+    embeddings, 3 of 14 tests passing to 9 of 14.
+    See `docs/evidence/layer_a_baseline.md`.
+
+    *Also found, fixing it:* `test_retrieval.py` edited whichever strategy
+    `next(iter(...))` returned, which happened to be the row a later
+    ranking check queried for. The two sections had been coupled since the
+    suite was written and it surfaced only once full text started matching
+    at all. The edit target is named now.
+
+64. **`test_retrieval.py` raised instead of skipping when `MODEL_EMBEDDING`
+    was unset** — pgvector present, no model configured, `BadVector`
+    halfway through. Reported by the practitioner.
+
+    **Third instance of one shape** — `pg_trgm`, then `ajv`, now this: a
+    suite that only passes where an optional dependency happens to be
+    configured, invisible in CI because CI configures it. `MODEL_EMBEDDING`
+    is unset **on the VPS on purpose**, so this is the configuration the
+    system is actually deployed into.
+
+    Fixed as a mechanism rather than a third patch:
+
+    - `testing/preflight.py` — one skip format, one registry of what is
+      optional and what its absence costs. `have_env`, `have_capability`,
+      `have`.
+    - `testing/test_optional_deps.py` — removes each registered variable,
+      finds the suites that reach it by **walking the import graph** (a
+      list would go stale the first time somebody added a suite), and runs
+      each one twice. The degraded run must exit 0, and every skip it
+      prints that the baseline did not must **name** the removed
+      dependency. It runs inside `run_all.sh`, so it holds on every floor.
+    - **Production degrades too.** `retrieval.by_vector` now returns
+      `"MODEL_EMBEDDING is not set: ..."` instead of raising, because the
+      VPS runs that way deliberately. `embedding.embed()` still refuses —
+      asking it to embed with no model pinned IS an error (D34); a query
+      is not asking it to.
+    - `run_all.sh` **prints every named skip**. Naming a dependency inside
+      a suite whose output the summary then throws away is not naming it to
+      anyone, and a reader could not tell which floor a green run was green
+      on.
+
+    Now **rule V3 in `CLAUDE.md`**.
+
+    *Found while fixing it, by the new suite and its static half:*
+
+    - `test_retrieval` collapsed two different conditions into one flag.
+      "No pgvector" means there is no embedding column and coverage is
+      NULL; "pgvector with no model" means the column exists and is empty.
+      Three assertions were keyed to the wrong one.
+    - `test_n8n_sql.py` skipped to **stderr** in a different wording, so
+      `run_all`'s summary never showed it and no floor could grep it. That
+      suite could skip its only real assertion and look identical to a full
+      pass.
+    - `test_retrieval`'s "naming the concept moves its material UP the
+      page" was **rank**-based, and rank is a function of what else is on
+      the page: six hepatic strategies legitimately outrank the sleep row
+      both with and without the spine. It passed only because another
+      suite's five strategies happened to sit in between. Now asserts the
+      **score** rises — the mechanism, not the seating plan. Bug 62's
+      lesson in a third costume.
+    - `test_evaluation` needed the K1 ontology seed and **failed** rather
+      than skipping when another suite had not run it first. A precondition
+      gets the same treatment as an optional dependency.
+
+65. **The K1 seeder silently dropped a concept's domain provenance.**
+
+    ```sql
+    update concepts set origin_detail = origin_detail || '; also DOMAIN B'
+     where concept_id = %s and origin_detail not like '%DOMAIN B%'
+    ```
+
+    `NULL not like ...` is **NULL**, so the `WHERE` excluded every concept
+    whose `origin_detail` was NULL — the update never ran, and the concept
+    gained a `concept_domains` edge with no provenance naming the domain.
+    Hard rule 7: provenance is enforced, not requested.
+
+    Surfaced by layer A's cross-check disagreeing 290 vs 286, which is what
+    that check is for. `coalesce(origin_detail, '')` on both sides.
+
 
 **Also, and recorded rather than amended away:** commit `c99ebf4` was made
 on a red suite. `run_all.sh` printed `FAILURES PRESENT` and the command
 chain did not gate on its exit code. The rule in `CLAUDE.md` is to run the
 suites before every commit; running them and not reading the result is the
 same failure with an extra step.
+
+**It happened a second time**, at commit `2f5448d`, in a slightly different
+disguise: the verification was chained behind a `grep`, which succeeded on
+the output of a failing suite, so `&&` saw success. Both instances are now
+**rule V1 in `CLAUDE.md`**, with the wrong and right shell forms written
+out, because twice is a pattern and a `PROGRESS` entry is not where a
+session looks first.
+
+The companion rule, **V2**, is the four-instance one: a test must not
+construct both halves of a comparison, and the reference side must come
+from calling the real implementation (bugs 49, 57, 59, 61).
 
 ## The E1 two-pass rule is enforced, not documented
 `trg_enforce_two_pass` rejects an insert where Pass A and Pass B in the
@@ -814,19 +1907,20 @@ failed attempt's tokens included in the run total.
 `python3 scripts/measure_engine1.py` costs ~$0.39; do it to re-measure after
 a model change, not to re-confirm a settled result.)*
 
-**Steps 12, 13 and 14 are BUILT** (K1 ontology seed, C3 normalization
-layer, Core Intake V1 — see above). What remains on the case track is
-**step 15, `CLIENT_NEW`**: wiring intake → E6 v1 → E1 Pass A →
-normalization → E7 → E1 Pass B → E2 → E3 → review → E5 as one workflow.
-`scripts/intake.py` produces the E6 input and `scripts/normalize.py`
-resolves Pass A's phrases, so step 15 is orchestration rather than new
-reasoning.
+**Steps 12, 13, 14 and 15 are BUILT**, and step 11's registry half with
+them. `scripts/client_new.py` runs a submitted intake to the practitioner's
+queue in one call.
 
-**Step 11 (n8n `RUN_ENGINE` subworkflow) is the one remaining parallel
-track**, and it is now well-specified because live provider behaviour is
-known. It needs **no n8n credentials**: the workflow is authored as JSON
-and validated against a local n8n instance and the existing fixtures. See
-*Step 11 — feasibility* below.
+*(**Superseded.** This section recorded the n8n `RUN_ENGINE` subworkflow
+JSON as the next task. It was written on 2026-09-10 and built the same
+day: `workflows/run_engine.json`, 14 nodes, byte-identical parity, SQL
+executed against a real database. Step 11 is complete and frozen — see the
+state summary at the top. The next exact task is **step 16, the Knowledge
+Factory**.)*
+
+**After that, the release path.** `CLIENT_NEW` stops at the review queue by
+design; nothing yet turns a practitioner approval into Engine 5 output.
+That is step 20.
 
 **Cheap now, awkward later:** enforce
 `STRIP_IDENTITY_FROM_ENGINE_PAYLOADS` in `RUN_ENGINE` before real client
@@ -1019,10 +2113,15 @@ Two Engine 7 items for the practitioner, neither blocking:
   RUN_ENGINE is the safer place.
 - Fixture-mode token counts are character estimates, not measurements. The
   report says so on every run; do not quote them as call sizes.
-- n8n workflows not yet built (M2)
-- n8n subworkflow JSON not yet exported; `scripts/run_engine.py` is the
-  reference implementation and both must be validated by the same suite so
-  behaviour cannot drift
+- `RUN_ENGINE` is **built** in both implementations and validated by one
+  suite, so behaviour cannot drift (D26, D31). The remaining n8n gap is
+  that `CLIENT_NEW` exists only as `scripts/client_new.py`; the workflow
+  form of it is step 15's n8n half and is not written.
+- **n8n is pinned to 2.11.4, matching the VPS (D32).** Two runtime
+  settings on that instance still decide whether the workflow works and are
+  not in this repo: `N8N_BLOCK_ENV_ACCESS_IN_NODE` (the workflow reads
+  `$env`) and `N8N_RUNNERS_ENABLED` (which sandbox the Code node uses).
+  Check both before importing — `docs/OPERATIONS.md` "n8n version".
 - Deterministic flag rule set not yet written; `case_flags` and the gate
   work, but the SQL rules that populate HOLD/NOTE are still to come and
   must start narrow

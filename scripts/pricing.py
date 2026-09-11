@@ -17,6 +17,13 @@ Two rules:
    call was free", which is the one thing it certainly was not, and it
    would quietly corrupt every cost total built on top of it.
    `ck_cost_priced` enforces the pairing in the database.
+
+3. **A rate belongs to a MODALITY, and the lookup never falls back to
+   another one.** `gemini-embedding-2` charges $0.20/1M for text and
+   $12.00/1M for video — 60x apart. A registry keyed on model name alone
+   would price an audio embedding at the text rate and under-report by
+   32x, which is the same corruption as a fabricated rate arriving through
+   a different door (D38). An unpriced modality is UNPRICED, and visible.
 """
 
 from __future__ import annotations
@@ -58,11 +65,30 @@ def load_prices(force: bool = False) -> dict[str, dict[str, float]]:
     return _cache
 
 
-def _rates(model_name: str) -> tuple[float, float] | None:
+def modalities_of(entry: dict) -> dict[str, dict]:
+    """The rate map for one authored entry.
+
+    An entry may give rates directly, which means TEXT, or give a
+    `modalities` map. Both shapes are supported on purpose: the flat form
+    is right for a single-modality model and rewriting every entry to
+    carry a one-key map would be noise.
+    """
+    if isinstance(entry.get("modalities"), dict):
+        return {k.upper(): v for k, v in entry["modalities"].items()
+                if isinstance(v, dict)}
+    return {"TEXT": entry}
+
+
+def _rates(model_name: str, modality: str | None = None
+           ) -> tuple[float, float] | None:
     """Env override, then exact match, then longest matching prefix.
 
     The prefix rule exists so a dated snapshot id resolves to its family
     entry rather than silently going unpriced.
+
+    `modality` is resolved BEFORE the rate is read, and never guessed when
+    the model is priced in more than one: guessing is exactly how an audio
+    embedding gets charged at the text rate.
     """
     env_in = os.environ.get("LLM_PRICE_INPUT_PER_MTOK", "").strip()
     env_out = os.environ.get("LLM_PRICE_OUTPUT_PER_MTOK", "").strip()
@@ -81,17 +107,31 @@ def _rates(model_name: str) -> tuple[float, float] | None:
         if not matches:
             return None
         entry = prices[max(matches, key=len)]
+
+    rates = modalities_of(entry)
+    if modality is None:
+        # One modality is unambiguous. Several is not, and the answer to an
+        # ambiguous question about money is "I do not know", not "probably
+        # the cheap one".
+        if len(rates) != 1:
+            return None
+        chosen = next(iter(rates.values()))
+    else:
+        chosen = rates.get(modality.upper())
+        if chosen is None:
+            # No rate for THIS modality. Never another modality's rate.
+            return None
     try:
-        return (float(entry["input_usd_per_mtok"]),
-                float(entry["output_usd_per_mtok"]))
+        return (float(chosen["input_usd_per_mtok"]),
+                float(chosen["output_usd_per_mtok"]))
     except (KeyError, TypeError, ValueError):
         return None
 
 
-def price_call(model_name: str, input_tokens: int, output_tokens: int
-               ) -> tuple[float | None, str]:
+def price_call(model_name: str, input_tokens: int, output_tokens: int,
+               modality: str | None = None) -> tuple[float | None, str]:
     """Return (cost_usd, price_source). cost_usd is None when UNPRICED."""
-    rates = _rates(model_name or "")
+    rates = _rates(model_name or "", modality)
     if rates is None:
         return None, UNPRICED
     in_rate, out_rate = rates
@@ -112,3 +152,7 @@ if __name__ == "__main__":
     print(describe())
     for model in ("claude-sonnet-5", "claude-sonnet-5-20260101", "fixture:fixture"):
         print(f"  {model:32} {price_call(model, 68_437, 12_000)}")
+    print("  gemini-embedding-2, by modality (1M input tokens):")
+    for modality in ("TEXT", "IMAGE", "AUDIO", "VIDEO", "UNKNOWN", None):
+        print(f"    {str(modality):8} "
+              f"{price_call('gemini-embedding-2', 1_000_000, 0, modality)}")

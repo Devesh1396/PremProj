@@ -1,0 +1,477 @@
+[
+  {
+    "id": "premprojrunengine01",
+    "name": "RUN_ENGINE",
+    "meta": {
+      "description": "The n8n port of scripts/run_engine.py. Mirrors the reference: three separate outputs (human text, substantive handoff, control block), the same runtime envelope, the same three registries, the same retry/repair/dead-letter path, the same cost accounting, and transaction-local client scope on every write (D25). Built and proven against n8n 2.35.7 -- see docs/OPERATIONS.md 'n8n version' before deploying."
+    },
+    "nodes": [
+      {
+        "parameters": {
+          "workflowInputs": {
+            "values": [
+              {
+                "name": "ENGINE_ID"
+              },
+              {
+                "name": "MODE"
+              },
+              {
+                "name": "PASS"
+              },
+              {
+                "name": "CLIENT_ID"
+              },
+              {
+                "name": "CASE_VERSION_ID"
+              },
+              {
+                "name": "CYCLE_ID"
+              },
+              {
+                "name": "MODEL_ROLE"
+              },
+              {
+                "name": "STRUCTURED_INPUT"
+              },
+              {
+                "name": "RUN_CONTEXT"
+              }
+            ]
+          }
+        },
+        "id": "a0000000-0000-4000-8000-000000000001",
+        "name": "Inputs",
+        "type": "n8n-nodes-base.executeWorkflowTrigger",
+        "typeVersion": 1.1,
+        "position": [
+          0,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "operation": "executeQuery",
+          "query": "SELECT prompt_file, prompt_hash, content FROM engine_prompts WHERE engine = ($1::jsonb #>> '{}')::engine_id AND active",
+          "options": {
+            "queryReplacement": "={{ JSON.stringify($json.ENGINE_ID ?? null) }}"
+          }
+        },
+        "id": "a0000000-0000-4000-8000-000000000002",
+        "name": "Prompt registry",
+        "type": "n8n-nodes-base.postgres",
+        "typeVersion": 2.5,
+        "position": [
+          220,
+          0
+        ],
+        "credentials": {
+          "postgres": {
+            "id": "premprojphiruntime01",
+            "name": "phi_runtime (local)"
+          }
+        },
+        "notes": "010 / D23. No active row means PromptMissing: RUN_ENGINE never falls back to a stub (hard rule 7). The IF node below enforces that rather than letting an empty result flow on."
+      },
+      {
+        "parameters": {
+          "operation": "executeQuery",
+          "query": "SELECT tag, required FROM engine_handoffs WHERE engine = ($1::jsonb #>> '{}')::engine_id AND mode = ($2::jsonb #>> '{}') AND active ORDER BY required DESC, tag",
+          "options": {
+            "queryReplacement": "={{ JSON.stringify($('Inputs').item.json.ENGINE_ID ?? null) }},{{ JSON.stringify($('Inputs').item.json.MODE ?? null) }}"
+          }
+        },
+        "id": "a0000000-0000-4000-8000-000000000003",
+        "name": "Handoff registry",
+        "type": "n8n-nodes-base.postgres",
+        "typeVersion": 2.5,
+        "position": [
+          440,
+          0
+        ],
+        "credentials": {
+          "postgres": {
+            "id": "premprojphiruntime01",
+            "name": "phi_runtime (local)"
+          }
+        },
+        "notes": "013 / D24. Which substantive block this engine owes in this mode. Zero rows is HandoffMissing, not 'expect nothing' -- an unregistered mode would otherwise pass every check while producing no reasoning."
+      },
+      {
+        "parameters": {
+          "operation": "executeQuery",
+          "query": "SELECT document, document_hash FROM orchestration_contracts WHERE schema_version = 'control_contract.v1' AND active",
+          "options": {}
+        },
+        "id": "a0000000-0000-4000-8000-000000000004",
+        "name": "Contract registry",
+        "type": "n8n-nodes-base.postgres",
+        "typeVersion": 2.5,
+        "position": [
+          660,
+          0
+        ],
+        "credentials": {
+          "postgres": {
+            "id": "premprojphiruntime01",
+            "name": "phi_runtime (local)"
+          }
+        },
+        "notes": "012 / D23. The JSON Schema the control block is validated against. ajv compiles THIS document; the Python reference compiles the same row with jsonschema, and test_contract_registry.py proves they agree."
+      },
+      {
+        "parameters": {
+          "jsCode": "// Build the model request. BYTE-IDENTICAL to the Python reference's\n// build_user_prompt() -- see workflows/build_request.js and D26. The\n// prompt hash plus this string IS the call.\nconst inputs = $('Inputs').first().json;\nconst prompt = $('Prompt registry').all();\nconst handoffs = $('Handoff registry').all();\nconst contract = $('Contract registry').all();\n\nif (prompt.length === 0) {\n  throw new Error(`PromptMissing: no active prompt for ${inputs.ENGINE_ID}. RUN_ENGINE will not fall back to a stub.`);\n}\nif (handoffs.length === 0) {\n  throw new Error(`HandoffMissing: no handoff registered for ${inputs.ENGINE_ID}/${inputs.MODE}. RUN_ENGINE will not treat a run as successful without knowing what reasoning it was supposed to produce.`);\n}\nif (contract.length === 0) {\n  throw new Error('ContractMissing: no active control contract. RUN_ENGINE will not validate a control block against nothing.');\n}\n\nconst ENVELOPE_TAG = 'RUNTIME_INVOCATION';\nconst expected = handoffs.map((h) => ({ tag: h.json.tag, required: h.json.required }));\n\n// Key order is part of the byte contract.\nconst envelope = {\n  ENGINE: inputs.ENGINE_ID,\n  MODE: inputs.MODE,\n  PASS: inputs.PASS || 'SINGLE',\n  EXPECTED_HANDOFF_BLOCKS: expected.map((h) => h.tag),\n  REQUIRED_HANDOFF_BLOCKS: expected.filter((h) => h.required).map((h) => h.tag),\n  CONTROL_BLOCK_REQUIRED: true,\n};\n\nconst canonicalJson = (v) => JSON.stringify(v, null, 2);\nconst userPrompt = `<${ENVELOPE_TAG}>\\n${canonicalJson(envelope)}\\n</${ENVELOPE_TAG}>\\n\\n${canonicalJson(inputs.STRUCTURED_INPUT)}`;\n\nreturn [{ json: {\n  run_id: crypto.randomUUID(),\n  system_prompt: prompt[0].json.content,\n  prompt_file: prompt[0].json.prompt_file,\n  prompt_hash: prompt[0].json.prompt_hash,\n  user_prompt: userPrompt,\n  expected_handoffs: expected,\n  contract: contract[0].json.document,\n  attempt: 1,\n  totals: { input_tokens: 0, output_tokens: 0, duration_ms: 0 },\n} }];"
+        },
+        "id": "a0000000-0000-4000-8000-000000000005",
+        "name": "Build request",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          880,
+          0
+        ],
+        "notes": "Byte-identical to scripts/run_engine.py build_user_prompt(). testing/test_n8n_parity.py compares both over a stored corpus covering non-ASCII, integral floats, empty containers and every JSON escape."
+      },
+      {
+        "parameters": {
+          "operation": "executeQuery",
+          "query": "SELECT set_client_scope(($1::jsonb #>> '{}')::uuid);\nINSERT INTO engine_runs (run_id, client_id, case_version_id, cycle_id, engine, pass, engine_mode, prompt_file, prompt_hash, schema_version, model_role, model_name, model_params, status, started_at) VALUES (($2::jsonb #>> '{}')::uuid, ($1::jsonb #>> '{}')::uuid, ($3::jsonb #>> '{}')::uuid, ($4::jsonb #>> '{}')::uuid, ($5::jsonb #>> '{}')::engine_id, ($6::jsonb #>> '{}')::engine_pass, ($7::jsonb #>> '{}'), ($8::jsonb #>> '{}'), ($9::jsonb #>> '{}'), 'control_contract.v1', ($10::jsonb #>> '{}'), ($11::jsonb #>> '{}'), $12::jsonb, 'RUNNING', now())",
+          "options": {
+            "queryReplacement": "={{ JSON.stringify($('Inputs').item.json.CLIENT_ID ?? null) }},{{ JSON.stringify($json.run_id ?? null) }},{{ JSON.stringify($('Inputs').item.json.CASE_VERSION_ID ?? null) }},{{ JSON.stringify($('Inputs').item.json.CYCLE_ID ?? null) }},{{ JSON.stringify($('Inputs').item.json.ENGINE_ID ?? null) }},{{ JSON.stringify(($('Inputs').item.json.PASS ?? 'SINGLE') ?? null) }},{{ JSON.stringify($('Inputs').item.json.MODE ?? null) }},{{ JSON.stringify($json.prompt_file ?? null) }},{{ JSON.stringify($json.prompt_hash ?? null) }},{{ JSON.stringify($('Inputs').item.json.MODEL_ROLE ?? null) }},{{ JSON.stringify($json.model_name ?? null) }},{{ JSON.stringify(($('Inputs').item.json.RUN_CONTEXT ?? {}) ?? null) }}"
+          }
+        },
+        "id": "a0000000-0000-4000-8000-000000000006",
+        "name": "Open run",
+        "type": "n8n-nodes-base.postgres",
+        "typeVersion": 2.5,
+        "position": [
+          1100,
+          0
+        ],
+        "credentials": {
+          "postgres": {
+            "id": "premprojphiruntime01",
+            "name": "phi_runtime (local)"
+          }
+        },
+        "notes": "Opens the run INSIDE a transaction that sets client scope (D25), and records engine_mode on the run itself so trg_engine_run_coherent can check client/mode coherence BEFORE the row exists (D27). Every parameter is a JSON literal unwrapped with #>> '{}' -- the binding form that is exact on n8n 2.11.4, which has no array branch (D32)."
+      },
+      {
+        "parameters": {
+          "jsCode": "// The provider call, WITH THE SAME TRANSPORT RETRY as the reference.\n//\n// This was an httpRequest node configured with six retries at a fixed\n// 2000 ms while its own note described exponential backoff. Python does\n// exponential + jitter + Retry-After, and the difference matters most\n// exactly where it is least visible: Step 16's Knowledge Factory, at\n// KNOWLEDGE_MAX_CONCURRENCY 3, on a 2 vCPU box. Fixed-interval retries\n// from concurrent workers return at the same instant and re-overload a\n// provider that is already shedding load.\n//\n// So the call is made here rather than by the HTTP node, because n8n's\n// retry cannot express these semantics. Mirrors _call_provider().\n//\n// IT USES helpers.httpRequest, NOT fetch. The Code node runs inside vm2,\n// whose sandbox has no `fetch` and no `URL` -- verified empirically\n// against the installed vm2, on 2.11.4 and on 2.35.7 alike. It does have\n// setTimeout, Promise, Math, Date, JSON and `helpers`. A draft written\n// with fetch passed every test and could never have run, because the test\n// harness ran the extracted source in plain Node where fetch is global\n// (D33).\n//\n// The options below are n8n-core 2.11.1's httpRequest contract:\n//   returnFullResponse    -> { body, headers, statusCode, statusMessage }\n//   ignoreHttpStatusErrors -> validateStatus = () => true, so a 4xx/5xx\n//                             RETURNS rather than throwing, which is what\n//                             lets this loop see the status and decide\n// A network-level failure still throws, and is retryable, as in Python.\nconst build = $('Build request').first().json;\n\nconst MAX_TRANSPORT_ATTEMPTS = Number($env.LLM_TRANSPORT_MAX_ATTEMPTS || 6);\nconst BACKOFF_BASE = Number($env.LLM_TRANSPORT_BACKOFF_BASE || 2);\nconst BACKOFF_CAP = 60;\n// A 503 or 429 means the same request will very likely succeed shortly. A\n// 400 or 401 means it will not, ever -- retrying that spends wall-clock\n// and, on a metered endpoint, money. Anything unrecognised is permanent:\n// a retry loop that fires on unknown errors is how a bad request becomes\n// a bill.\nconst RETRYABLE = new Set([408, 409, 425, 429, 500, 502, 503, 504]);\n// The thrown half of the same rule. Python retries URLError, TimeoutError\n// and ConnectionError and NOTHING else -- a NameError there is permanent\n// and surfaces on the first attempt. Without this list every thrown error\n// looked like a network failure, so a ReferenceError in this very node was\n// retried five times with exponential backoff and then dead-lettered as a\n// transport problem. A programming error must fail once, loudly.\nconst NETWORK_CODES = new Set([\n  'ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'ECONNABORTED', 'ENOTFOUND',\n  'EAI_AGAIN', 'EPIPE', 'EHOSTUNREACH', 'ENETUNREACH', 'ERR_NETWORK',\n  'ERR_SOCKET_CONNECTION_TIMEOUT',\n]);\n\nconst sleep = (seconds) => new Promise((r) => setTimeout(r, seconds * 1000));\n\nfunction retryAfterSeconds(headers) {\n  // Only the delta-seconds form, as in the reference. The HTTP-date form\n  // is legal but needs clock-skew handling to be safe, and an unparseable\n  // value falls back to our own backoff rather than to zero.\n  //\n  // Case-insensitive: axios lowercases response header names, so this\n  // arrives as 'retry-after', not 'Retry-After'.\n  if (!headers) return null;\n  let raw = null;\n  for (const key of Object.keys(headers)) {\n    if (key.toLowerCase() === 'retry-after') { raw = headers[key]; break; }\n  }\n  const value = Number.parseFloat(raw);\n  return Number.isFinite(value) ? Math.max(0, value) : null;\n}\n\nconst url = `${String($env.LLM_BASE_URL || '').replace(/\\/$/, '')}/chat/completions`;\nconst body = {\n  model: build.model_name,\n  messages: [\n    { role: 'system', content: build.system_prompt },\n    { role: 'user', content: build.user_prompt },\n  ],\n  temperature: 0.2,\n};\n\n// Every PHYSICAL attempt is recorded, failures included: a retry invisible\n// in the cost table makes the measurement understate what a call really\n// costs, and D5 is a decision made on those numbers.\nconst attempts = [];\nlet lastError = null;\nlet payload = null;\nlet durationMs = 0;\n\nfor (let attempt = 1; attempt <= MAX_TRANSPORT_ATTEMPTS; attempt += 1) {\n  const started = Date.now();\n  let response = null;\n  let failure = null;\n  try {\n    response = await helpers.httpRequest({\n      method: 'POST',\n      url,\n      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${$env.LLM_API_KEY}` },\n      body,\n      json: true,\n      returnFullResponse: true,\n      ignoreHttpStatusErrors: true,\n    });\n    if (response.statusCode < 200 || response.statusCode >= 300) {\n      failure = { status: response.statusCode, headers: response.headers, name: `HTTPError${response.statusCode}` };\n    }\n  } catch (err) {\n    // Network-level: DNS, connection refused, timeout. Retryable, as in\n    // the reference, which treats URLError/TimeoutError/ConnectionError\n    // the same way -- and ONLY those. Anything without a network code is\n    // this code being wrong, not the network being down.\n    const code = err.code || (err.cause && err.cause.code) || null;\n    failure = { status: null, headers: null, code,\n                name: err.name || 'NetworkError',\n                retryable: NETWORK_CODES.has(code) };\n  }\n\n  const elapsed = Date.now() - started;\n\n  if (failure === null) {\n    payload = typeof response.body === 'string' ? JSON.parse(response.body) : response.body;\n    durationMs = elapsed;\n    attempts.push({ ok: true, ms: elapsed, error_class: null });\n    break;\n  }\n\n  attempts.push({ ok: false, ms: elapsed, error_class: failure.name });\n  lastError = failure;\n\n  const retryable = failure.status === null\n    ? failure.retryable === true\n    : RETRYABLE.has(failure.status);\n  if (!retryable || attempt === MAX_TRANSPORT_ATTEMPTS) break;\n\n  // Exponential, capped, jittered so concurrent knowledge-batch calls do\n  // not all return at the same instant. A Retry-After from the provider\n  // wins: it knows when it will be back and we do not.\n  let delay = Math.min(BACKOFF_CAP, BACKOFF_BASE ** attempt);\n  delay *= 0.5 + Math.random();\n  const asked = retryAfterSeconds(failure.headers);\n  await sleep(Math.min(BACKOFF_CAP, asked === null ? delay : asked));\n}\n\nreturn [{ json: {\n  provider_failed: payload === null,\n  error_class: payload === null ? (lastError ? lastError.name : 'NoResponse') : null,\n  transport_attempts: attempts,\n  duration_ms: durationMs,\n  ...(payload || { choices: [], usage: {} }),\n} }];"
+        },
+        "id": "a0000000-0000-4000-8000-000000000007",
+        "name": "Call provider",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1320,
+          0
+        ],
+        "notes": "Calls the provider through helpers.httpRequest -- the Code node's vm2 sandbox has no fetch and no URL (D33) -- with the reference's retry semantics, which n8n's own retry cannot express (D29)."
+      },
+      {
+        "parameters": {
+          "operation": "executeQuery",
+          "query": "SELECT set_client_scope(($1::jsonb #>> '{}')::uuid);\nINSERT INTO cost_events (operation, model_role, model_name, entity_type, entity_id, run_id, workflow, input_tokens, output_tokens, cost_usd, price_source, duration_ms, success, error_class)\nSELECT 'ENGINE_RUN', ($2::jsonb #>> '{}'), ($3::jsonb #>> '{}'), 'client', ($4::jsonb #>> '{}'), ($5::jsonb #>> '{}')::uuid, ($6::jsonb #>> '{}'),\n       (a->>'in_tok')::int, (a->>'out_tok')::int,\n       p.cost_usd, p.price_source,\n       (a->>'ms')::int, (a->>'ok')::boolean, a->>'error_class'\n  FROM jsonb_array_elements($7::jsonb) a\n  CROSS JOIN LATERAL price_call(($3::jsonb #>> '{}'), (a->>'in_tok')::int, (a->>'out_tok')::int,\n                                ($8::jsonb #>> '{}')::numeric, ($9::jsonb #>> '{}')::numeric) p",
+          "options": {
+            "queryReplacement": "={{ JSON.stringify($('Inputs').item.json.CLIENT_ID ?? null) }},{{ JSON.stringify($('Inputs').item.json.MODEL_ROLE ?? null) }},{{ JSON.stringify($('Build request').item.json.model_name ?? null) }},{{ JSON.stringify($('Inputs').item.json.CLIENT_ID ?? null) }},{{ JSON.stringify($('Build request').item.json.run_id ?? null) }},{{ JSON.stringify(('RUN_ENGINE_' + $('Inputs').item.json.ENGINE_ID) ?? null) }},{{ JSON.stringify($json.transport_attempts ?? null) }},{{ JSON.stringify(($env.LLM_PRICE_INPUT_PER_MTOK || null) ?? null) }},{{ JSON.stringify(($env.LLM_PRICE_OUTPUT_PER_MTOK || null) ?? null) }}"
+          }
+        },
+        "id": "a0000000-0000-4000-8000-00000000000e",
+        "name": "Record attempts",
+        "type": "n8n-nodes-base.postgres",
+        "typeVersion": 2.5,
+        "position": [
+          1430,
+          0
+        ],
+        "credentials": {
+          "postgres": {
+            "id": "premprojphiruntime01",
+            "name": "phi_runtime (local)"
+          }
+        },
+        "notes": "One cost_events row per PHYSICAL attempt, failures included -- a retry invisible in the cost table makes every measurement understate what a call costs, and D5 was decided on those numbers. Priced via the SQL price_call() over the model_prices registry (D30), because n8n cannot read config/model_prices.json."
+      },
+      {
+        "parameters": {
+          "jsCode": "// Parse the response into THREE separate things (D24): human output,\n// substantive handoff, control block. They are never interchangeable.\nconst build = $('Build request').first().json;\nconst payload = $json;\nconst choice = (payload.choices || [])[0] || {};\n// content is ABSENT, not empty, when a reasoning model spends its whole\n// budget thinking. Return '' and fail honestly at extraction.\nconst raw = (choice.message || {}).content || '';\nconst usage = payload.usage || {};\nconst promptTokens = usage.prompt_tokens || 0;\n// REASONING TOKENS ARE BILLED AS OUTPUT AND ARE NOT IN completion_tokens.\nconst billedOutput = Math.max(usage.completion_tokens || 0, (usage.total_tokens || 0) - promptTokens);\n\nconst CONTROL_TAG = 'CONTROL_BLOCK';\nconst HANDOFF_KEY = /^([A-Z][A-Z0-9_]{2,}):[ \\t]*(.*)$/;\n\nfunction parseHandoffBlock(body) {\n  const fields = {}; const order = []; const preamble = [];\n  let current = null;\n  for (const line of body.split('\\n')) {\n    const m = HANDOFF_KEY.exec(line);\n    if (m) {\n      current = m[1];\n      const first = m[2].trim();\n      if (current in fields) fields[current] = `${fields[current]}\\n${first}`.trim();\n      else { fields[current] = first; order.push(current); }\n      continue;\n    }\n    if (current === null) { if (line.trim()) preamble.push(line); continue; }\n    fields[current] = fields[current] ? `${fields[current]}\\n${line}`.trim() : line.trim();\n  }\n  fields._field_order = order;\n  fields._raw = body;\n  if (preamble.length) fields._preamble = preamble.join('\\n');\n  return fields;\n}\n\nfunction extractBlock(text, tag) {\n  const open = `<${tag}>`; const close = `</${tag}>`;\n  if (!text.includes(open) || !text.includes(close)) return null;\n  let body = text.split(open)[1].split(close)[0];\n  const stripped = body.trim();\n  if (stripped.startsWith('```')) body = stripped.split('\\n').slice(1).join('\\n').replace(/```$/, '');\n  return body;\n}\n\nlet control = null;\nconst controlBody = extractBlock(raw, CONTROL_TAG);\nif (controlBody !== null) { try { control = JSON.parse(controlBody.trim()); } catch (e) { control = null; } }\nif (control !== null && typeof control !== 'object') control = null;\n\nconst handoffs = {};\nfor (const h of build.expected_handoffs) {\n  const body = extractBlock(raw, h.tag);\n  if (body === null) continue;\n  const parsed = parseHandoffBlock(body);\n  if (Object.keys(parsed).filter((k) => !k.startsWith('_')).length === 0) continue;\n  handoffs[h.tag] = parsed;\n}\n\nconst errors = [];\nif (control === null) errors.push(`no parseable <${CONTROL_TAG}> block in response`);\nfor (const h of build.expected_handoffs) {\n  if (h.required && !(h.tag in handoffs)) {\n    errors.push(`no parseable <${h.tag}> block in response. The control block routes; this is the reasoning the next engine needs, and a response without it is not a completed run.`);\n  }\n}\n\n// The human report is what precedes the FIRST machine block, whichever\n// that is -- not just the control tag, or every handoff would land in it.\nconst boundaries = [CONTROL_TAG, ...build.expected_handoffs.map((h) => h.tag)]\n  .map((t) => raw.indexOf(`<${t}>`)).filter((i) => i >= 0);\nconst first = boundaries.length ? Math.min(...boundaries) : -1;\nconst humanOutput = (first >= 0 ? raw.slice(0, first) : raw).trim();\n\nconst primaryTag = (build.expected_handoffs.find((h) => h.required && h.tag in handoffs)\n  || { tag: Object.keys(handoffs)[0] }).tag || null;\nconst secondary = {};\nfor (const [tag, body] of Object.entries(handoffs)) if (tag !== primaryTag) secondary[tag] = body;\n\nreturn [{ json: {\n  raw,\n  control,\n  handoffs,\n  errors,\n  human_output: humanOutput,\n  structured: primaryTag ? handoffs[primaryTag] : {},\n  primary_tag: primaryTag,\n  secondary_handoffs: secondary,\n  input_tokens: promptTokens,\n  output_tokens: billedOutput,\n} }];"
+        },
+        "id": "a0000000-0000-4000-8000-000000000008",
+        "name": "Parse three outputs",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1540,
+          0
+        ],
+        "notes": "D24. The control block routes; the handoff is the reasoning. Line-oriented KEY: parsing with a key anchored at column zero, and nothing discarded -- _raw keeps the block verbatim, _preamble keeps text before the first key. Mirrors parse_handoff_block() in the reference."
+      },
+      {
+        "parameters": {
+          "jsCode": "// Validate the control block against the STORED contract with ajv --\n// the same document the Python reference hands to jsonschema.\n// NODE_FUNCTION_ALLOW_EXTERNAL must include ajv,ajv-formats.\n//\n// The MESSAGE WORDING is ours, not ajv's (D26). This string is persisted\n// to engine_runs.error_detail and is what the repair prompt sends the\n// model on attempt two; ajv and jsonschema phrase the same violation\n// differently, so both build the shared format from their own library's\n// structured error data instead.\nconst Ajv = require('ajv/dist/2020');\nconst addFormats = require('ajv-formats');\nconst build = $('Build request').first().json;\nconst parsed = $json;\n\nconst typeNames = (v) => (Array.isArray(v)\n  ? v.map(String).sort().join(', ')\n  : String(v));\n\nfunction formatViolation(field, keyword, detail) {\n  let reason;\n  if (keyword === 'required') reason = 'required property missing';\n  else if (keyword === 'enum') reason = 'not one of ' + detail.map(String).sort().join(', ');\n  else if (keyword === 'type') reason = `expected type ${typeNames(detail)}`;\n  else if (keyword === 'const') reason = `must be ${JSON.stringify(detail)}`;\n  else if (keyword === 'minLength') reason = detail === 1 ? 'must not be empty' : `shorter than ${detail} characters`;\n  else if (keyword === 'additionalProperties') reason = 'not permitted by the contract';\n  else reason = String(keyword);\n  return `${field}: ${reason}`;\n}\n\nlet errors = [...parsed.errors];\nif (parsed.control !== null) {\n  const ajv = new Ajv({ allErrors: true, strict: false });\n  addFormats(ajv);\n  const validate = ajv.compile(build.contract);\n  if (!validate(parsed.control)) {\n    const CONTAINERS = new Set(['if', 'then', 'else', 'allOf', 'anyOf', 'oneOf', 'not']);\n    for (const e of validate.errors || []) {\n      if (CONTAINERS.has(e.keyword)) continue;\n      let field; let detail;\n      if (e.keyword === 'required') { field = e.params.missingProperty; detail = null; }\n      else if (e.keyword === 'additionalProperties') { field = e.params.additionalProperty; detail = null; }\n      else {\n        field = (e.instancePath || '').replace(/^\\//, '').split('/')[0] || '(root)';\n        if (e.keyword === 'enum') detail = e.params.allowedValues;\n        else if (e.keyword === 'type') detail = e.params.type;\n        else if (e.keyword === 'const') detail = e.params.allowedValue;\n        else if (e.keyword === 'minLength') detail = e.params.limit;\n        else detail = null;\n      }\n      errors.push(formatViolation(field, e.keyword, detail));\n    }\n  }\n}\nerrors = [...new Set(errors)].sort();\n\nreturn [{ json: { ...parsed, errors, valid: errors.length === 0 } }];"
+        },
+        "id": "a0000000-0000-4000-8000-000000000009",
+        "name": "Validate control",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          1760,
+          0
+        ],
+        "notes": "012 / D23. ajv over the stored document; test_contract_registry.py proves ajv and jsonschema reach identical verdicts AND blame identical fields over 26 control blocks."
+      },
+      {
+        "parameters": {
+          "conditions": {
+            "options": {
+              "caseSensitive": true,
+              "version": 2
+            },
+            "conditions": [
+              {
+                "id": "valid",
+                "operator": {
+                  "type": "boolean",
+                  "operation": "true",
+                  "singleValue": true
+                },
+                "leftValue": "={{ $json.valid }}"
+              }
+            ],
+            "combinator": "and"
+          },
+          "options": {}
+        },
+        "id": "a0000000-0000-4000-8000-00000000000a",
+        "name": "Complete?",
+        "type": "n8n-nodes-base.if",
+        "typeVersion": 2.2,
+        "position": [
+          1980,
+          0
+        ],
+        "notes": "A run is complete only with a valid control block AND every required handoff. A valid control block is not evidence that an engine did its work (D24). The false branch goes to repair, then dead-letter."
+      },
+      {
+        "parameters": {
+          "operation": "executeQuery",
+          "query": "SELECT set_client_scope(($1::jsonb #>> '{}')::uuid);\nUPDATE engine_runs SET status='SUCCEEDED', attempts=($2::jsonb #>> '{}')::int, completed_at=now(), input_tokens=($3::jsonb #>> '{}')::int, output_tokens=($4::jsonb #>> '{}')::int, duration_ms=($5::jsonb #>> '{}')::int WHERE run_id=($6::jsonb #>> '{}')::uuid;\nINSERT INTO engine_outputs (run_id, human_output, structured, control, schema_valid, handoff_tag, handoff_mode, secondary_handoffs) VALUES (($6::jsonb #>> '{}')::uuid, ($7::jsonb #>> '{}'), $8::jsonb, $9::jsonb, true, ($10::jsonb #>> '{}'), ($11::jsonb #>> '{}'), $12::jsonb)",
+          "options": {
+            "queryReplacement": "={{ JSON.stringify($('Inputs').item.json.CLIENT_ID ?? null) }},{{ JSON.stringify($('Build request').item.json.attempt ?? null) }},{{ JSON.stringify($json.input_tokens ?? null) }},{{ JSON.stringify($json.output_tokens ?? null) }},{{ JSON.stringify($('Build request').item.json.totals.duration_ms ?? null) }},{{ JSON.stringify($('Build request').item.json.run_id ?? null) }},{{ JSON.stringify($json.human_output ?? null) }},{{ JSON.stringify($json.structured ?? null) }},{{ JSON.stringify($json.control ?? null) }},{{ JSON.stringify($json.primary_tag ?? null) }},{{ JSON.stringify($('Inputs').item.json.MODE ?? null) }},{{ JSON.stringify($json.secondary_handoffs ?? null) }}"
+          }
+        },
+        "id": "a0000000-0000-4000-8000-00000000000b",
+        "name": "Record success",
+        "type": "n8n-nodes-base.postgres",
+        "typeVersion": 2.5,
+        "position": [
+          2200,
+          -120
+        ],
+        "credentials": {
+          "postgres": {
+            "id": "premprojphiruntime01",
+            "name": "phi_runtime (local)"
+          }
+        },
+        "notes": "D25 scope, and both writes in ONE transaction: a run marked SUCCEEDED with no output row is a lie the next reader would believe."
+      },
+      {
+        "parameters": {
+          "operation": "executeQuery",
+          "query": "SELECT set_client_scope(($1::jsonb #>> '{}')::uuid);\nUPDATE engine_runs SET status='DEAD_LETTER', attempts=($2::jsonb #>> '{}')::int, completed_at=now(), input_tokens=($3::jsonb #>> '{}')::int, output_tokens=($4::jsonb #>> '{}')::int, duration_ms=($5::jsonb #>> '{}')::int, error_class=($6::jsonb #>> '{}'), error_detail=($7::jsonb #>> '{}') WHERE run_id=($8::jsonb #>> '{}')::uuid;\nINSERT INTO dead_letter_jobs (job_type, entity_type, entity_id, client_id, failure_reason, raw_payload, attempts) VALUES (($9::jsonb #>> '{}'), 'engine_run', ($8::jsonb #>> '{}'), ($1::jsonb #>> '{}')::uuid, ($7::jsonb #>> '{}'), $10::jsonb, ($2::jsonb #>> '{}')::int)",
+          "options": {
+            "queryReplacement": "={{ JSON.stringify($('Inputs').item.json.CLIENT_ID ?? null) }},{{ JSON.stringify($('Build request').item.json.attempt ?? null) }},{{ JSON.stringify($json.input_tokens ?? null) }},{{ JSON.stringify($json.output_tokens ?? null) }},{{ JSON.stringify($('Build request').item.json.totals.duration_ms ?? null) }},{{ JSON.stringify(($('Call provider').item.json.provider_failed ? 'PROVIDER_ERROR' : 'SCHEMA_INVALID') ?? null) }},{{ JSON.stringify($json.errors.join('; ').slice(0, 2000) ?? null) }},{{ JSON.stringify($('Build request').item.json.run_id ?? null) }},{{ JSON.stringify(('RUN_ENGINE_' + $('Inputs').item.json.ENGINE_ID) ?? null) }},{{ JSON.stringify(({ raw: $json.raw.slice(0, 8000) }) ?? null) }}"
+          }
+        },
+        "id": "a0000000-0000-4000-8000-00000000000c",
+        "name": "Dead letter",
+        "type": "n8n-nodes-base.postgres",
+        "typeVersion": 2.5,
+        "position": [
+          2200,
+          120
+        ],
+        "credentials": {
+          "postgres": {
+            "id": "premprojphiruntime01",
+            "name": "phi_runtime (local)"
+          }
+        },
+        "notes": "raw_payload carries up to 8,000 characters of the failed response, which for a case run is labs, conditions and medications. It is kept -- debugging a dead letter without it is guesswork -- and it is SCOPED (D28). error_detail routinely contains commas, which is exactly what the JSON literal form protects: a bare string would be split into extra parameters (D32)."
+      },
+      {
+        "parameters": {
+          "jsCode": "// The normalized result the caller receives, matching EngineResult.\nconst parsed = $json;\nconst build = $('Build request').first().json;\nconst succeeded = parsed.valid === true;\nreturn [{ json: {\n  run_id: build.run_id,\n  status: succeeded ? 'SUCCEEDED' : 'DEAD_LETTER',\n  control: succeeded ? parsed.control : null,\n  human_output: succeeded ? parsed.human_output : parsed.raw,\n  structured: succeeded ? parsed.structured : null,\n  handoff_tag: succeeded ? parsed.primary_tag : null,\n  handoff_mode: $('Inputs').first().json.MODE,\n  secondary_handoffs: succeeded ? parsed.secondary_handoffs : {},\n  attempts: build.attempt,\n  error: succeeded ? null : parsed.errors.join('; '),\n} }];"
+        },
+        "id": "a0000000-0000-4000-8000-00000000000d",
+        "name": "Result",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          2420,
+          0
+        ],
+        "notes": "Same shape as EngineResult in the reference, so a calling workflow reads the same fields the Python caller does."
+      }
+    ],
+    "connections": {
+      "Inputs": {
+        "main": [
+          [
+            {
+              "node": "Prompt registry",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Prompt registry": {
+        "main": [
+          [
+            {
+              "node": "Handoff registry",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Handoff registry": {
+        "main": [
+          [
+            {
+              "node": "Contract registry",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Contract registry": {
+        "main": [
+          [
+            {
+              "node": "Build request",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Build request": {
+        "main": [
+          [
+            {
+              "node": "Open run",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Open run": {
+        "main": [
+          [
+            {
+              "node": "Call provider",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Call provider": {
+        "main": [
+          [
+            {
+              "node": "Record attempts",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Parse three outputs": {
+        "main": [
+          [
+            {
+              "node": "Validate control",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Validate control": {
+        "main": [
+          [
+            {
+              "node": "Complete?",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Complete?": {
+        "main": [
+          [
+            {
+              "node": "Record success",
+              "type": "main",
+              "index": 0
+            }
+          ],
+          [
+            {
+              "node": "Dead letter",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Record success": {
+        "main": [
+          [
+            {
+              "node": "Result",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Dead letter": {
+        "main": [
+          [
+            {
+              "node": "Result",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Record attempts": {
+        "main": [
+          [
+            {
+              "node": "Parse three outputs",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "settings": {
+      "executionOrder": "v1"
+    }
+  }
+]

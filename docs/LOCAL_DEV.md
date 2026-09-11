@@ -82,6 +82,37 @@ step 7 refuses to call n8n ready until `load_prompts.py --check` exits 0.
 
 ---
 
+## n8n, and the version it is pinned to
+
+`scripts/local_n8n.sh` installs n8n **pinned to 2.11.4** — the version the
+VPS runs (D32). It is a test harness, not a deployment: it installs from
+npm outside the working tree, seeds a `phi_runtime` credential from
+`.env.local`, imports a workflow and executes it headlessly. No n8n
+credentials and no VPS access are needed.
+
+```bash
+bash scripts/local_n8n.sh install     # ~2.5 GB, a few minutes
+```
+
+**The pin follows the VPS. It is never raised to keep current.** Workflow
+JSON is version-sensitive in ways that are invisible until they are not:
+2.35.7 has a `queryReplacement` array branch that 2.11.2 does not, and the
+Code node's `vm2` sandbox has no `fetch` on either. If the VPS is ever
+upgraded, change `N8N_VERSION` to match it, re-read the Postgres node's
+`executeQuery.operation.js` at that version, and re-run
+`test_n8n_parity.py` and `test_n8n_sql.py`. See `docs/OPERATIONS.md`
+"n8n version".
+
+Neither parity suite needs n8n installed — both extract the workflow's own
+Code-node source and run it directly, and `test_n8n_sql.py` binds
+parameters through a port of n8n's own algorithm. They need **Node**, and
+`test_n8n_parity.py`'s response half additionally needs **ajv**, which
+`local_n8n.sh install` provides (`npm install --no-save ajv@8` into the
+repo root also works). Without them the suites SKIP loudly rather than
+passing quietly.
+
+---
+
 ## Running the suites
 
 ```bash

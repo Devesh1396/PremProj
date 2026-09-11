@@ -126,7 +126,7 @@ def main() -> int:
         """insert into case_cycles (client_id, cycle_number, cycle_type)
            values (%s,1,'NEW_CLIENT') returning cycle_id""", (sid,)).fetchone()[0]
     e6_run = RE.run_engine(conn, RE.EngineRequest(
-        engine="E6", structured_input=sparse_e6, client_id=sid, cycle_id=cycle))
+        engine="E6", mode="INIT", structured_input=sparse_e6, client_id=sid, cycle_id=cycle))
     check("E6 runs on an incomplete intake", e6_run.status == "SUCCEEDED", e6_run.error or "")
 
     v1 = conn.execute(

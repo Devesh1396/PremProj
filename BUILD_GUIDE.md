@@ -202,6 +202,51 @@ with `SELECT set_client_scope($client_id)` inside the transaction.
 
 **Acceptance:** identical results to the Python reference on the same fixtures; malformed output dead-letters; cost recorded.
 
+**Registry half BUILT.** The port's two blockers are gone: the seven
+specifications are rows (`010`) and the control contract is a row (`012`),
+so a Code node reads both out of PostgreSQL with no copy of this
+repository. `jsonschema` and `ajv` — the validator n8n ships — are proven
+to agree on the stored document over 26 control blocks, verdict **and**
+blamed field, in `test_contract_registry.py`, and CI installs `ajv@8` so
+it is a real gate.
+
+**BUILT AND FROZEN.** `workflows/run_engine.json`, **14 nodes**. Parity is
+**byte-identical** (D26): 15 requests identical to the byte and 15
+responses identical field for field, against one golden corpus, with the
+JavaScript extracted from the workflow at run time so a copy cannot drift
+from it. The workflow's **SQL is executed** by `test_n8n_sql.py` against a
+real database as `phi_runtime`, with its parameters bound by a faithful
+port of n8n's own algorithm (D31) — that is what caught a missing
+`engine_mode`, a missing `client_id` on the dead letter, and an INSERT into
+a column that has never existed. Transport retry matches the reference
+exactly (D29): exponential, jittered, capped, `Retry-After` honoured, every
+physical attempt in `cost_events`, and a thrown error classified by network
+code so a bug in the node fails once instead of being retried six times.
+
+**Written for the sandbox it runs in (D33).** The Code node has no `fetch`
+and no `URL` — it is `vm2` — so the provider call goes through
+`helpers.httpRequest`, and the retry harness runs the node's own source in
+`node:vm` with only the globals vm2 provides. Every Postgres parameter is
+one resolvable evaluating to a JSON literal, unwrapped with
+`($n::jsonb #>> '{}')`: the form that is exact on 2.11.2 **and** 2.35.7,
+because 2.11.2 has no array branch (D32).
+
+No further step-11 work is to be started. Changes to it are bug fixes only.
+
+**No n8n credentials are required.** `scripts/local_n8n.sh` installs n8n
+from npm at a **pinned** version (the container registries are blocked in
+some environments), seeds a `phi_runtime` credential from `.env.local`,
+imports a workflow and runs it headlessly. **Pinned to 2.11.4, matching
+the VPS** (D32) — the pin follows the VPS and is never raised to keep
+current.
+
+**The port must mirror the reference on all three outputs, not two.** D24:
+a run produces human output, a substantive handoff, and a control block.
+`engine_handoffs` (`013`) says which handoff tag to expect per engine and
+mode; the workflow reads those rows rather than carrying a map of its own,
+and a response missing a required handoff dead-letters exactly as an
+invalid control block does.
+
 ## Step 12 — K1 ontology seed *(BUILT 2026-09-10)*
 
 Seed the concept dictionary **before** large-scale extraction. Expand the
@@ -277,7 +322,7 @@ Engines record gaps to `missing_data_reports`. Reporting a gap **never**
 adds a question to intake — aggregate via `v_missing_data_recurrence`, then
 classify deliberately.
 
-## Step 15 — `CLIENT_NEW` workflow
+## Step 15 — `CLIENT_NEW` workflow *(BUILT 2026-09-10)*
 
 ```
 intake → validate → create client → E6 v1
@@ -287,10 +332,143 @@ intake → validate → create client → E6 v1
 
 E4 is not required before response data exists.
 
-## Step 16 — Knowledge Factory K02–K11
+**Built.** `scripts/client_new.py`, and it stops at the review queue —
+Engine 5 is not part of it. Hard rule 9: gates release, not analysis, so
+an open HOLD does not stop the pipeline and nothing client-facing is
+drafted. It is a fixed sequence rather than a routing loop (phase 5 is the
+one that routes), so `NEXT_ENGINE` gates but never chooses; a new client
+always needs E1, E2 and E3.
+
+**Acceptance:** `test_client_new.py` — the phase 4 sequence in order on one
+prompt hash; E4 and E5 never run and no communication row is written; an
+open HOLD does not stop the analysis; a failed engine stops the pipeline
+before anything downstream and queues no review; history is appended, never
+overwritten; a sparse intake still reaches the queue; the same submission
+cannot initialize a second case; one routing hop is spent, not one per
+engine.
+
+## Step 16 — Knowledge Factory K02–K11 *(ALL BUILT 2026-09-10)*
 
 Discovery (PubMed, RSS, web), ingestion, normalizer, claim extraction,
 evidence analysis, strategy synthesis with dedup.
+
+**Build the pipe before the taps.** K07 (inbox) and K08 (normalizer) come
+first because they are the one path into the library that depends on no
+external service, no API key and no scraping — the practitioner hands over
+a file. Discovery (K02–K06) adds more input to the same pipe; it does not
+change its shape, and building it first would mean building the taps over a
+drain that had never been tested.
+
+**K07 + K08 BUILT.** `scripts/knowledge_ingest.py`, and **no model is
+called** — both stages are deterministic, so the whole ingest path is
+testable with no provider, no key and no cost, and a failure in it is a bug
+in that file rather than something a model said.
+
+```
+knowledge/inbox/                     the drop zone
+knowledge/raw/<hh>/<sha256>.<ext>    the untouched original, content-addressed
+knowledge/processed/<name>.receipt.json
+knowledge/failed/<name>.receipt.json
+```
+
+Originals are **moved, never deleted**: into a content-addressed immutable
+store, with an A9 receipt saying what happened — received, hashed,
+duplicate or new, normalized or failed. Duplicate content is DEDUPED
+against its first envelope and nothing is extracted twice (§57). Rights are
+carried through to `excerpt_only` and the item's access note (§52). Chunks
+carry the **heading path**, so a claim extracted later can be pointed back
+at a place in its source (§16, §42).
+
+A `.pdf`, `.docx` or `.epub` is stored, preserved and marked **FAILED with
+the extractor it needs named** — never guessed at. That is what §K05/§K06
+say about transcripts, applied to documents: mark the status rather than
+inventing content.
+
+Routing is registry-driven end to end (D19, §47, hard rule 13): an
+unregistered `source_kind` lands in the protected `OTHER` and the receipt
+says so, and registering it afterwards is a single `INSERT` with no code
+change — proven by a test that does exactly that. Migration `017` moved the
+kind→`source_type` mapping onto `source_kinds` for the same reason: the
+first draft of the normalizer worked it out with a CASE expression, which
+would have made adding a kind an INSERT *and* a code change.
+
+**Embeddings settled before anything embeddable was written (D34).** 1536
+from `gemini-embedding-2`, enforced by migration `018`: provenance columns
+on all five vector tables, a unit-norm check on write, and one model pinned
+per column. `EMBEDDING_DIM`'s three unchecked copies are gone —
+`embedding_dim()` reads the catalog.
+
+**K09 BUILT.** `scripts/knowledge_extract.py` runs E7 in INBOX mode over a
+normalized envelope's chunks and writes §39 Claim Cards, then normalizes
+the concepts those claims mention through the same tiers as any other
+phrase, then records a §54 delta analysis derived from what was **written**
+rather than from the model's own counts (D35).
+
+The claims arrive as strict JSON in a single `CLAIMS_JSON` field of
+`<RESEARCH_PRACTICE_CLAIMS>` (§R11, added by the build because §R10 carries
+the information *gain* and deliberately not the claims). That format was
+chosen because `parse_handoff_block` already handles continuation lines, so
+K09 required **no change to frozen step 11** and none to either parity
+suite.
+
+Boundaries, all asserted: no evidence record, no strategy, no
+`POTENTIAL_NEW_STRATEGY` verdict, `discovery_only` provenance (D10), and a
+held-out source is `SKIPPED` rather than extracted (A3).
+
+**K10 BUILT.** `scripts/knowledge_research.py`, E7 in the new `EVIDENCE`
+mode (§R12). Triage is deterministic and written down — `SAFETY` and
+`INTERVENTION_EFFECT` only — because "do not deep-research trivial claims"
+is a budget decision that must be visible rather than left to a model's
+sense of importance. The source's own citation is **not** the input (D10,
+D36), evidence never links to the discovery envelope, and a study with no
+retrievable identifier gets no `source_items` row rather than an invented
+one. Finding nothing is recorded as a finding, so a claim cannot loop.
+
+**K11 BUILT.** `scripts/knowledge_synthesize.py`, E7 in the new `SYNTHESIS`
+mode (§R13). Candidates are found **deterministically before the call** —
+concept overlap, then `pg_trgm` name similarity — which is the cost curve
+this step's note warns about. `CREATE` from the model is a proposal:
+every one is re-checked against the live library and a collision is
+converted to an `UPDATE`. Four decisions, never a fifth. Everything created
+is `AI_DISCOVERED_CANDIDATE`; a `MERGE`'s rationale becomes the provenance
+note `ck_provenance_required` demands. A strategy with no canonical
+concepts becomes an OPEN gap rather than being linked to `PROPOSED`
+concepts (D8).
+
+**K02–K06 BUILT.** `scripts/knowledge_discover.py` plus the chokepoint in
+`scripts/acquisition.py` and the registry in migration `021` (D37).
+Discovery finds; it does not ingest — every adapter ends at
+`deliver_to_inbox()`. The access policy is registry data checked in one
+place, every refusal is recorded with its reason, `YOUTUBE` refuses before
+requesting anything because K06 says not to build the scraper, and a
+podcast with no published transcript is marked rather than invented.
+
+**Not network-verified.** The build environment's proxy blocks every
+biomedical API, so the suite stubs the transport and drives the real
+adapters through the real chokepoint. Policy, cursor, query history,
+refusals, parsing and handoff are proven; the wire format is not.
+
+**Step 17 is BUILT** — `scripts/embed_library.py`, `scripts/retrieval.py`,
+migration `023`, `testing/test_retrieval.py`. See D39.
+
+**Step 18 is BUILT** — migration `024`, `scripts/evaluate.py`,
+`testing/test_evaluation.py`, `docs/evidence/layer_a_baseline.md`. See D40.
+
+**Step 19 is BUILT** — migration `025`, `scripts/knowledge_controversy.py`,
+`scripts/knowledge_gap.py`, `testing/test_controversy_gaps.py`. See D41.
+
+**Step 20 is BUILT** — migration `026`, `scripts/client_release.py`, E2/E3
+§60B and §70B, `testing/test_safety.py`. See D42.
+
+**Step 21 is BUILT** — migration `027`, `scripts/client_followup.py`, E4
+§64B, `testing/test_followup.py`. See D43.
+
+**Step 22 is BUILT** — migration `028`, `scripts/foundation_controller.py`,
+`testing/test_foundation.py`. See D44.
+
+**Next:** step 23, practice intelligence. **Do not begin mass ingestion**
+until one real source has run the whole loop — and note that K00 is exactly
+the thing that would, which is why `--execute` is not its default.
 
 `MODEL_EXTRACTION` on the cheapest capable model — highest volume.
 Use the **Batch API** where the provider offers it: the knowledge clock is
@@ -302,14 +480,31 @@ before the LLM call.
 
 Concurrency 2–3 on this VPS.
 
-## Step 17 — K14 embedding and hybrid retrieval
+## Step 17 — K14 embedding and hybrid retrieval  ✅ BUILT
 
 Metadata filter → full-text → vector → dedupe → rerank.
 Do not regenerate unchanged embeddings.
 
 **Acceptance:** the cross-domain case retrieves across insulin sensitivity, hepatic fat, triglycerides, muscle, appetite, sleep, vegetarian implementation, exercise and behaviour — not three disease folders.
 
-## Step 18 — Evaluation layers A–E
+**Met, at the default setting** (D39). `test_retrieval.py` seeds a
+lopsided library — six strategies in each of three disease folders, one in
+each of six other domains — and a page of twelve reaches all nine. The
+counterfactual runs the same function with the per-bucket cap lifted and
+reaches fewer, so the breadth is the mechanism's and not the fixture's.
+
+Four channels, not three: the case's **normalized concepts** are an input,
+and `strategy_concepts` contributes scored hits. Similarity alone returns
+the presenting complaint's folder however good the embeddings are — the
+sleep material is relevant because Engine 1 said so, not because the words
+resemble each other.
+
+`per_bucket_cap` is derived (`limit // len(concepts)`), never a constant.
+Freshness is a hash of the embedded **text**, so a second pass makes zero
+provider calls. Without pgvector the vector channel is skipped and the
+diagnostics say so (D15) — verified on the no-extension floor.
+
+## Step 18 — Evaluation layers A–E  ✅ BUILT
 
 - **A** automated retrieval tests from seeded domain structure
 - **B** source-grounded recovery on **held-out** sources (`source_items.held_out`)
@@ -317,27 +512,106 @@ Do not regenerate unchanged embeddings.
 - **D** practitioner spot check, small sample
 - **E** `UNEXPECTED_USEFUL_STRATEGIES_FOUND` as a **rate**
 
-No practitioner-authored gold benchmark. See D7.
+No practitioner-authored gold benchmark. See D7, and D40 for how each layer
+is built.
 
-## Step 19 — K12/K13 controversy, negative knowledge, gaps
+```
+python3 scripts/evaluate.py --generate     # (re)build A, B, C
+python3 scripts/evaluate.py --run all
+python3 scripts/evaluate.py --answer-key   # extract held-out sources (B)
+python3 scripts/evaluate.py --spot-check   # draw one sample (D)
+python3 scripts/evaluate.py --report       # E, and where each layer stands
+```
+
+**Layer A baseline, measured 2026-09-10:** full text alone **0.1372** mean
+recall, full text + vector **0.3255**, over the 269-concept K1 seed with an
+empty strategy library. `docs/evidence/layer_a_baseline.md`.
+
+**Layer A found bug 63 on its first run** — `websearch_to_tsquery` ANDs
+every term, so the full-text channel had matched nothing for any query
+longer than a few words since step 17. Every step 17 test passed because
+its fixture queries are three words long.
+
+Layers B and C cannot report anything until a real source is ingested and a
+domain reaches moderate coverage. `v_evaluation_state` shows a layer with
+`tests_defined = 0` rather than a passing score.
+
+## Step 19 — K12/K13 controversy, negative knowledge, gaps  ✅ BUILT
 
 Dedicated per-domain passes once evidence has accumulated. Neither falls
 out of ingestion naturally — negative knowledge and controversies are the
 floors most likely to be missed at the end.
 
-## Step 20 — E2, E3, review queue, E5
+```
+python3 scripts/knowledge_controversy.py --status   # which domains are OVERDUE
+python3 scripts/knowledge_controversy.py --one      # one overdue domain (K12)
+python3 scripts/knowledge_gap.py --one              # one un-assessed domain (K13)
+python3 scripts/knowledge_gap.py --escalate         # take up the top N gaps
+```
+
+Two knowledge-clock E7 modes, `CONTROVERSY` (§R14) and `GAP` (§R15), added
+as registry rows. See D41 for the four refusals that make a written row
+mean something — a controversy needs two positions, negative knowledge
+needs a revisit trigger, a gap status is a closed set, and "nobody looked"
+is not "nothing found".
+
+**`RESEARCHING` marks a gap as taken up, not researched.** Wiring an
+escalated gap into a live E7 run is step 21's continuous update: a gap
+question is not a claim, and `knowledge_research.py` researches claims.
+
+## Step 20 — E2, E3, review queue, E5  ✅ BUILT
 
 Then the deterministic flag rule set. **Start narrow** (D6). A client on
 metformin, a statin and an ACE inhibitor must pass clean.
 
-## Step 21 — `CLIENT_FOLLOWUP` and E4
+```
+python3 scripts/client_release.py --status            # who is releasable, and why not
+python3 scripts/client_release.py --queue
+python3 scripts/client_release.py --approve REVIEW_ID
+python3 scripts/client_release.py --draft CLIENT_ID   # E5. Never gated.
+python3 scripts/client_release.py --release COMM_ID
+```
+
+**Acceptance met, and asserted first:** metformin + statin + ACE inhibitor
++ thyroid + amlodipine, with abnormal-but-not-critical labs and a
+carbohydrate reduction proposed, produces **zero flags**.
+
+Six rules, two of which need both halves (insulin *and* a glucose-lowering
+intervention; warfarin *and* an interacting one). `WORSENING_MARKER` is a
+NOTE and never blocks. Drug names, intervention names and lab thresholds
+are all rows — adding a sulfonylurea is an INSERT.
+
+**E2 and E3 now emit their plans as data** (§60B, §70B). Without it the
+rules match on an intervention name against an empty table and pass every
+client clean having inspected nothing (D42).
+
+## Step 21 — `CLIENT_FOLLOWUP` and E4  ✅ BUILT
 
 ```
 follow-up → E6 update → E4 → routing → E1/E2/E3 → E6 → review → E5
 ```
 Respect `case_cycles.max_loops`.
 
-## Step 22 — Wave-1 foundation build
+```
+python3 scripts/client_followup.py --queue
+python3 scripts/client_followup.py FOLLOWUP_ID
+```
+
+Engine 4 is the routing authority. `ROUTING_RECOMMENDATION` is a **typed**
+field and an unknown value stops the pipeline (hard rule 5). One follow-up
+opens one cycle and spends one hop; `ck_loop_bound` refuses the hop past
+`max_loops`.
+
+**E4 now emits its outcomes as data** (§64B). `client_interventions.outcome`
+had never been written, so `WORSENING_MARKER` read an empty column and could
+not fire — the same shape as D42, one layer later. `intervention_outcome_history`
+keeps what each outcome replaced, and adherence is stored beside the outcome
+rather than folded into it.
+
+The cycle ends at the review queue. E5 and release stay in
+`client_release.py` (step 20).
+
+## Step 22 — Wave-1 foundation build  ✅ BUILT
 
 `K00_FOUNDATION_CONTROLLER`. Long-running, resumable, batched, cost-capped.
 Core domains carry higher **processing priority only** — never a limit on
@@ -346,10 +620,70 @@ what E7 may discover.
 `WAVE1_FOUNDATION_READY` is a **computed operational state**, not a
 certification and not a meeting. No `COMPLETE` status exists.
 
-## Step 23 — Practice intelligence
+```
+python3 scripts/foundation_controller.py --status
+python3 scripts/foundation_controller.py --plan
+python3 scripts/foundation_controller.py --execute --batch 1
+```
+
+**`--plan` is the default.** K00 is the one component that could begin mass
+ingestion unattended, so executing is an explicit act, and `DISCOVER` /
+`INGEST` are not executable stages at all — reported as MANUAL, with the
+reason.
+
+**The budget is enforced now** (D44). `KNOWLEDGE_DAILY_TOKEN_BUDGET` had
+been in `.env.example` since the beginning with nothing reading it; the cap
+is measured from `cost_events`, client work is excluded both ways, and
+unset means unbounded rather than a default nobody chose.
+
+Resumable because the cursor is a row (`foundation_progress`). A domain
+that keeps failing is paused with its reason. `IDLE` is not `COMPLETE`.
+
+## Step 23 — Practice intelligence *(built 2026-09-10)*
 
 De-identified aggregation into `practice_strategy_outcomes`. Minimum cohort
 5. Never merged with evidence.
+
+Built as migration `029`, `scripts/practice_intelligence.py` and
+`testing/test_practice.py`. See D45.
+
+`practice_strategy_outcomes` has carried `ck_min_cohort` since migration
+`003` and **had never held a row**, so the constraint had been passing
+every insert it never saw — the fifth control in this build that existed as
+a name over a table nothing populated. Step 21 is what changed: started
+interventions with recorded outcomes, and `intervention_outcome_history`
+holding what each replaced.
+
+What the aggregation refuses:
+
+- **The cohort counts people, once each.** `n_clients` is distinct clients
+  with a recorded outcome, taking each client's latest. Five rows from two
+  clients is a cohort of two; one client's three attempts is one
+  observation. `ck_practice_outcomes_account_for_cohort` refuses a
+  distribution that does not sum to it.
+- **A proposal nobody started is not experience** (`started_on IS NOT
+  NULL`).
+- **The denominator travels with the numerator.**
+  `ck_practice_generated_complete` refuses a generated aggregate that
+  cannot say out of how many, over what window, with what distribution.
+  `v_practice_cohort_candidates` separates "nobody ran the aggregator"
+  from "the cohort is three" from "eleven started it and nobody has
+  assessed one".
+- **Counts, never copied client text.** No stop reason, adherence note or
+  outcome evidence leaves the client layer.
+  `trg_practice_deidentified` is the backstop — a UUID, an email, a display
+  name or an external ref is refused — and it is `SECURITY DEFINER` so RLS
+  cannot hide the client it is checking for.
+- **The runtime reads aggregates and cannot create one.** Aggregation is a
+  cross-client read; `phi_runtime` is single-client-scoped, so `029`
+  revokes its DML and keeps SELECT.
+- **Adherence never folds into outcome** (D43), at cohort scale too. Where
+  adherence is unrecorded for the majority the summary says a neutral
+  result there is *untested, not ineffective*.
+
+The block reaches E7 and E1 Pass B as a **top-level key**, and E4 on the
+follow-up path, with `basis` and `evidence_status` as fields on every
+entry rather than a caption around the block.
 
 ## Step 24 — Backup drill *(drill performed 2026-09-10)*
 
@@ -381,22 +715,37 @@ GPG encryption and an off-site target configured.
 10    done: seven canonical prompts + foundation domain seed
 10b   DONE: measured live. 19/19 parts both passes, no degradation,
       $0.386/cycle. D5 stands — do not stage Engine 1.
-11    n8n RUN_ENGINE subworkflow         <- the one remaining parallel track
+11    n8n RUN_ENGINE subworkflow         <- BUILT 2026-09-10, byte-identical
+                                         parity proven (D26)
 12/13 K1 ontology seed  ||  C3 normalization layer
                                          <- BOTH BUILT 2026-09-10
-14    Core Intake V1                     <- BUILT (009, D22)
-15    CLIENT_NEW workflow
-16    Knowledge Factory K02–K11
-17    K14 embedding and hybrid retrieval
-18    evaluation layers A–E
+14    Core Intake V1                     <- BUILT (009, 011, D22)
+15    CLIENT_NEW workflow                <- BUILT 2026-09-10
+16    Knowledge Factory K02–K11          <- BUILT 2026-09-10 (021, D35–D37)
+                                         K07/K08 the pipe, then K09/K10/K11,
+                                         then discovery K02–K06.
+                                         K06 now fetches: Apify, real output,
+                                         030 + D46. No-captions path UNVERIFIED.
+17    K14 embedding and hybrid retrieval <- BUILT 2026-09-10 (023, D39)
+18    evaluation layers A–E              <- BUILT 2026-09-10 (024, D40)
 19    K12/K13 controversy, negative knowledge, gaps
-20    E2, E3, review queue, E5
-21    CLIENT_FOLLOWUP and E4
-22    Wave-1 foundation build
-23    practice intelligence
+                                         <- BUILT 2026-09-10 (025, D41)
+20    E2, E3, review queue, E5           <- BUILT 2026-09-10 (026, D42)
+21    CLIENT_FOLLOWUP and E4             <- BUILT 2026-09-10 (027, D43)
+22    Wave-1 foundation build            <- BUILT 2026-09-10 (028, D44)
+                                         K00 controller only. The WAVE 1
+                                         RUN ITSELF IS NOT STARTED.
+23    practice intelligence              <- BUILT 2026-09-10 (029, D45)
 24    backup restore drill               <- DONE 2026-09-10 (roles gap found)
 ```
 
-`bash testing/run_all.sh` must pass before every commit. Eleven suites.
+**Built is not run.** Steps 16–23 are built and their suites pass; the
+knowledge library is still nearly empty. No real source has been through
+the loop, no adapter has reached its real API, and no corpus has been
+embedded. Do not read the ticks above as a library.
+
+`bash testing/run_all.sh` must pass before every commit. **Twenty-eight
+suites**, and `testing/run_bare.sh` must pass too — extensions are its
+floor, `test_optional_deps.py` covers the environment variables (V3).
 
 **This layer is frozen.** Do not reopen D16–D21 without instruction.

@@ -17,9 +17,21 @@
 #   set -a; . ./.env.local; set +a
 #   bash testing/run_bare.sh
 #
-# The extension files are always put back, including on failure and on
-# Ctrl-C -- a developer machine left permanently unable to CREATE EXTENSION
-# would be a bizarre thing to debug a week later.
+# ajv is taken away too. It is an optional dependency in exactly the same
+# sense, and the branch where node is present but ajv is NOT was reachable
+# here and nowhere in CI -- so it crashed rather than skipping, and no job
+# noticed for as long as it existed.
+#
+# The extension files and the ajv modules are always put back, including on
+# failure and on Ctrl-C -- a developer machine left permanently unable to
+# CREATE EXTENSION would be a bizarre thing to debug a week later.
+#
+# The THIRD floor -- optional environment variables such as MODEL_EMBEDDING
+# -- is not handled here, because removing one does not need a schema
+# rebuild. `testing/test_optional_deps.py` removes each registered variable
+# and re-runs the suites that depend on it, and it runs inside run_all.sh,
+# so it is exercised on this floor too. V3 is the rule all three enforce:
+# an optional dependency degrades to a NAMED skip, never an exception.
 
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -31,6 +43,7 @@ EXTDIR="${PG_EXTENSION_DIR:-$(pg_config --sharedir 2>/dev/null)/extension}"
 [ -d "$EXTDIR" ] || { echo "cannot find the extension directory; set PG_EXTENSION_DIR" >&2; exit 1; }
 
 STASH="$(mktemp -d)"
+AJV_STASH="$(mktemp -d)"
 
 restore() {
     # mv back only what we actually moved; an empty stash is not an error.
@@ -39,6 +52,11 @@ restore() {
     fi
     rmdir "$STASH" 2>/dev/null
     echo "extensions restored to $EXTDIR"
+    if [ -n "$(ls -A "$AJV_STASH" 2>/dev/null)" ]; then
+        mkdir -p node_modules && mv "$AJV_STASH"/* node_modules/ 2>/dev/null
+        echo "ajv restored to node_modules/"
+    fi
+    rmdir "$AJV_STASH" 2>/dev/null
 }
 trap restore EXIT INT TERM
 
@@ -68,3 +86,45 @@ if [ "${still_on:-1}" != "0" ]; then
 fi
 
 bash testing/run_all.sh
+rc=$?
+
+# ---------------------------------------------------------------------
+# The second floor: node present, ajv absent.
+#
+# The parity suites must SKIP loudly, not crash and not pass quietly. A
+# suite that passes here without saying it skipped is not detecting the
+# absence, which is the same failure in a different disguise.
+# ---------------------------------------------------------------------
+if command -v node >/dev/null 2>&1; then
+    echo
+    echo "hiding ajv from node_modules/"
+    for mod in ajv ajv-formats; do
+        [ -e "node_modules/$mod" ] && mv "node_modules/$mod" "$AJV_STASH"/ \
+            && echo "  hid $mod"
+    done
+    if [ -d node_modules/ajv ]; then
+        echo "ajv is still present; this phase is not testing what it claims" >&2
+        exit 1
+    fi
+    for suite in test_contract_registry test_n8n_parity; do
+        echo
+        echo "=== $suite (node present, ajv absent) ==="
+        if ! out=$(python3 "testing/$suite.py" 2>&1); then
+            echo "$out"
+            echo "  ^^ must SKIP the ajv half, not fail" >&2
+            rc=1
+            continue
+        fi
+        echo "$out" | grep -E "SKIP|All checks passed" | tail -5
+        echo "$out" | grep -q "SKIP" || {
+            echo "  ^^ passed without reporting a SKIP -- it is not detecting" >&2
+            echo "     that ajv is missing" >&2
+            rc=1
+        }
+    done
+else
+    echo
+    echo "node is not installed; the ajv floor was NOT tested"
+fi
+
+exit $rc

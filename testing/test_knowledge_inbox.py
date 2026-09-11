@@ -464,8 +464,10 @@ def main() -> int:
         check("client_case_versions enforces case_version >= 1", cur.fetchone()[0] == 1)
 
         cur.execute(
-            """INSERT INTO engine_runs (engine, prompt_file, prompt_hash, model_role)
-               VALUES ('E7','engine7_research_practice.md','deadbeef','MODEL_RESEARCH')
+            """INSERT INTO engine_runs (engine, engine_mode, prompt_file,
+                                       prompt_hash, model_role)
+               VALUES ('E7','FOUNDATION','engine7_research_practice.md',
+                       'deadbeef','MODEL_RESEARCH')
                RETURNING run_id"""
         )
         k_run = cur.fetchone()[0]
@@ -482,16 +484,20 @@ def main() -> int:
                 "a run without a client cannot claim a case version",
                 raises(
                     cur,
-                    """INSERT INTO engine_runs (engine, case_version_id, prompt_file, prompt_hash, model_role)
-                       VALUES ('E7',%s,'engine7_research_practice.md','deadbeef','MODEL_RESEARCH')""",
+                    """INSERT INTO engine_runs (engine, engine_mode, case_version_id,
+                                                prompt_file, prompt_hash, model_role)
+                       VALUES ('E7','FOUNDATION',%s,'engine7_research_practice.md',
+                               'deadbeef','MODEL_RESEARCH')""",
                     (cv_id,),
                     contains="ck_run_clock_coherent",
                 ),
             )
             cur.execute(
-                """INSERT INTO engine_runs (engine, client_id, case_version_id, prompt_file,
+                """INSERT INTO engine_runs (engine, engine_mode, client_id,
+                                            case_version_id, prompt_file,
                                             prompt_hash, model_role)
-                   VALUES ('E7',%s,%s,'engine7_research_practice.md','deadbeef','MODEL_RESEARCH')
+                   VALUES ('E7','CASE',%s,%s,'engine7_research_practice.md',
+                           'deadbeef','MODEL_RESEARCH')
                    RETURNING run_id""",
                 (cl_id, cv_id),
             )

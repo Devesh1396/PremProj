@@ -56,6 +56,29 @@ docker compose exec postgres psql -U phi_admin -d phi -c \
 DATABASE_URL=postgresql://phi_admin:...@host:port/phi \
   python3 scripts/load_prompts.py
 
+# 6b. LOAD THE ORCHESTRATION CONTRACT. Same reason, same class of failure.
+#     Since migration 012 the control contract is a row too, and it is what
+#     RUN_ENGINE validates every control block against -- the typed fields
+#     n8n routes on (hard rule 5). An unloaded registry raises
+#     ContractMissing rather than validating against nothing.
+DATABASE_URL=postgresql://phi_admin:...@host:port/phi \
+  python3 scripts/load_contracts.py
+
+# 6c. LOAD THE HANDOFF REGISTRY. Which substantive block each engine owes,
+#     per mode (D24). Without it RUN_ENGINE raises HandoffMissing rather
+#     than accepting a control block as evidence that an engine reasoned.
+DATABASE_URL=postgresql://phi_admin:...@host:port/phi \
+  python3 scripts/load_handoffs.py
+
+# 6d. LOAD THE RATE CARD. The fourth registry (D30). n8n cannot read
+#     config/model_prices.json, so the rates are rows too -- without them
+#     the workflow records UNPRICED for calls the reference implementation
+#     prices, and every cost figure then describes the reference instead of
+#     the system. An empty rate card is not an error; a silently empty one
+#     on a metered provider is a bad surprise.
+DATABASE_URL=postgresql://phi_admin:...@host:port/phi \
+  python3 scripts/load_prices.py
+
 # 7. Verify, and do not skip the second half.
 docker compose exec postgres psql -U phi_admin -d phi -c \
   "SELECT capability, enabled FROM system_capabilities;"
@@ -70,10 +93,37 @@ DATABASE_URL=postgresql://phi_admin:...@host:port/phi \
 #    exit 1  -> NOT READY: names the engines with no active row, or the
 #               prompts that differ from the authored files
 #    exit 2  -> a file in prompts/ is missing or empty
+
+DATABASE_URL=postgresql://phi_admin:...@host:port/phi \
+  python3 scripts/load_contracts.py --check
+#    exit 0  -> READY, and prints the property and required counts, which
+#               are worth reading: a contract that suddenly has three
+#               properties would validate almost anything
+#    exit 1  -> NOT READY, or the document differs from the authored file
+#    exit 2  -> the schema file is missing, unparseable, or constrains
+#               nothing
+
+DATABASE_URL=postgresql://phi_admin:...@host:port/phi \
+  python3 scripts/load_handoffs.py --check
+#    exit 0  -> READY, and prints what each engine owes per mode
+#    exit 1  -> an engine/mode has no registered handoff
+#    exit 2  -> a registered tag is not defined in its prompt, which means
+#               a specification was renamed and the registry was not
+
+DATABASE_URL=postgresql://phi_admin:...@host:port/phi \
+  python3 scripts/load_prices.py --check
+#    exit 0  -> READY, and prints the active rates
+#    exit 1  -> the registry differs from config/model_prices.json
 ```
 
-**Whenever `prompts/*.md` changes, `load_prompts.py` must be re-run** —
-deploying a prompt edit is a load, not a restart. The registry is
+**Four loaders. Migrating alone is not enough**, and a database that has
+been migrated but not loaded is perfectly valid and completely unusable.
+
+**Whenever `prompts/*.md`, `schemas/orchestration/*.json` or
+`config/model_prices.json` changes, the matching loaders must be re-run —
+`load_handoffs.py` included, since it verifies its tags against the
+prompts** — deploying a prompt or contract edit is a
+load, not a restart. The registry is
 append-only: loading changed content inserts a new version and deactivates
 the old one, so the superseded text stays readable for any `engine_runs`
 row that cites its hash. Reverting reactivates the stored version rather
@@ -83,6 +133,82 @@ Connect from the host for admin work:
 ```bash
 docker compose exec postgres psql -U phi_admin -d phi
 ```
+
+---
+
+## n8n version
+
+**DECIDED 2026-09-10: pinned to 2.11.4, the version the VPS runs.
+The VPS is not to be upgraded.** See `DECISIONS.md` D32.
+
+| | |
+|---|---|
+| `scripts/local_n8n.sh` pins | **2.11.4** |
+| The VPS runs | **2.11.4** |
+
+The n8n stack on that box runs **three live business automations** (GFG T1
+v2, AiSensy, a detection PoC) that have nothing to do with this build. An
+upgrade window is not free, and there was nothing to buy by taking one: the
+binding quirks this workflow depends on knowing were read out of the
+installed node's own source, not inherited from a newer release.
+
+**That stack, the `n8n-sdc9_n8n_data` volume and the n8n
+`docker-compose.yml` are out of scope for this build, permanently.** This
+repo adds a database to the same Docker network (`n8n-sdc9_default`, no
+published port) and nothing else.
+
+### What the decision cost, and why it was worth finding
+
+Re-pinning was not a one-line change. Verifying against 2.11.2's actual
+source — `n8n-nodes-base` 2.11.2 is what n8n 2.11.4 ships — turned up two
+things that would have failed on first run:
+
+1. **The Postgres node's `queryReplacement` array branch does not exist in
+   2.11.2.** Every binding in `workflows/run_engine.json` had been written
+   as a single `{{ [a, b, c] }}` to use it. On 2.11.4 that binds **one**
+   parameter where the statement wants twelve. Every Postgres node in the
+   workflow would have failed on the first run.
+2. **The Code node has no `fetch`.** It runs inside `vm2`, whose sandbox
+   provides `setTimeout`, `Promise`, `Math`, `JSON`, `Date` and `helpers`
+   and **not** `fetch` or `URL` — on 2.35.7 just as much as on 2.11.4. The
+   provider call now goes through `helpers.httpRequest`.
+
+Neither was a version regression. The first was a dependency on a branch
+that only exists in later releases; the second was never going to work
+anywhere. Both are now covered by tests.
+
+### Node typeVersions, checked against 2.11.2
+
+| Node | Workflow uses | 2.11.2 supports |
+|---|---|---|
+| `postgres` | 2.5 | 2, 2.1, 2.2, 2.3, 2.4, **2.5**, 2.6 |
+| `code` | 2 | 1, **2** |
+| `if` | 2.2 | 2, 2.1, **2.2**, 2.3 |
+| `executeWorkflowTrigger` | 1.1 | 1, **1.1** |
+
+### Before the workflow is imported on the VPS
+
+Two runtime settings decide whether it works, and neither is in this repo:
+
+* **`$env` access.** The workflow reads `LLM_BASE_URL`, `LLM_API_KEY` and
+  the transport-retry knobs from `$env`. If `N8N_BLOCK_ENV_ACCESS_IN_NODE`
+  is set on that instance, every one of those reads returns nothing and the
+  provider call fails in a way that looks like a bad base URL. Check it.
+* **The task runner.** With `N8N_RUNNERS_ENABLED` the Code node runs in the
+  JS task runner instead of `vm2`. The workflow is written for the stricter
+  of the two — `helpers.httpRequest`, no `fetch` — so it works either way,
+  but a change to that setting is a change to what the Code node can reach
+  and is worth knowing about before it happens.
+
+### If the VPS is ever upgraded
+
+Re-pin `N8N_VERSION` **to follow the VPS, never to keep current**, then
+re-read `executeQuery.operation.js` at the new version and re-run
+`test_n8n_parity.py` and `test_n8n_sql.py`. The binding form now in use —
+one resolvable per parameter, each a JSON literal — was chosen because it
+is exact on 2.11.2 **and** 2.35.7, verified against both real
+implementations, so an upgrade should be uneventful. "Should be" is not
+"is": read the source and re-run the suites.
 
 ---
 
@@ -260,6 +386,9 @@ DATABASE_URL=... python3 scripts/set_role_passwords.py
 #     from a machine whose prompts/ had drifted will disagree with this
 #     checkout.
 DATABASE_URL=...phi_restore_test python3 scripts/load_prompts.py --check
+DATABASE_URL=...phi_restore_test python3 scripts/load_contracts.py --check
+DATABASE_URL=...phi_restore_test python3 scripts/load_handoffs.py --check
+DATABASE_URL=...phi_restore_test python3 scripts/load_prices.py --check
 #     exit 0 -> the restored registry matches prompts/ in this checkout
 #     exit 1 -> it does not. Read the output before loading over it: the
 #               restored rows are what produced every engine_runs.prompt_hash
@@ -300,8 +429,12 @@ The repository can rebuild an empty one, and the sequence is longer than
 python3 scripts/migrate.py             # schema
 python3 scripts/set_role_passwords.py  # roles
 python3 scripts/load_prompts.py        # THE ENGINE SPECIFICATIONS (D23)
+python3 scripts/load_contracts.py      # THE ORCHESTRATION CONTRACT (D23)
+python3 scripts/load_handoffs.py       # WHICH HANDOFF EACH ENGINE OWES (D24)
 python3 scripts/seed_ontology.py       # K1 concept dictionary, if wanted
-python3 scripts/load_prompts.py --check   # must exit 0 before n8n is ready
+python3 scripts/load_prompts.py --check   # all three must exit 0
+python3 scripts/load_contracts.py --check #   before n8n is
+python3 scripts/load_handoffs.py --check  #   considered ready
 bash testing/run_all.sh                # prove it, do not assume it
 ```
 

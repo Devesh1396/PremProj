@@ -29,6 +29,30 @@
 
 set -euo pipefail
 
+# PINNED TO WHAT THE VPS RUNS. 2.11.4, decided 2026-09-10 (D32).
+#
+# The VPS's n8n stack runs three live business automations. Upgrading it is
+# not a free action, and there is nothing to buy: the binding quirks this
+# build depends on knowing were read out of the installed node's source,
+# not inherited from a newer release. So the workflow targets the version
+# it will run on, and the pin here is what proves it.
+#
+# That decision was not free of consequences. 2.35.7 has an ARRAY BRANCH in
+# the Postgres node's queryReplacement handling that 2.11.2 does not, and
+# every binding in workflows/run_engine.json had been written to use it.
+# On 2.11.4 that binds ONE parameter where the statement wants twelve.
+# See DECISIONS.md D32.
+#
+# Raise this ONLY to follow the VPS, never to "keep current". Re-run
+# testing/test_n8n_parity.py and testing/test_n8n_sql.py afterwards, and
+# re-read the Postgres node's executeQuery.operation.js at the new version
+# before believing the result. Do NOT let it float.
+N8N_VERSION="${N8N_VERSION:-2.11.4}"
+
+# What the VPS runs, recorded here so the pin can be checked against it
+# without opening another file. Verified 2026-09-10.
+N8N_VPS_VERSION="2.11.4"
+
 N8N_HOME="${N8N_HOME:-${TMPDIR:-/tmp}/premproj-n8n}"
 N8N_BIN="$N8N_HOME/node_modules/.bin/n8n"
 
@@ -53,14 +77,27 @@ install)
     mkdir -p "$N8N_HOME"
     cd "$N8N_HOME"
     [ -f package.json ] || npm init -y >/dev/null
-    echo "installing n8n into $N8N_HOME (this takes several minutes)"
-    npm install n8n --no-audit --no-fund
-    "$N8N_BIN" --version
+    echo "installing n8n@$N8N_VERSION into $N8N_HOME (several minutes)"
+    npm install "n8n@$N8N_VERSION" --no-audit --no-fund
+    installed="$("$N8N_BIN" --version)"
+    echo "n8n $installed"
+    if [ "$installed" != "$N8N_VERSION" ]; then
+        echo "expected n8n $N8N_VERSION, got $installed -- the pin did not hold" >&2
+        exit 1
+    fi
     ;;
 
 version)
     [ -x "$N8N_BIN" ] || { echo "n8n not installed. Run: bash scripts/local_n8n.sh install" >&2; exit 1; }
-    "$N8N_BIN" --version
+    installed="$("$N8N_BIN" --version)"
+    echo "$installed"
+    # Loud, because a drifted local install silently invalidates every
+    # parity result the suite reports.
+    [ "$installed" = "$N8N_VERSION" ] || {
+        echo "WARNING: pinned to $N8N_VERSION but $installed is installed." >&2
+        echo "Reinstall, or change N8N_VERSION deliberately and re-run parity." >&2
+        exit 1
+    }
     ;;
 
 seed-credentials)

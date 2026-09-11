@@ -5,6 +5,10 @@ __pycache__/
 knowledge/inbox/*
 knowledge/processed/*
 knowledge/failed/*
+# The content-addressed raw store (K07, §50). Practitioner-supplied source
+# material, some of it licensed to them personally (§52). It is preserved
+# on the machine that ingested it and it never reaches a commit.
+knowledge/raw/*
 !knowledge/*/.gitkeep
 pgdata/
 backups/
@@ -13,3 +17,9 @@ __pycache__/
 
 # Local development stack (docker-compose.local.yml)
 .env.local
+
+# CI and the contract-parity check install ajv here (`npm i --no-save ajv@8`).
+# Also where `npm i n8n` would land if someone ignores scripts/local_n8n.sh
+# and installs into the working tree -- 2.5 GB that must never reach a commit.
+node_modules/
+package-lock.json

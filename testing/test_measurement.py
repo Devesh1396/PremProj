@@ -286,7 +286,7 @@ def main() -> int:
            values (%s,2,'NEW_CLIENT') returning cycle_id""",
         (context["client_id"],)).fetchone()[0]
     RE.run_engine(conn, RE.EngineRequest(
-        engine="E1", structured_input={"CASE_VERSION": 1, "MODE": "PASS_A"},
+        engine="E1", structured_input={"CASE_VERSION": 1},
         client_id=context["client_id"], cycle_id=lone_cycle, pass_label="A"))
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
@@ -407,6 +407,39 @@ def main() -> int:
     ).fetchone()[0]
     check("v_engine_call_measurement runs with security_invoker",
           opts is not None and "security_invoker=true" in opts, str(opts))
+
+    # ------------------------------------------------------------------
+    print("\nspending without a rate is visible, not just honest")
+
+    # UNPRICED is the correct record when no rate is configured (D30), and
+    # ck_cost_priced stops it ever being reported as zero. It is also
+    # INVISIBLE: the call cost money and appears in no total. The embedding
+    # probe that settled D34 recorded 14 such calls, which is the mechanism
+    # working and still not a state to leave unseen.
+    conn.execute("delete from cost_events where model_name='UNPRICEDTEST_model'")
+    conn.execute(
+        "insert into cost_events (operation, model_role, model_name, "
+        "                         input_tokens, output_tokens, price_source) "
+        "values ('ENGINE_RUN','MODEL_EMBEDDING','UNPRICEDTEST_model',900,0,'UNPRICED')")
+    row = conn.execute(
+        "select calls, input_tokens, rate_exists_now from v_unpriced_spend "
+        " where model_name='UNPRICEDTEST_model'").fetchone()
+    check("a call with no rate is counted, not lost", row == (1, 900, False), str(row))
+
+    fixture = conn.execute(
+        "select count(*) from v_unpriced_spend where model_name like 'fixture:%'"
+    ).fetchone()[0]
+    check("fixture calls are excluded — they cost nothing and always will",
+          fixture == 0, str(fixture))
+    conn.execute("delete from cost_events where model_name='UNPRICEDTEST_model'")
+
+    # An embedding call has no output tokens. Pricing must handle that
+    # rather than treating a zero as a missing value.
+    import pricing as PR
+    cost, source = PR.price_call("claude-sonnet-5", 1_000_000, 0)
+    check("an embedding-shaped call (no output tokens) prices correctly",
+          source == PR.PRICE_REGISTRY and abs(cost - 2.0) < 1e-9,
+          f"{cost}, {source}")
 
     print()
     if FAILS:

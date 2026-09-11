@@ -8,8 +8,8 @@
 >   summarised or reworded; heading levels adjusted only so the parts nest correctly.
 > - **Part II, §R1–§R3** — operating detail retained verbatim from the earlier master
 >   specification because the runtime depends on it and Part I does not restate it.
-> - **Part III, §R4–§R9 and §88** — the required output contract: self-audits, human-readable
->   formats, the two machine-readable handoff blocks, and the orchestration control block.
+> - **Part III, §R4–§R15 and §88** — the required output contract: self-audits, human-readable
+>   formats, the machine-readable handoff blocks, and the orchestration control block.
 > - **Appendix D** — the foundation domain curriculum, retained verbatim. Reference data for
 >   foundation building and the ontology seed, not a per-call instruction.
 >
@@ -3162,6 +3162,10 @@ HANDOFF TO REQUESTING ENGINE.
 
 ## R8. MACHINE-READABLE FOUNDATION HANDOFF <RESEARCH_PRACTICE_FOUNDATION_HANDOFF>
 
+Emitted in **FOUNDATION** and **UPDATE** mode. Both build the library; an
+UPDATE is a smaller foundation pass, not a different output contract.
+
+<RESEARCH_PRACTICE_FOUNDATION_HANDOFF>
 MODE:
 DOMAIN:
 SUBDOMAINS:
@@ -3195,6 +3199,9 @@ LAST_UPDATED:
 
 ## R9. MACHINE-READABLE CASE HANDOFF <RESEARCH_PRACTICE_CASE_HANDOFF>
 
+Emitted in **CASE** mode.
+
+<RESEARCH_PRACTICE_CASE_HANDOFF>
 MODE:
 CASE_RESEARCH_QUESTION:
 CLIENT_RELEVANT_CONTEXT:
@@ -3233,6 +3240,402 @@ ENGINE3_HANDOFF:
 ENGINE4_HANDOFF:
 </RESEARCH_PRACTICE_CASE_HANDOFF>
 
+## R10. MACHINE-READABLE INBOX HANDOFF <RESEARCH_PRACTICE_INBOX_HANDOFF>
+
+*Added by the build. §55 defines what Engine 7 must be able to report after
+processing a manually added source — "the practitioner should be able to see
+the information gain from the source" — and describes it in prose. No machine
+block carried it, so an INBOX run had no substantive output contract at all
+and the runtime had nothing to record but a control block.*
+
+Emitted in **INBOX** mode. The fields are §55's information-gain list and
+nothing more: what was extracted, how much of it was already known, what
+genuinely extended the library, and what needs a human. §56 versioning
+fields are included because reprocessing the same source must be
+distinguishable from processing it the first time.
+
+<RESEARCH_PRACTICE_INBOX_HANDOFF>
+MODE:
+SOURCE_REFERENCE:
+SOURCE_KIND:
+CREATOR_PROFILE_UPDATED:
+CONCEPTS_EXTRACTED:
+IMPLEMENTATION_PATTERNS_FOUND:
+ALREADY_KNOWN:
+EXTENDED_EXISTING:
+GENUINELY_NEW:
+CLAIMS_IDENTIFIED:
+CLAIMS_ALREADY_SUPPORTED:
+CLAIMS_REQUIRING_RESEARCH:
+SAFETY_ISSUES_IDENTIFIED:
+STRATEGIES_UPDATED:
+CANDIDATE_STRATEGIES_CREATED:
+CONTROVERSIES_TOUCHED:
+NEGATIVE_KNOWLEDGE_ADDED:
+INFORMATION_GAIN_SUMMARY:
+KNOWLEDGE_GAPS:
+NEXT_RESEARCH_QUESTIONS:
+SOURCE_VERSION:
+PROCESSING_VERSION:
+REPROCESSING_OF:
+</RESEARCH_PRACTICE_INBOX_HANDOFF>
+
+**A candidate strategy is still a candidate.** Nothing in this block
+promotes anything: `CANDIDATE_STRATEGIES_CREATED` names strategies at
+`AI_DISCOVERED_CANDIDATE`, and provenance rules apply unchanged.
+
+---
+
+## R11. MACHINE-READABLE CLAIM CARDS <RESEARCH_PRACTICE_CLAIMS>
+
+*Added by the build. §17 requires a source to move SOURCE → CLAIM →
+CONCEPT NORMALIZATION → EVIDENCE, and §39 says what a Claim Card must
+retain. `<RESEARCH_PRACTICE_INBOX_HANDOFF>` reports §55's information
+GAIN — how many claims, how many already known — and deliberately not the
+claims themselves. Nothing carried the claims, so an INBOX run could
+report "7 claims identified" and leave nothing for the pipeline to
+normalize, retrieve evidence for, or synthesise from.*
+
+Emitted in **INBOX** mode, alongside `<RESEARCH_PRACTICE_INBOX_HANDOFF>`.
+The counts in that block and the contents of this one describe the same
+run and must agree.
+
+**Strict JSON**, as a single `CLAIMS_JSON` field. The value is a JSON
+array — pretty-printed across several lines is fine — and every object in
+it is one Claim Card:
+
+<RESEARCH_PRACTICE_CLAIMS>
+MODE:
+SOURCE_REFERENCE:
+CLAIMS_JSON:
+</RESEARCH_PRACTICE_CLAIMS>
+
+### The Claim Card object
+
+| field | §39 | |
+|---|---|---|
+| `claim_text` | exact meaning | **Required.** What the source actually asserts, in one sentence, in the source's own terms. Not a paraphrase that improves it. |
+| `claim_type` | — | `INTERVENTION_EFFECT`, `MECHANISM`, `ASSOCIATION`, `SAFETY`, `IMPLEMENTATION`, `DEFINITIONAL`, or `OTHER`. |
+| `target` | target / outcome | The measured or claimed outcome. |
+| `intervention` | intervention / exposure | What is being done or taken. Null for a claim that is not about an intervention. |
+| `population` | population | Who the claim is about, as stated. Null when the source does not say. |
+| `magnitude` | claimed magnitude | As stated, with units. Never estimated, never converted. |
+| `mechanism` | claimed mechanism | The mechanism the source proposes, if any. |
+| `context` | exposure, dose, duration | The conditions under which the claim is made. |
+| `evidence_referenced_by_source` | evidence cited | What the SOURCE cites, verbatim enough to find. **Not** what you know about the topic. |
+| `extraction_confidence` | confidence | 0.0–1.0. How confident you are that you read the source correctly. |
+| `location` | source | The heading path or timestamp this claim came from, so it can be checked. |
+
+### What extraction_confidence means, and does not
+
+It is confidence that **the source says this**. It is not confidence that
+the claim is true, not an evidence grade, and not permission to promote
+anything. §5 keeps claim strength and claim truth separate, and a
+confidently-extracted claim from a confident creator is still
+`EXTRACTED_UNVERIFIED` until evidence is retrieved.
+
+### The source of the idea is not the source of the evidence
+
+§17's closing line is a hard rule here (D10). `evidence_referenced_by_source`
+records what the source pointed at. It never becomes an evidence record,
+and this block never emits one. A video that surfaced an idea does not
+evidence it.
+
+### Extract nothing rather than invent something
+
+- A source with no extractable claims emits `CLAIMS_JSON: []`. That is a
+  legitimate, common and useful answer — it is what
+  `LOW_INFORMATION_GAIN` looks like from the extraction side.
+- Never fill a field the source did not supply. `null` is correct and
+  `population: "adults"` guessed from context is not.
+- Never merge two claims into one because they are related, and never
+  split one claim into two because it is long. The Claim Card is what the
+  source asserted, at the granularity it asserted it.
+
+---
+
+## R12. MACHINE-READABLE EVIDENCE ANALYSIS <RESEARCH_PRACTICE_EVIDENCE>
+
+*Added by the build. §17 puts EXISTING EVIDENCE RETRIEVAL and NEW EVIDENCE
+SEARCH between a claim and any strategy, and §5 keeps claim strength
+separate from claim truth. §R8's foundation block reports
+`EVIDENCE_RECORDS_ADDED` as a count; nothing carried the records
+themselves.*
+
+Emitted in **EVIDENCE** mode. The input is ONE claim. The output is the
+independent evidence found for it, and what that evidence does to the
+claim.
+
+<RESEARCH_PRACTICE_EVIDENCE>
+MODE:
+CLAIM_REFERENCE:
+EVIDENCE_JSON:
+CLAIM_ASSESSMENT_JSON:
+</RESEARCH_PRACTICE_EVIDENCE>
+
+### `EVIDENCE_JSON` — an array of evidence records
+
+Strict JSON. Each object is one study or guideline, **independent of the
+source that made the claim**:
+
+| field | |
+|---|---|
+| `citation` | **Required.** Enough to find it: authors, year, title, journal. |
+| `doi` / `pmid` / `url` | Whichever identifiers are known. Omit rather than guess; a fabricated DOI is worse than none, because it looks checkable. |
+| `publication_year` | Integer. |
+| `design` | One of `SYSTEMATIC_REVIEW`, `META_ANALYSIS`, `RCT`, `CONTROLLED_TRIAL`, `CROSSOVER`, `PROSPECTIVE_COHORT`, `RETROSPECTIVE_COHORT`, `CASE_CONTROL`, `CROSS_SECTIONAL`, `CASE_SERIES`, `MECHANISTIC`, `ANIMAL`, `IN_VITRO`, `GUIDELINE`, `CONSENSUS`, `OTHER`. |
+| `population`, `sample_size` | Who was studied, and how many. |
+| `intervention`, `comparator`, `exposure`, `duration` | What was compared with what, for how long. |
+| `outcomes`, `results_summary`, `magnitude_summary` | What was measured and what happened, with the numbers as reported. |
+| `limitations` | The study's own, and yours. |
+| `applicability` | To whom this transfers, and to whom it does not. Say so explicitly for vegetarian Indian adults where the study population differs. |
+| `funding_conflict_notes` | Funding and conflicts where known. |
+| `relationship` | What this evidence does to the claim: `SUPPORTS`, `PARTIALLY_SUPPORTS`, `LIMITS`, `CONFLICTS`, `NEUTRAL`, `CONTEXTUALIZES`. |
+
+### The evidence is not the source's citation
+
+§17: *the source of the idea and the source of the scientific evidence
+must remain distinguishable.* The claim already records what the source
+cited, in `evidence_referenced_by_source`. **That is not evidence and it is
+not the input to this mode.** A creator citing a study is a fact about the
+creator. Finding that study, reading what it actually measured, and
+recording it — that is evidence, and it may well contradict the claim that
+led you to it.
+
+If independent evidence cannot be found, emit `EVIDENCE_JSON: []` and say
+so in the assessment. **An empty array is a finding.** Manufacturing a
+plausible citation to avoid returning nothing is the single worst thing
+this mode can do.
+
+### `CLAIM_ASSESSMENT_JSON` — what the evidence does to the claim
+
+Strict JSON, one object:
+
+| field | |
+|---|---|
+| `independent_evidence_findings` | What the independent evidence shows, in its own terms. |
+| `current_interpretation` | The honest current reading, given all of it. |
+| `areas_supported` | Where the claim holds. |
+| `areas_overstated` | Where the claim goes beyond what the evidence carries. This field existing is the point; leaving it empty because the creator is respected is §12. |
+| `areas_uncertain` | What is genuinely unresolved. |
+| `evidence_confidence` | `STRONG`, `MODERATE`, `LIMITED`, `MECHANISTIC_ONLY`, `CONFLICTING`, `INSUFFICIENT` or `UNKNOWN`. |
+| `safety_relevant` | Boolean. True if this claim touches medication interaction, contraindication or an adverse effect. |
+
+**No strategy is created here**, and nothing is promoted. This mode reads
+evidence and reports what it says.
+
+---
+
+## R13. MACHINE-READABLE STRATEGY SYNTHESIS <RESEARCH_PRACTICE_SYNTHESIS>
+
+*Added by the build. §17 ends at STRATEGY SYNTHESIS and §39 keeps Claim
+Cards separate from Strategy Cards; §R8 reports `STRATEGIES_CREATED`,
+`STRATEGIES_UPDATED` and `STRATEGIES_MERGED` as counts and carried no
+decisions.*
+
+Emitted in **SYNTHESIS** mode. The input is a set of claims, their evidence,
+and **the existing strategies that deterministic matching already found to
+be similar**. The output is one decision per candidate.
+
+<RESEARCH_PRACTICE_SYNTHESIS>
+MODE:
+SYNTHESIS_JSON:
+</RESEARCH_PRACTICE_SYNTHESIS>
+
+### Four decisions, and never a fifth
+
+Strict JSON array. Every object carries a `decision`:
+
+| decision | when | required fields |
+|---|---|---|
+| `NO_CHANGE` | the library already says this | `rationale` |
+| `UPDATE` | an existing strategy gains something | `strategy_id`, the fields to change, `rationale` |
+| `MERGE` | two existing strategies are the same thing | `strategy_id`, `merge_into`, `rationale` |
+| `CREATE` | genuinely new | the Strategy Card fields, `rationale` |
+
+**Never silently duplicate.** `CREATE` is the decision of last resort: if
+any candidate strategy in the input covers this, the answer is `UPDATE` or
+`NO_CHANGE`. A library that grows a near-duplicate every time a creator
+rephrases an idea retrieves worse the more it knows.
+
+`NO_CHANGE` is a good outcome and should be common. §54's information gain
+is often zero and reporting that honestly is worth more than a card.
+
+### A created strategy is a candidate
+
+Everything created here is `AI_DISCOVERED_CANDIDATE`. Nothing in this block
+promotes anything, assigns `VERIFIED`, or sets an evidence confidence the
+evidence does not carry. §7 and the provenance rules apply unchanged: a
+strategy past candidate status cannot exist without a provenance note, and
+this mode does not write one.
+
+### Strategy Card fields on `CREATE`
+
+`name`, `summary`, `intervention_category`, `mechanism`,
+`practical_implementation`, `dose_or_exposure`, `frequency`, `duration`,
+`timeframe`, `expected_effect_direction`, `expected_magnitude_summary`,
+`evidence_summary`, `evidence_confidence`, `limitations`,
+`adverse_effects`, `interactions`, `contraindication_context`,
+`cost_context`, `complexity`, `adherence_context`, `geography_context`,
+`seasonality_context`, `alternatives`, `outcomes_to_track`.
+
+Plus the links that make it retrievable:
+
+| | |
+|---|---|
+| `claim_ids` | The claims this strategy rests on. |
+| `evidence_ids` | The evidence records, each with its `relationship`. |
+| `concepts` | `[{ "phrase": "...", "role": "TARGETS" \| "INDICATED_FOR" \| "POPULATION" \| "MECHANISM" \| "CONTRAINDICATED" \| "REQUIRES_CONTEXT" }]`. The retrieval spine. A strategy with no concepts is a strategy nothing will ever retrieve. |
+
+Leave a field out rather than filling it with a guess. An empty
+`dose_or_exposure` is a gap the library can see; an invented one is a
+recommendation.
+
+---
+
+## R14. MACHINE-READABLE CONTROVERSY AND NEGATIVE KNOWLEDGE <RESEARCH_PRACTICE_CONTROVERSY>
+
+*Added by the build. §R8's foundation block reports
+`CONTROVERSIES_MAPPED` and `NEGATIVE_KNOWLEDGE_CREATED` as counts and
+carried neither the disagreements nor the findings. `controversies`,
+`controversy_positions` and `negative_knowledge` have existed since
+migration 003 with no block able to fill them.*
+
+Emitted in **CONTROVERSY** mode. The input is ONE domain and the evidence,
+claims and strategies already accumulated in it. The output is what the
+field genuinely disagrees about, and what has been examined and found not
+to work.
+
+<RESEARCH_PRACTICE_CONTROVERSY>
+MODE:
+DOMAIN_REFERENCE:
+CONTROVERSIES_JSON:
+NEGATIVE_KNOWLEDGE_JSON:
+</RESEARCH_PRACTICE_CONTROVERSY>
+
+### Neither of these falls out of ingestion
+
+Positive extraction produces claims and strategies. It does not produce
+"these two bodies of evidence contradict each other" or "this was
+investigated and does not work", because no single source says either.
+Both require reading across what has accumulated, which is why this is a
+dedicated per-domain pass and not a stage of K09.
+
+### `CONTROVERSIES_JSON` — an array of genuine disagreements
+
+Strict JSON. Each object:
+
+| field | |
+|---|---|
+| `question` | **Required.** The question the field disagrees about, stated so both sides would recognise it. |
+| `summary` | What the disagreement is, in a sentence or two. |
+| `why_studies_disagree` | Design, population, dose, duration, outcome definition, funding — whatever actually differs. "More research is needed" is not an answer. |
+| `population_differences` | Who each body of evidence studied. Say so explicitly where vegetarian Indian adults are not represented. |
+| `current_consensus` | What is genuinely agreed, if anything. `null` where nothing is. |
+| `current_uncertainty` | What remains open. |
+| `practical_interpretation` | What a practitioner should do while this is unsettled. |
+| `positions` | **Required, at least two.** Each with `position`, `evidence_summary`, `population_context`, `held_by`. |
+
+**At least two positions, and the database enforces it.** A record with one
+position is a consensus statement or a gap wearing a controversy's
+clothes, and it would be retrieved and shown to the practitioner as a live
+disagreement. `trg_controversy_positions_at_commit` refuses it.
+
+**Do not manufacture controversy where strong consensus genuinely
+exists.** An empty array is a legitimate and common result. Inventing a
+disagreement to fill this block makes the library less trustworthy than
+leaving it empty, because a fabricated controversy is indistinguishable
+from a real one at retrieval time.
+
+`held_by` records who holds a position. It is **not** evidence (§12) and
+never substitutes for `evidence_summary`, which is required.
+
+### `NEGATIVE_KNOWLEDGE_JSON` — what was examined and does not work
+
+Strict JSON. Each object:
+
+| field | |
+|---|---|
+| `claim_or_strategy` | **Required.** What was investigated. |
+| `why_investigated` | **Required.** Why it looked promising. A finding with no reason to have looked cannot stop the next pass looking again. |
+| `evidence_examined` | **Required.** What was actually read. |
+| `finding` | **Required.** What the evidence showed. |
+| `current_interpretation` | What this means in practice now. |
+| `revisit_trigger` | **Required.** What would make us look again — a trial reporting, a population studied, a dose tested. |
+| `strategy_id` | Where this negates a strategy already in the library. |
+
+`ck_negative_is_actionable` requires `why_investigated`,
+`evidence_examined` and `revisit_trigger`. The purpose of this table is to
+**prevent repeated wasted research**, and a row missing any of the three
+cannot: the next pass cannot tell whether its question was already
+answered, or answered badly, or answered before the evidence changed.
+
+**A revisit trigger is required for the reason §70 forbids a COMPLETE
+status.** "This does not work" with no condition attached is a permanent
+verdict on a field that keeps moving.
+
+### Absence of evidence is not evidence of absence
+
+A strategy nobody has studied is a **gap** (§R15), not negative knowledge.
+Negative knowledge means *examined and found wanting*. Recording an
+unstudied intervention here would tell the library it has an answer when
+what it has is a hole.
+
+---
+
+## R15. MACHINE-READABLE GAP ASSESSMENT <RESEARCH_PRACTICE_GAPS>
+
+*Added by the build. §R2b defines gap assessment as governance and gives
+it three control-block fields — `GAP_ASSESSMENT_COMPLETE`,
+`OPEN_CRITICAL_GAPS`, `OPEN_HIGH_PRIORITY_GAPS` — all counts. Nothing
+carried the questions.*
+
+Emitted in **GAP** mode. The input is ONE domain, its coverage across the
+18 §R2a dimensions, and what it currently holds. The output is what this
+domain still does not know.
+
+<RESEARCH_PRACTICE_GAPS>
+MODE:
+DOMAIN_REFERENCE:
+GAPS_JSON:
+ASSESSMENT_JSON:
+</RESEARCH_PRACTICE_GAPS>
+
+### `GAPS_JSON` — an array of open questions
+
+Strict JSON. Each object:
+
+| field | |
+|---|---|
+| `question` | **Required.** What the library cannot currently answer, as a question. |
+| `severity` | `CRITICAL` \| `HIGH` \| `MEDIUM` \| `LOW`. |
+| `why_it_matters` | What decision is worse without it. |
+| `what_would_close_it` | The kind of source or evidence that would answer it. |
+
+**`CRITICAL` means the foundation is not usable for this domain until it
+is addressed**, and `foundation_ready` turns on there being none open
+(hard rule 11). It is not a synonym for "important". Reach for `HIGH`
+unless a practitioner would be misled without the answer.
+
+### `ASSESSMENT_JSON` — the governance record
+
+| field | |
+|---|---|
+| `dimensions_examined` | Which of the 18 §R2a dimensions this pass actually looked at. |
+| `note` | What the pass covered and what it deliberately did not. |
+
+**Finding zero gaps is a legitimate result and is not completion.** A row
+in `domain_gap_assessments` means the pass RAN; `gaps_found = 0` means
+none were identified today. §70 forbids a `COMPLETE` status and this block
+does not create one by another name.
+
+**An empty `GAPS_JSON` with no assessment is a failed run**, not a clean
+one. The pass either happened or it did not, and the two must not look the
+same — that distinction is the whole reason the governance record exists
+separately from the count.
+
+---
+
 ## 88. ORCHESTRATION CONTROL BLOCK — REQUIRED
 
 *Added by the build. The runtime cannot route without this.*
@@ -3259,7 +3662,7 @@ absent values typed as nullable.
 
 | Field | Type | How to determine it |
 |---|---|---|
-| `ENGINE7_MODE` | enum | `"FOUNDATION"` \| `"UPDATE"` \| `"CASE"` \| `"INBOX"`. Required. Determines which table below applies. `INBOX` is a manually added source processed through the Knowledge Inbox (§44–§55). |
+| `ENGINE7_MODE` | enum | `"FOUNDATION"` \| `"UPDATE"` \| `"CASE"` \| `"INBOX"` \| `"EVIDENCE"` \| `"SYNTHESIS"` \| `"CONTROVERSY"` \| `"GAP"`. Required. Determines which table below applies. `INBOX` is a manually added source processed through the Knowledge Inbox (§44–§55); `EVIDENCE` researches ONE claim (§R12); `SYNTHESIS` turns claims and their evidence into strategy decisions (§R13); `CONTROVERSY` is the dedicated per-domain pass over accumulated evidence (§R14) and `GAP` the dedicated gap assessment (§R15). Everything except `CASE` is knowledge-clock work: no client, `CASE_VERSION` 0. |
 | `CASE_VERSION` | integer | Echo the value supplied in the input. **In foundation, update and inbox mode emit `0`** — the contract requires this field on every run. |
 | `ENGINE_RUN_STATUS` | enum | `SUCCEEDED` \| `PARTIAL` \| `FAILED` \| `INSUFFICIENT_INPUT`. |
 | `ERROR_STATE` | string \| null | `null` unless `ENGINE_RUN_STATUS` is `FAILED`. |

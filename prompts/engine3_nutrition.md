@@ -1348,6 +1348,56 @@ IMPLEMENTATION_CONFLICTS:
 ENGINE1_REVIEW_REQUESTS:
 </NUTRITION_IMPLEMENTATION_HANDOFF>
 
+---
+
+## 70B. MACHINE-READABLE PLAN ITEMS <NUTRITION_PLAN_ITEMS>
+
+*Added by the build. The handoff above lists `CORE_INTERVENTIONS`,
+`SUPPORTIVE_INTERVENTIONS`, `OPTIONAL_INTERVENTIONS` and
+`SUPPLEMENT_OPTIONS` as prose for the next engine to reason with. Nothing
+carried them as DATA, and `client_interventions` has existed since
+migration 004 with nothing able to fill it.*
+
+Emitted after the handoff block and before the control block.
+
+<NUTRITION_PLAN_ITEMS>
+ITEMS_JSON:
+</NUTRITION_PLAN_ITEMS>
+
+### Why this exists, and it is not a summary of the handoff
+
+The same two reasons as §60B, and one more that is specific to nutrition:
+
+* **The deterministic safety rules (D6).** Carbohydrate reduction or
+  extended fasting for a client on insulin or a sulfonylurea is a HOLD —
+  because the plan WORKING is the hazard. Vitamin K, fish oil and turmeric
+  matter for a client on warfarin. Every one of those rules matches on the
+  intervention's NAME, so a plan that leaves no row passes clean for the
+  wrong reason.
+* **Engine 4** tracks response per intervention.
+* **Supplements are interventions here.** A supplement decision that never
+  becomes a row is invisible to the interaction rules, which is precisely
+  the case where invisibility is dangerous.
+
+### `ITEMS_JSON` — a strict JSON array
+
+| field | |
+|---|---|
+| `name` | **Required.** A short name — "fibre before carbohydrate at lunch", not a paragraph. |
+| `purpose` | The nutritional or clinical target it serves. |
+| `tier` | `PRIMARY` \| `SUPPORTIVE` \| `OPTIONAL`, matching the CORE / SUPPORTIVE / OPTIONAL split above. |
+| `kind` | `FOOD` \| `PATTERN` \| `SUPPLEMENT` \| `OTHER`. |
+| `minimum_version` | What remains when time, budget or appetite collapse. |
+
+**Everything here is PROPOSED**, exactly as in §60B. Nothing in this block
+starts an intervention or reaches a client; the practitioner review and
+Engine 5 are in between.
+
+**No medication instruction, ever.** §9 and hard rule 9: no engine tells a
+client to stop, reduce or change a prescribed medication. An item may say
+prescriber reassessment is warranted. That is a different thing and it
+belongs in `purpose`, not in a name that reads like a dose change.
+
 ## 70A. ORCHESTRATION CONTROL BLOCK — REQUIRED
 
 *Added after the original specification. The runtime cannot route without this.*

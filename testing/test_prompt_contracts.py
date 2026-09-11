@@ -20,7 +20,10 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+
 import psycopg
+import manifest as MF
 
 REPO = Path(__file__).resolve().parents[1]
 PROMPTS = REPO / "prompts"
@@ -79,22 +82,94 @@ def main() -> int:
 
     print("\ncomposition header cross-references")
     check("header states Part II is R1-R3", "Part II, §R1–§R3" in e7)
-    check("header states Part III is R4-R9 plus 88", "Part III, §R4–§R9 and §88" in e7)
-    check("header does not claim R1-R4", "§R1–§R4" not in e7)
-    check("header does not claim R5-R10", "§R5–§R10" not in e7)
+    # R10 was added by the build (D16 territory): §55 defines the Knowledge
+    # Inbox information gain in prose and no machine block ever carried it,
+    # so an INBOX run had no substantive output contract at all. These
+    # assertions exist because a merge accident once mis-stated the ranges,
+    # so they move together with the header rather than being relaxed.
+    # The header names the range Part III covers, and the build keeps
+    # extending it -- R10 for the INBOX handoff, R11 for the Claim Cards,
+    # R12 and R13 for evidence and synthesis. So the assertion is that the
+    # header AGREES WITH THE FILE, not that either equals a number written
+    # here. A hard-coded maximum is the other half of a comparison this
+    # file would also be writing, and it went stale three times (V2).
     r_secs = re.findall(r"^## (R\d+)\.", e7, re.M)
-    check("R sections run R1..R9 exactly",
-          r_secs == [f"R{i}" for i in range(1, 10)], str(r_secs))
+    numbers = [int(x[1:]) for x in r_secs]
+    check("R sections are contiguous from R1 with no gaps or repeats",
+          numbers == list(range(1, len(numbers) + 1)), str(r_secs))
+    check("there are enough of them to be Part III at all",
+          len(numbers) >= 10, str(len(numbers)))
+    last = f"R{numbers[-1]}" if numbers else "R?"
+    check(f"the header's stated range ends at the last section ({last})",
+          f"§R4–§{last} and §88" in e7,
+          next((line for line in e7.splitlines() if "Part III" in line), "no header line"))
+    check("header does not claim R1-R4", "§R1–§R4" not in e7)
+    check("header does not claim R5-R9", "§R5–§R9" not in e7)
     check("control block points at R2 for the dimensions, not R3",
           "§R3 domain-depth" not in e7 and "§R2 domain-depth" in e7)
 
     # ------------------------------------------------ handoff tags
     print("\nengine 7 handoff tags are emittable")
-    for tag in ("RESEARCH_PRACTICE_FOUNDATION_HANDOFF", "RESEARCH_PRACTICE_CASE_HANDOFF"):
-        check(f"<{tag}> present", f"<{tag}>" in e7)
-        check(f"</{tag}> present", f"</{tag}>" in e7)
+    # "Emittable" means a STANDALONE opening line, not a mention inside a
+    # section heading. §R8's tag lived only in its heading and §R9's only in
+    # the §R3 example, so a model following the field template literally
+    # would have produced a block the runtime cannot find. Both are
+    # build-owned (D16), so they were fixed rather than parsed around.
+    for tag in ("RESEARCH_PRACTICE_FOUNDATION_HANDOFF",
+                "RESEARCH_PRACTICE_CASE_HANDOFF",
+                "RESEARCH_PRACTICE_INBOX_HANDOFF"):
+        check(f"<{tag}> opens on its own line",
+              re.search(rf"^<{tag}>$", e7, re.M) is not None)
+        check(f"</{tag}> closes on its own line",
+              re.search(rf"^</{tag}>$", e7, re.M) is not None)
+    check("every E7 mode has a handoff block",
+          all(re.search(rf"^<{t}>$", e7, re.M) for t in
+              ("RESEARCH_PRACTICE_FOUNDATION_HANDOFF",
+               "RESEARCH_PRACTICE_CASE_HANDOFF",
+               "RESEARCH_PRACTICE_INBOX_HANDOFF")))
+    check("R8 says it serves FOUNDATION and UPDATE",
+          "Emitted in **FOUNDATION** and **UPDATE** mode" in e7)
+    check("the inbox block preserves the §55 information gain",
+          all(f in e7 for f in ("CONCEPTS_EXTRACTED:", "ALREADY_KNOWN:",
+                                "GENUINELY_NEW:", "SAFETY_ISSUES_IDENTIFIED:",
+                                "INFORMATION_GAIN_SUMMARY:")))
+    check("...and does not promote a candidate strategy",
+          "A candidate strategy is still a candidate" in e7)
 
     # ------------------------------------------------ hygiene
+    # ------------------------------------------------ manifest
+    print("\nMANIFEST.json is checkable, and checked")
+    # It used to carry `sections_expected`, a hand-declared number whose
+    # counting rule could not be reproduced -- no rule matched all seven
+    # prompts and the closest matched four. It looked like coverage and was
+    # not, and its Engine 7 sha256 had been stale since the D16 merge
+    # without anything noticing. Every field is derived now, and asserted
+    # here for all seven rather than for the one that happened to change.
+    manifest = json.loads((PROMPTS / "MANIFEST.json").read_text())
+    header, rows = manifest[0], manifest[1:]
+    check("the manifest documents its own counting rule",
+          header.get("_section_rule") and header.get("_section_rule_meaning"))
+    check("it covers all seven prompts",
+          {r["file"] for r in rows} == set(ALL_ENGINES), str(sorted(
+              r["file"] for r in rows)))
+    stale = []
+    for row in rows:
+        fresh = MF.entry(PROMPTS / row["file"])
+        for field, value in fresh.items():
+            if row.get(field) != value:
+                stale.append(f"{row['file']}.{field}: manifest={row.get(field)!r} "
+                             f"actual={value!r}")
+    check("every manifest field matches the file it describes",
+          not stale, "; ".join(stale[:3]))
+    check("every prompt declares a handoff tag that opens on its own line",
+          all(r["has_handoff_open_tag"] for r in rows),
+          str([r["file"] for r in rows if not r["has_handoff_open_tag"]]))
+    check("...and closes on its own line",
+          all(r["has_handoff_close_tag"] for r in rows))
+    check("...and carries a control block", all(r["has_control_tag"] for r in rows))
+    check("no two prompts have the same sha256",
+          len({r["sha256"] for r in rows}) == 7)
+
     print("\nprompt hygiene")
     hashes = {}
     for name in ALL_ENGINES:

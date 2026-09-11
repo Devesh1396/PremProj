@@ -734,6 +734,1128 @@ keeps the old text readable.
 
 ---
 
+## D24 — The control block routes; the handoff is the reasoning. Never interchangeable
+**SETTLED — found in review, before the n8n port**
+
+Every prompt defines **two** machine-readable outputs, not one:
+
+| | |
+|---|---|
+| `<..._HANDOFF>` | The substantive reasoning — strategies, evidence, effect magnitude, applicability, targets, implementation. What the next engine thinks with. |
+| `<CONTROL_BLOCK>` | ~17 typed fields. What n8n routes and gates on (D14). |
+
+`RUN_ENGINE` parsed only the second. `EngineResult.structured` was `None`
+on every return path; `engine_outputs.structured` was written from
+`req.structured_input.get("_echo", {})` — the **input's** `_echo` key,
+which nothing has ever set, so it stored `{}` on every run since the engine
+layer was built. `CLIENT_NEW` then passed control blocks downstream as
+`E7_HANDOFF` and `E1_HANDOFF`, and built both case versions out of the
+input it had handed Engine 6 rather than Engine 6's answer.
+
+The pipeline executed correctly end to end and almost none of the reasoning
+moved. Engine 1 Pass B — which exists solely to see Engine 7's retrieval
+(D4) — was receiving eight routing booleans where the strategies and
+evidence should have been.
+
+**A valid control block is not evidence that an engine did its work.** That
+is now structural: a response missing a required handoff joins the same
+`errors` list as a contract violation, so it travels the repair retry and
+dead-letters. It does not add a third failure path.
+
+**The expected tags are a registry**, the third instance of the pattern
+`010` gave the prompts and `012` gave the contract. `engine_handoffs` is
+keyed `(engine, mode, tag)` with a `required` flag, modes are rows rather
+than an enum (D19), and the loader **verifies every tag against the
+registered prompt** before loading — a renamed tag fails the load instead
+of registering a block no engine will ever emit. n8n reads the same rows.
+
+**Modes exist because two engines emit different blocks.** E6 §A1: the full
+`<CASE_MEMORY_HANDOFF>` establishes or rebuilds state, the
+`<CASE_MEMORY_DELTA>` records an incremental change and is the normal path
+on follow-up. E7 emits a CASE or a FOUNDATION handoff. **E6 and E7 have no
+default mode** — guessing means expecting a delta where a state was needed,
+or the reverse, and both write a case record that is quietly wrong.
+
+**A delta is not a state.** `004` created two columns for this:
+`canonical_state` is "Full canonical state (CASE_MEMORY_HANDOFF)", `delta`
+is "Only what changed". `get_current_client_state()` returns the former, so
+storing a delta there would hand every engine a description of a change as
+though it were the case. `_new_case_version` refuses to write a version
+without a full state.
+
+**CLIENT_NEW's second Engine 6 call runs in `REBUILD`, not `UPDATE`.** This
+is a deviation worth stating plainly. Version 2 needs a complete state
+because `canonical_state` is `NOT NULL` and every engine reads it, and a
+delta cannot be mechanically merged into a state — its fields
+(`NEW_FACTS`, `UPDATED_FACTS`, `RESOLVED_ITEMS`) describe changes and do
+not map onto the state's fields, so merging would mean inventing Engine 6's
+semantics. §A1's own word for this is *rebuilding*: the case is still being
+established, across one cycle. The delta is **optional** in `REBUILD` mode
+and is kept in the `delta` column rather than discarded. `CLIENT_FOLLOWUP`
+is where `UPDATE` and the delta path belong.
+
+**Typed values come from typed places.** A handoff block is line-oriented
+`KEY: text`, so every value in it is a **string** — Engine 6 writes
+`CASE_VERSION: 1` and it parses as `"1"`, which the control contract
+correctly rejects as not an integer. The fix is not per-field coercion: it
+is that `client_case_versions.case_version` is an integer column assigned
+by the insert, and D18 rests on stored versions starting at 1. Engine 6's
+line is its claim; the row is the fact.
+
+**The parser discards nothing.** A key is an ALL-CAPS identifier followed
+by a colon **at column zero** — narrow on purpose, because `Note: take with
+food`, an indented `IMPORTANT:` and a prefixed `- STRATEGY_A:` are all
+values, not keys. `_raw` keeps the block verbatim so a mis-split value is
+recoverable, text before the first key is kept as `_preamble`, a repeated
+key keeps both values, and unknown keys are kept as they come: the registry
+says which BLOCK is expected, never which fields are permitted inside it.
+
+*Rejected:* treating the control block as the handoff when a handoff is
+absent. It is the bug, written down as a policy.
+
+*Rejected:* a dict in `run_engine.py` mapping engine to tag. This is the
+third time the same question has come up — which specification, which
+schema, which handoff — and a third bespoke mechanism would be the point at
+which the pattern stopped being a pattern.
+
+*Rejected:* asking Engine 6 for a full state on every update. §A1 says
+plainly not to restate unchanged state as though it were new, and
+`CLIENT_FOLLOWUP` will run many updates per case.
+
+*Rejected:* requiring handoffs to be JSON. The prompts specify a
+line-oriented format, they are authoritative (hard rule 1), and changing
+seven master specifications to suit a parser is the wrong direction. The
+parser was made lossless instead.
+
+### D24a — the requested mode is transmitted, not merely resolved
+
+`RUN_ENGINE` resolved `handoff_mode` and then never told the model. The
+mode went into provider `params`, the fixture read it, and
+`openai_compatible_provider` ignores `params` entirely — so `INIT` versus
+`REBUILD`, the difference between Engine 6 emitting a full state and
+emitting a delta, reached the wire as **nothing at all**.
+
+E1 looked fine only because `client_new.py` hand-wrote `"MODE": "PASS_A"`
+into its structured input. That is the accident, not the fix: a key a
+caller must remember is a key a caller will forget, and E6 and E7 duly
+did.
+
+`RUN_ENGINE` now injects a `<RUNTIME_INVOCATION>` envelope ahead of the
+payload — engine, mode, pass, the expected and required handoff blocks —
+**once, generically, for every engine**. The hand-written `MODE` keys are
+gone from `client_new.py`, `measure_engine1.py` and the suites, and a test
+asserts no script outside `run_engine.py` writes one. The repair retry
+rebuilds the same envelope, so attempt two is not a differently-shaped
+request.
+
+The envelope is runtime metadata, not engine specification: it says which
+mode was requested, and the **prompt** says what that mode means. n8n
+builds the identical string from the identical registry rows.
+
+*Rejected:* a fixture-level test. The fixture reads the param the live
+path throws away, which is exactly why this survived. The test intercepts
+`urlopen` and asserts against the bytes
+`openai_compatible_provider` would have sent.
+
+### D24b — §R8/§R9 corrected, §R10 added
+
+`RESEARCH_PRACTICE_FOUNDATION_HANDOFF`'s opening tag appeared only inside
+its §R8 heading, and `RESEARCH_PRACTICE_CASE_HANDOFF`'s only in the §R3
+example. A model following either field template literally would emit a
+block the runtime cannot find.
+
+**D16 draws the line and it falls on our side.** Part I §1–§87 is the
+client's text, verbatim and untouchable; Parts II/III §R1–§R9 are
+build-owned. So both were fixed to carry a standalone opening tag rather
+than teaching the verifier to accept a formatting accident. The verifier
+now requires a standalone **opening** line and keeps the closing-tag check
+as a second assertion.
+
+`ENGINE7_MODE` is `FOUNDATION | UPDATE | CASE | INBOX` (§3262) and only two
+were registered. **UPDATE** shares the foundation contract — an update is a
+smaller foundation pass, not a different output. **INBOX had no substantive
+output contract at all**: §55 defines what Engine 7 must report from a
+manually added source and describes it in prose, so an INBOX run could only
+ever have produced a control block. Reusing that as the handoff would be
+D24 again, so §R10 adds
+`<RESEARCH_PRACTICE_INBOX_HANDOFF>` carrying §55's information-gain fields
+verbatim plus §56's versioning, and states that a candidate strategy stays
+a candidate.
+
+Adding §R10 moved the composition header, the R-range assertions and the
+prompt hash together — those assertions exist because a merge accident
+once mis-stated the ranges, so they were updated, never relaxed.
+`MANIFEST.json`'s E7 entry was already stale before this change; only
+`sha256`, `chars` and `words` were refreshed. `sections_expected` is a
+hand-declared invariant with a different counting rule and was left alone
+rather than overwritten with a recount that would have changed all seven
+entries.
+
+---
+
+## D25 — Engine runs set transaction-local client scope, and always have to
+**SETTLED — found preparing the n8n port; a real blocker, not a tidy-up**
+
+`set_client_scope()` appears nowhere in `scripts/`. Connecting as
+`phi_runtime` and calling `run_engine()` fails on its **first statement**,
+both ways:
+
+```
+client run       InsufficientPrivilege: new row violates row-level
+knowledge clock  security policy for table "engine_runs"
+```
+
+Two independent causes, and the Python reference has never hit either
+because `DATABASE_URL` connects as `phi_admin`, which is **SUPERUSER** and
+so bypasses RLS entirely. **Every engine run this system has ever made went
+around the policies rather than through them.** n8n connects as
+`phi_runtime` (hard rule 8) and would have been the first thing to discover
+that — in production, on a pooled connection.
+
+**Cause 1: nothing set the scope.** Fixed in `run_engine.py`. Every write
+now runs inside an explicit transaction that calls `set_client_scope()`
+first, via one `client_scope()` context manager, and the n8n workflow
+mirrors it: each Postgres node runs `SELECT set_client_scope($1)` and its
+statement in one transaction.
+
+The transaction wraps the **write**, never the model call. Scope is
+transaction-local by design so a pooled connection cannot carry Client A's
+context into a later Client B query — but holding one transaction across a
+300-second provider call would leave a connection idle-in-transaction for
+five minutes.
+
+**Cause 2: a knowledge-clock run has no client.** Engine 7 in FOUNDATION,
+UPDATE or INBOX mode carries `client_id` NULL and `CASE_VERSION` 0 (D18),
+and the policy was `client_id = current_client_scope()`. `NULL = anything`
+is never true, so those runs were unwritable as `phi_runtime` whatever
+scope was set. Migration `014` widens the runtime policy on `engine_runs`
+and `engine_outputs` to `client_id IS NULL OR client_id =
+current_client_scope()` — **the same judgement and the same policy shape
+005 already applied** to `chat_threads` and `chat_messages`: "carries no
+client data, so it stays readable without a client context."
+
+This does not widen access to client rows. A run **with** a client is still
+visible only under that client's scope.
+
+*The cost of tolerating NULL*, stated rather than glossed: a CASE run that
+lost its client would now file quietly as a knowledge-clock run instead of
+being rejected. `v_runs_without_client` is the check — only Engine 7 has
+clock modes, so any other engine without a client lost it somewhere — and
+the suite asserts it is empty.
+
+**The test that matters is the pooled one.** Two clients run back to back
+on **one** `phi_runtime` connection, and neither can see the other's rows
+under its own scope, with no `client_id` filter in the query. That test is
+close to meaningless in Python — one short-lived connection — and
+essential in n8n, whose Postgres node pools.
+
+*Rejected:* running n8n as `phi_admin` so the policies do not apply. It is
+hard rule 8, and it would make the isolation guarantee decorative.
+
+*Rejected:* giving knowledge-clock runs a synthetic client id. Inventing a
+client so a policy passes is how a system loses the meaning of the word.
+
+*Rejected:* one long transaction around the whole run. Correct for scope
+and wrong for everything else: a five-minute idle-in-transaction
+connection per engine call, on a 2 vCPU box.
+
+---
+
+## D26 — n8n parity is byte-identical, and the wording of a violation is ours
+**SETTLED**
+
+The n8n port mirrors `scripts/run_engine.py`. "Behaviourally equivalent" is
+not the bar: **the prompt hash plus the request IS the call**, and two
+serializers that mean the same thing produce different model behaviour with
+nothing downstream to notice.
+
+**One stored corpus, two implementations, identical output** — the third
+use of the pattern the contract registry established, and the third time it
+found something.
+
+### The two ways Python and JavaScript actually disagreed
+
+Measured over a corpus covering ASCII, non-ASCII, nesting, empty
+containers, big integers and every JSON escape. Everything agreed except:
+
+| | |
+|---|---|
+| non-ASCII | Python escaped to `\uXXXX` by default; JavaScript did not |
+| integral floats | Python wrote `78.0`; JavaScript wrote `78` |
+
+`canonical_json()` fixes both. `ensure_ascii=False` is an improvement on
+its own merits — escaping "idli, sambar" or a rupee sign costs tokens and
+hides the text from the model. Integral floats become ints because JSON has
+one number type and JavaScript cannot tell `78.0` from `78` once parsed; a
+weight of 78.0 kg and a weight of 78 kg are the same measurement, and
+byte-identical requests are worth more than a trailing zero.
+
+### The wording of a contract violation is defined here, not inherited
+
+```
+jsonschema  "'CASE_VERSION' is a required property"
+ajv         "must have required property 'CASE_VERSION'"
+```
+
+That string is **not cosmetic**. It is persisted to
+`engine_runs.error_detail`, and `repair_instruction()` sends it to the
+model on attempt two. Two implementations disagreeing means n8n asks the
+model to fix something in different words than the reference does, on the
+one retry that matters.
+
+So `format_violation(field, keyword, detail)` defines the wording, both
+sides build it from their own library's **structured** error data, and the
+parity suite proves they agree. Applicator keywords (`if`, `then`,
+`allOf`, …) are skipped on both sides: they are containers, they name no
+field, and their child errors carry the real blame.
+
+### The JavaScript under test is extracted from the workflow
+
+`testing/n8n_parse_response.js` reads the Code-node source out of
+`workflows/run_engine.json` at run time. A copy would drift from the
+workflow it claims to test, and parity would then be proving that two test
+helpers agree.
+
+### What the corpus covers
+
+Valid execution; an invalid control block three ways; a missing substantive
+handoff; a handoff block present but empty; **the wrong block for the
+mode** (an `UPDATE` that returned only a state); a fenced control block; a
+handoff whose value lines look like keys; an empty response; E6 INIT /
+REBUILD / UPDATE; E7 CASE / FOUNDATION / UPDATE / INBOX; E1 Pass A and Pass
+B; token and cost accounting.
+
+*Rejected:* comparing verdicts and blamed fields only, as
+`test_contract_registry.py` does for the schema. That is right for "is this
+control block valid"; it is not enough once the message text reaches a
+model and a database column.
+
+*Rejected:* executing the whole workflow through a live provider to prove
+parity. Deterministic comparison covers it, and paid calls prove nothing
+extra.
+
+---
+
+## D27 — The mode is stored on the run, and coherence is checked before the insert
+**SETTLED**
+
+`v_runs_without_client` (migration 014) read
+`client_id IS NULL AND engine <> 'E7'`. That is two rules where there are
+four, and the exemption it grants is far too wide: it permits **every**
+Engine 7 run without a client, including **E7 CASE**, which is client work
+and cannot be a case with no case.
+
+| | |
+|---|---|
+| E1–E6 | client **required** |
+| E7 `CASE` | client **required** |
+| E7 `FOUNDATION` / `UPDATE` / `INBOX` | client **must be NULL** |
+
+### The real defect was that the mode was not on the run
+
+The rule could not be checked correctly by any view, because the only place
+a mode was recorded was `engine_outputs.handoff_mode` — a row that exists
+only after a run **succeeds**. So the mode of a dead-lettered run, or an
+in-flight one, was unknowable, and the mode of any run was inferable only
+from the engine name plus a guess. A guard that can only evaluate
+successful runs is not a guard.
+
+`engine_runs.engine_mode` is written by `RUN_ENGINE` at the moment the run
+opens, from the mode it already resolved for the `<RUNTIME_INVOCATION>`
+envelope (D24a). One typed column, no inference anywhere.
+
+### A trigger, not a CHECK constraint
+
+The VPS is running `main` and has `engine_runs` rows from before this. A
+CHECK would have to either reject that history or carry a permanent escape
+hatch that new rows could use too. `trg_engine_run_coherent` is BEFORE
+INSERT: history is grandfathered by construction and nothing new can skip
+it. Pre-015 rows are not hidden — `v_engine_run_incoherent` lists them as
+"mode not recorded".
+
+*Note for anyone writing a test:* a BEFORE INSERT trigger fires **before**
+CHECK constraints. `test_knowledge_inbox.py` had to start supplying a valid
+`engine_mode` for `ck_run_clock_coherent` to remain the thing its assertion
+was actually testing.
+
+*Rejected:* deriving the mode from the engine name. E7 has four modes and
+two of them route in opposite directions on the client question. There is
+nothing to derive it from.
+
+*Rejected:* keeping the view and fixing only its WHERE clause. A view
+detects; it does not prevent. The brief asked for enforcement before the
+insert, and after the insert is after the payload already exists.
+
+---
+
+## D28 — A failed engine response is client data, not telemetry
+**SETTLED**
+
+`dead_letter_jobs` has existed since `001_ops.sql` with **no `client_id`
+and no row level security**, while `RUN_ENGINE` writes up to 8,000
+characters of raw failed model output into `raw_payload`. For a case run
+that raw output is the client's labs, conditions, medications and
+symptoms — the clinical record in a different shape. Every one of those
+rows was readable by `phi_runtime` under **any** client scope.
+
+Hard rule 8 says client isolation is structural. It does not have an
+exception for the failure path, and calling the payload "telemetry" would
+be a relabelling, not a fix — the bytes are the same bytes.
+
+**The payload is kept.** Debugging a dead letter without the response that
+caused it is guesswork, and the point of the queue is that a malformed
+output can be inspected rather than lost. It is kept **and scoped**:
+`client_id` is nullable, RLS is `ENABLE` + `FORCE`, and the runtime policy
+is `client_id IS NULL OR client_id = current_client_scope()`.
+
+Nullable because dead letters that genuinely carry no client data are
+real — knowledge-clock runs and source ingestion — and those stay readable
+without a scope, exactly as 005 decided for `chat_threads` and 014 for
+knowledge-clock runs. It is the same rule in both places: no client, no
+scope needed; a client, scope enforced.
+
+`v_dead_letter_triage` answers the first question anyone actually asks —
+how many, since when, still happening — **without a `raw_payload`
+column**. Reading someone's failed clinical text should take a deliberate
+scoped query, not be the by-product of checking whether the queue is
+backing up.
+
+Forward migration, never a redefinition of `001` (hard rule 10): the
+column is added, existing rows are backfilled from the run they belong to,
+and rows whose client cannot be recovered stay NULL rather than being
+guessed at.
+
+*Rejected:* dropping `raw_payload`, or truncating it to a hash. That
+trades a fixable isolation problem for a permanent debugging one.
+
+*Rejected:* a separate `dead_letter_jobs_client` table. Two queues means
+two things to check and one of them will be forgotten; the scoping key
+belongs on the row.
+
+---
+
+## D29 — n8n retries the way the reference retries
+**SETTLED**
+
+The HTTP Request node was configured with **six retries at a fixed
+2,000 ms**, under a note describing exponential backoff. `run_engine.py`
+does exponential backoff, jittered, capped at 60 s, with `Retry-After`
+honoured when the provider sends one, and retries **only** the statuses
+that can succeed on a repeat.
+
+The gap matters most exactly where it is least visible: Step 16's
+Knowledge Factory, at `KNOWLEDGE_MAX_CONCURRENCY` 2–3, on a 2 vCPU box.
+Fixed-interval retries from concurrent workers all come back at the same
+instant and re-overload a provider that is already shedding load. Jitter is
+the whole reason the reference has it.
+
+n8n's own retry cannot express any of this, so **the call moved into the
+Code node** and the semantics are the reference's:
+
+| | |
+|---|---|
+| retryable | 408, 409, 425, 429, 500, 502, 503, 504, and network-level failures |
+| permanent | everything else, 400 and 401 included — an unrecognised error is not retried |
+| delay | `min(60, base ** attempt)`, then multiplied by `0.5 + random()` |
+| `Retry-After` | delta-seconds honoured, capped at 60; unparseable falls back to backoff, never to zero |
+| accounting | one `cost_events` row per **physical** attempt, failures included |
+
+Tested deterministically against a local stub — 18 assertions, no paid
+calls — including that a transport failure never consumes one of the two
+**repair** attempts. Those are different budgets: a repair is a second
+request with a violation message attached, and spending it on a 503 means
+a malformed response gets one chance instead of two.
+
+*Rejected:* documenting the fixed-interval node as an intentional
+divergence. D26's bar is parity, the divergence had no upside, and its
+first symptom would have been a Knowledge Factory batch failing under load
+in a way nothing distinguishes from a provider outage.
+
+---
+
+## D30 — The rate card is rows too. The fourth registry
+**SETTLED**
+
+Prompts (`010`), the orchestration contract (`012`) and the handoff
+registry (`013`) all moved from files to rows for one reason: **n8n cannot
+read this repository.** `config/model_prices.json` was the last thing
+`RUN_ENGINE` read from disk, and the consequence surfaced the moment the
+n8n cost node was written — it had nowhere to get a rate.
+
+The choice was to write `UNPRICED` for every n8n call, or to make the rate
+card readable the same way everything else is. UNPRICED is not a small
+divergence: **n8n is production and the Python path is the reference**, D5
+was decided on cost numbers, and Step 16 will push thousands of Knowledge
+Factory calls through the workflow. A production path that cannot price its
+own calls makes the cost table describe the reference implementation
+instead of the system.
+
+So `model_prices` is a table, `scripts/load_prices.py` is the fourth
+loader, and the SQL function `price_call()` reproduces
+`pricing.price_call()`: env override, exact model name, longest matching
+prefix, else UNPRICED with a **NULL** cost — never zero, which would read
+as "this call was free". A fresh deployment now runs **four** loaders after
+migrating.
+
+Two implementations of one rule, compared over a corpus. That arrangement
+has now found something four times out of four.
+
+A model removed from the file is **deactivated, never deleted**: its rate
+is the evidence for every `cost_events` row already priced with it.
+
+---
+
+## D31 — The workflow's SQL is executed by a test, because reading it is not enough
+**SETTLED**
+
+`test_n8n_parity.py` proved the two implementations build the same request
+and read the same response. Nothing ever executed the third thing the
+workflow does, which is **write** — and three defects were sitting in it
+at once, all introduced in the same sitting as the migrations that made
+them wrong:
+
+* `Open run` did not send `engine_mode`, so **every** n8n run would have
+  been rejected by the coherence trigger D27 had just added.
+* `Dead letter` did not send `client_id`, so every n8n dead letter would
+  have been exactly the unscoped cross-client payload D28 had just fixed.
+* `Record attempts` inserted into `latency_ms`, a column that has never
+  existed, and cast `error_class` to `failure_type` — an enum belonging to
+  the case layer's intervention-failure vocabulary, which has nothing to do
+  with engine errors and does not contain `SCHEMA_INVALID`.
+
+### Two of them were not SQL mistakes at all
+
+They were mistakes about how n8n turns a `queryReplacement` expression
+into a parameter list. At Postgres node v2.5 that algorithm is surprising
+in three separate ways, none of them documented:
+
+1. **Literal text outside `{{ }}` is discarded.** `RUN_ENGINE_{{ engine }}`
+   binds `E1`, not `RUN_ENGINE_E1` — so `job_type` and `workflow` were
+   silently losing their prefix.
+2. **`null` becomes the string `'null'`.** Against a `uuid` column that is
+   an error; against `text` it is worse, because it succeeds.
+3. **A resolved string that is not JSON is split on commas** into several
+   parameters. One comma in an error message shifts every parameter after
+   it.
+
+**SUPERSEDED BY D32 ON THE FIX, NOT ON THE FINDING.** The three
+behaviours above are real and still hold. The fix recorded here was the
+**array form** — a single `{{ [a, b, c] }}`, which on 2.35.7 takes a
+branch that has none of them. That branch **does not exist on 2.11.4**,
+the version this system runs, where an array is stringified and bound as
+one value. See D32 for the form actually in use: one resolvable per
+parameter, each a JSON literal, unwrapped with `($n::jsonb #>> '{}')`.
+
+Recorded rather than rewritten, because the lesson is the point: this fix
+was verified thoroughly against the wrong version.
+
+`testing/n8n_bind_params.js` is a faithful port of that algorithm, and
+`test_n8n_sql.py` binds the workflow's **real** expressions through it and
+executes the resulting SQL against the real database as **`phi_runtime`**.
+It also compares the INSERT column lists of both implementations, which is
+what makes a missing `engine_mode` a failure rather than a silent
+difference.
+
+Ported rather than imported: n8n is not a dependency of this repository and
+must not become one for a test to run. Same reasoning as `scripts/trigram.py`.
+
+*Rejected:* asserting on the SQL text. Two of the three defects were
+invisible in the text and one of them was in the JSON around it.
+
+---
+
+## D32 — n8n is pinned to 2.11.4, the version the VPS runs. The VPS is not upgraded
+**SETTLED 2026-09-10**
+
+The VPS's n8n stack runs **three live business automations** (GFG T1 v2,
+AiSensy, a detection PoC) that have nothing to do with this build. An
+upgrade window is not free, and there was nothing to buy by taking one: the
+binding quirks this workflow depends on knowing were read out of the
+installed node's own source, not inherited from a newer release.
+
+**The pin follows the VPS. It is never raised to keep current.** A future
+session that "helpfully" bumps `N8N_VERSION` is reintroducing the problem
+this decision closes.
+
+### Re-pinning was not a one-line change, and that is the point
+
+`n8n-nodes-base` **2.11.2** is what n8n 2.11.4 ships. Diffing its
+`executeQuery.operation.js` against 2.35.7's turned up one difference, and
+it was load-bearing:
+
+```
+2.35.7   an expression evaluating to an ARRAY pushes one value per
+         element, preserving null and passing strings through whole
+2.11.2   there is no such branch. An array is JSON.stringify'd like any
+         other object and pushed as ONE value
+```
+
+Every `queryReplacement` in `workflows/run_engine.json` had been written as
+a single `{{ [a, b, c] }}` to use that branch — the fix from D31, made
+against the wrong version. On 2.11.4 that binds **one** parameter where the
+statement wants twelve, and **every Postgres node in the workflow fails on
+the first run**. Verified by driving the real 2.11.2 module: Open run
+bound 1 of 12, Record attempts 1 of 9, Record success 1 of 12, Dead letter
+1 of 10.
+
+### The form that is exact on both
+
+One resolvable per parameter, each evaluating to a **JSON literal**:
+
+```
+={{ JSON.stringify(a ?? null) }},{{ JSON.stringify(b ?? null) }}
+```
+
+`isJSON()` is then true for every one, so each is pushed whole on either
+version — no branch that only one of them has. SQL unwraps with
+`($n::jsonb #>> '{}')`, which turns JSON `null` into a real SQL NULL and
+returns a comma-bearing string intact. `?? null` before `JSON.stringify` is
+not decoration: `JSON.stringify(undefined)` returns `undefined`, not a
+string, and `stringToArray('')` drops it — shifting every later parameter.
+
+Verified against **both** real implementations over the workflow's own
+expressions: identical values, identical count, and the count matches the
+highest `$n` each statement uses. `test_n8n_sql.py` asserts that arity
+match for every node on every run, and that no node uses the array form.
+
+### What was checked before accepting the pin
+
+| Node | Workflow uses | 2.11.2 supports |
+|---|---|---|
+| `postgres` | 2.5 | 2 … **2.5** … 2.6 |
+| `code` | 2 | 1, **2** |
+| `if` | 2.2 | 2, 2.1, **2.2**, 2.3 |
+| `executeWorkflowTrigger` | 1.1 | 1, **1.1** |
+
+*Rejected:* upgrading the VPS. It buys a workflow proven against the
+version it runs on — which re-pinning also buys, at no risk to three live
+automations.
+
+*Rejected:* keeping the 2.35.7 pin and "testing on 2.11.4 later". Later is
+after the first import fails.
+
+---
+
+## D33 — The Code node has no `fetch`, and a test that runs the code in plain Node cannot know that
+**SETTLED 2026-09-10**
+
+`workflows/run_engine.json`'s Call provider node was written with
+`await fetch(url, …)`. **It could never have run.** n8n's Code node
+executes inside `vm2`, and that sandbox does not provide `fetch` or `URL`.
+Verified empirically against the installed vm2 — the same answer on 2.11.4
+and 2.35.7, so this was never a version question:
+
+```
+setTimeout function   Promise function   Math object
+JSON object           Date function      helpers object
+fetch UNDEFINED       URL   UNDEFINED
+```
+
+Every retry assertion passed anyway, because `testing/n8n_retry.js`
+extracted the node's source and ran it with `new Function(...)` **in plain
+Node, where `fetch` is a global**. The harness was more capable than the
+runtime it claimed to model, which is the same failure as bug 57 wearing
+different clothes: a check that cannot see the condition it exists to
+catch.
+
+### Two fixes, and the second is the durable one
+
+**The node** now calls `helpers.httpRequest`, which the Code node's context
+does provide. Options read from n8n-core 2.11.1's implementation, not
+guessed:
+
+| | |
+|---|---|
+| `returnFullResponse: true` | returns `{ body, headers, statusCode, statusMessage }` |
+| `ignoreHttpStatusErrors: true` | sets axios `validateStatus = () => true`, so a 4xx/5xx **returns** instead of throwing — which is what lets the retry loop see the status and decide |
+| a network failure | still throws, and is retryable, as in Python |
+
+Header names arrive **lowercased** (axios), so `Retry-After` is read
+case-insensitively.
+
+**The harness** now runs the extracted source in `node:vm` with a context
+carrying exactly the host globals vm2 provides and nothing else. A fresh vm
+context has the JS intrinsics and none of Node's additions, which is the
+same shape — so a node reaching for `fetch` throws `ReferenceError` there
+just as it would in n8n. `node:vm` is built in; **vm2 is not a dependency
+of this repository and must not become one for a test to run** — the same
+reasoning as `scripts/trigram.py` and `testing/n8n_bind_params.js`.
+
+### The bug the fix uncovered
+
+With `fetch` restored temporarily to prove the harness catches it, the
+`ReferenceError` was **retried five times with exponential backoff** and
+then dead-lettered as a transport failure. The node treated every thrown
+error as a network error; Python retries `URLError`, `TimeoutError` and
+`ConnectionError` and **nothing else**, so a `NameError` there fails on the
+first attempt.
+
+So thrown errors are now classified by network `code` (`ECONNREFUSED`,
+`ETIMEDOUT`, `ENOTFOUND`, …) exactly as statuses are classified by number.
+A programming error has no such code, fails once, and is reported as
+itself. A bug in this node must be loud, not slow.
+
+*Rejected:* requiring vm2 in the test suite to get a perfect sandbox.
+`node:vm` reproduces the property under test — host globals absent — and
+adding an n8n internal as a test dependency is how a suite starts testing
+n8n instead of this build.
+
+---
+
+## D34 — Embeddings are 1536-dimensional, from `gemini-embedding-2`, and the database enforces both
+**SETTLED 2026-09-10**
+
+Every input to this was **measured**, not recalled — web search was
+unavailable and Google's documentation was blocked by the egress proxy, so
+the provider questions were answered by calling the API. Full evidence in
+`docs/evidence/embedding_dimension_probe.md`.
+
+| measured | |
+|---|---|
+| `gemini-embedding-001` truncated to 1536 | L2 norm **0.702** — not normalised |
+| `gemini-embedding-2` at 3072 / 1536 / 768 | **1.000000** at every one |
+| pgvector 0.6.0, `vector(3072)` + HNSW | `ERROR: column cannot have more than 2000 dimensions for hnsw index` |
+| a genuine unit vector at 1536 dims | round-trips through float4 with error **1.49e-06** |
+| already embedded, anywhere | **nothing** — 5 columns, 4 HNSW indexes, 0 rows |
+
+### Why 1536 and not 3072
+
+pgvector **refuses to index** above 2000 dimensions. 3072 stores and
+computes, so the failure is not an error — it is every similarity query
+silently becoming a sequential scan. Indexing 3072 needs pgvector ≥ 0.7 and
+`halfvec`; the image here is 0.6.0 and the VPS's version has never been
+checked. Against that, a probe comparing 3072 and 1536 rankings found the
+top two identical and ranks 3/4 swapped between two documents 0.004 apart —
+noise at a tie boundary. One probe is not a benchmark, and it is enough to
+say the quality difference does not pay for the index it would cost.
+
+Nothing was embedded when this was decided, so the answer cost no re-embed.
+That was the cheap moment and it was used.
+
+### Why `gemini-embedding-2`
+
+Because it removes the hazard rather than managing it. With `-001`,
+truncation to 1536 requires the caller to re-normalise, and a
+re-normalisation step that is silently skippable will eventually be
+skipped. `-2` returns unit vectors at every supported dimensionality, so
+there is no step to skip.
+
+### A correction to the premise, because it changes what to guard
+
+`<=>` — cosine distance, which **all four HNSW indexes here use** — is
+norm-invariant: measured 1.8e-08 between a vector and the same direction
+scaled to 0.7. Cosine *ranking* therefore survives unnormalised vectors.
+The hazard is real for `<->` and `<#>`, and for any column holding a mix of
+normalised and unnormalised rows where magnitudes are compared — but it is
+narrower than "cosine is quietly wrong", and worth stating precisely so the
+guard is built for the actual failure.
+
+### What the database now enforces (migration 018)
+
+1. **Every vector carries its provenance.** `embedding_model` and
+   `embedding_dim` on all five tables, required whenever `embedding` is not
+   null. A vector cannot say what produced it.
+2. **A non-unit-norm vector is refused on write**, with the norm it
+   actually had in the message. Tolerance **1e-3**, chosen from the
+   measurements above: ~670× the float4 noise floor, ~200× smaller than the
+   failure it catches.
+3. **A second model or dimensionality into one column is refused.**
+   `embedding_provenance` pins each table on its first write. Changing it
+   means clearing the column and calling
+   `reset_embedding_provenance()`, which itself refuses while any vector
+   remains — the friction is the point, because that clearing *is* the
+   re-embed.
+
+The norm is computed as `sqrt(-(v <#> v))`. `<#>` is the negative inner
+product, so that is the dot product with itself — no helper function, so it
+works on pgvector 0.6.0 where `l2_normalize` does not exist.
+
+### The dimension had three copies and no check
+
+`EMBEDDING_DIM` in `.env.example` (**read by no code at all**), plus a
+`dim int := 1536` literal in `002_concepts.sql` and again in
+`003_knowledge.sql`, each commented "must match" the other two.
+
+The fix is not a fourth copy. pgvector stores a column's dimension in
+`atttypmod`, so `embedding_dim()` reads it from the **catalog** and
+everything derives from that. `018` additionally asserts all five columns
+agree, and `test_embeddings.py` asserts `.env.example` agrees with the
+database. There is nothing left to keep in sync.
+
+`MODEL_EMBEDDING` is **named** in `.env.example` while the other four
+roles are blank, and that is deliberate: the others are a per-deployment
+choice, this one is a schema-level commitment wearing an env var.
+
+### The rate is missing, and deliberately so
+
+`config/model_prices.json` has no rate for `gemini-embedding-2`. It was not
+guessed: search is unavailable here and the provider's pricing pages are
+blocked, and **a fabricated rate is worse than none** — UNPRICED is
+visibly missing, a wrong number silently corrupts every total built on it,
+which is the whole point of D30.
+
+So the gap is made loud instead. `load_prices.py` names every configured
+model role with no rate on every run, and `v_unpriced_spend` (migration
+019) counts calls already made without one — the embedding probe's own 14
+calls are the first entry it would have shown. Adding the number is a
+one-line edit and a loader run.
+
+*Rejected:* 3072 with no index. Correct results, sequential scans, and the
+first slow query would be blamed on the corpus rather than the schema.
+
+*Rejected:* `-001` with normalisation in application code. It works, and it
+is one skippable step away from the exact silent degradation this decision
+exists to prevent.
+
+*Rejected:* a `system_settings` row for the dimension. That is a fourth
+copy with extra steps. The columns already know.
+
+---
+
+## D35 — The Claim Cards are their own handoff, and they are strict JSON
+**SETTLED 2026-09-10**
+
+K09 is "Engine 7 in claim-extraction mode. Strict JSON." Engine 7's INBOX
+mode already had a registered handoff — `<RESEARCH_PRACTICE_INBOX_HANDOFF>`,
+§R10 — and it deliberately carries **§55's information GAIN and not the
+claims**: how many were identified, how many were already known, what
+extended the library.
+
+So an INBOX run could report *"7 claims identified"* and leave **nothing**
+for K09 to normalize, retrieve evidence for, or synthesise from. The
+substance was described and never emitted. That is D24's failure in a new
+place: a summary is not the reasoning any more than a control block is.
+
+`<RESEARCH_PRACTICE_CLAIMS>` (§R11) carries the Claim Cards themselves, and
+both blocks are **required** on an INBOX run. `engine_handoffs` already
+supported several tags per mode — E6 REBUILD has two — so registering it
+was an INSERT, not a mechanism.
+
+### Strict JSON without touching frozen step 11
+
+Handoff blocks are line-oriented `KEY: value`; a Claim Card has eleven
+fields and there may be dozens of cards. The obvious move was to teach
+`RUN_ENGINE` and the workflow that a handoff body can be JSON — and that
+is a change to **step 11, which is frozen**, and to both sides of D26's
+byte parity and D31's SQL parity.
+
+It was not needed. `parse_handoff_block` already handles **continuation
+lines**: a line that is not `KEY:` is appended to the current field. So a
+single `CLAIMS_JSON:` field followed by pretty-printed JSON round-trips
+losslessly — verified against the real parser before the format was
+chosen. A JSON line begins with a brace, a bracket, a quote or whitespace,
+never with an ALL-CAPS key, so it cannot be mistaken for a new field.
+
+**Zero changes to `run_engine.py`, the workflow, or either parity suite.**
+The frozen thing stayed frozen because the constraint was checked first
+rather than worked around.
+
+### What K09 may not do
+
+* **No evidence records.** `evidence_referenced_by_source` holds what the
+  SOURCE cited. It is text, it stays text, and
+  `envelope_derived_records.discovery_only` is `true`: this envelope
+  surfaced the claim, it does not evidence it (D10). A video that gave us
+  an idea has not proved it.
+* **No strategies.** That is K11, after synthesis has actually compared the
+  claim against the library.
+* **No `POTENTIAL_NEW_STRATEGY` verdict.** §54's classification here is
+  derived from what was *written*, not from the model's own counts, and
+  only three outcomes are decidable at this stage: no claims →
+  `LOW_INFORMATION_GAIN`; claims and no new concepts → `SUPPORTS_EXISTING`;
+  claims and new concepts → `NEW_CLAIM_REQUIRES_RESEARCH`. `ALREADY_KNOWN`
+  is withheld too — at this point "nothing new was proposed" has been
+  established, which is not the same thing.
+* **Nothing from a held-out source.** A3: those are the retrieval answer
+  key. The envelope goes to `SKIPPED` with the reason recorded on the row.
+
+### Extraction confidence is not authorisation
+
+Hard rule 4, restated in §R11 because this is exactly where it would be
+forgotten: `extraction_confidence` is confidence that **the source says
+this**. Not that it is true, not an evidence grade, and not permission to
+promote anything. §5 keeps claim strength and claim truth separate.
+
+*Rejected:* a second, narrower extraction prompt. Hard rule 7 — an output
+that cannot be traced to a specification is worse than no output — and
+K09 says *Engine 7* in claim-extraction mode.
+
+*Rejected:* parsing the claims out of the human-readable output. That is
+prose parsing to route, wearing a different hat.
+
+*Rejected:* making `<RESEARCH_PRACTICE_CLAIMS>` optional so a source with
+nothing in it need not emit it. An empty array is an answer and an absent
+block is a failed run, and those must not look the same.
+
+---
+
+## D36 — K10 and K11 get their own E7 modes, and the dedup is not the model's job
+**SETTLED 2026-09-10**
+
+Two new Engine 7 modes, `EVIDENCE` and `SYNTHESIS`, each with its own
+required handoff (§R12, §R13). Adding them was **data**: `ENGINE7_MODE` is
+not in `control_contract.v1.json`, so no contract version moved; §88 is
+build-owned and its enum row grew; and migration `020` had already put the
+client/clock rule in `engine_handoffs.client_required`, so registering a
+knowledge-clock mode is an INSERT.
+
+*Rejected:* running K10 and K11 inside `UPDATE`. §R8 calls an UPDATE "a
+smaller foundation pass" and its handoff wants `DOMAIN`, `SUBDOMAINS`,
+`PHYSIOLOGY_TARGETS` — required output for a single-claim research call
+that has none of them. A mode is what an engine was asked to do, and these
+are different questions.
+
+### K10 — "do not deep-research trivial claims" is the design, not a caveat
+
+Every researched claim is a model call. A library that researches every
+mechanism aside a creator makes will spend its budget on the cheapest
+claims in it. So the queue is triaged **deterministically, before anything
+is called**, and the rule is written down where it can be argued with:
+`SAFETY` and `INTERVENTION_EFFECT` are researched, everything else is not.
+Impact, not uncertainty (hard rule 3) — a SAFETY claim is researched even
+when it looks obvious, a `DEFINITIONAL` one is not even when it looks
+interesting.
+
+**The source's own citation is not the input.**
+`evidence_referenced_by_source` is deliberately **not sent** to the
+EVIDENCE run. What a creator cited is a fact about the creator (§12);
+feeding it in as the starting point turns independent research into an
+echo, and D10 is exactly the line it would cross. Evidence records never
+link to the discovery envelope, and a study with no DOI, PMID or URL gets
+**no `source_items` row at all** — inventing one would put an unverifiable
+citation in the same table as retrievable sources, where nothing could tell
+them apart.
+
+**Finding nothing is a finding.** An empty `EVIDENCE_JSON` writes no
+records and still records the conclusion on the claim, because a NULL there
+would put the claim straight back on the queue and pay for it again.
+
+### K11 — deterministic dedup before the call, and the veto after it
+
+`BUILD_GUIDE` predicts the failure: *"If cost per new card climbs with
+library size, deterministic dedup is not filtering enough before the LLM
+call."* So candidates are found by concept overlap first — exact, cheap,
+and works with no optional extension — then by `pg_trgm` name similarity
+where it exists, and **only those candidates are sent**. Asking a model "is
+this already in the library?" with the whole library attached is the cost
+curve that warning describes.
+
+**"Never silently duplicate" is enforced, not requested.** A model
+returning `CREATE` is a proposal. Every `CREATE` is re-checked against the
+live library immediately before insertion, and a collision is **converted
+to an UPDATE** with the override written into the rationale. The model
+proposes; `knowledge_synthesize.py` decides.
+
+There are exactly four decisions. A fifth is a malformed run, not a
+nuance — a run returning `PROMOTE` fails rather than being interpreted.
+
+### What K11 may set, and the one thing it may not
+
+Everything created lands at `AI_DISCOVERED_CANDIDATE`, which
+`ck_provenance_required` lets exist without a provenance note. The only
+status K11 may set beyond that is `DEPRECATED`, on the losing side of a
+MERGE — and the constraint refuses that without a note, so **the merge
+rationale becomes the provenance note**. A MERGE with no rationale fails in
+this file, saying why, rather than at the constraint saying "check
+constraint violated" (D11).
+
+### A strategy nothing can retrieve is a gap, not a success
+
+§R13: *a strategy with no concepts is a strategy nothing will ever
+retrieve.* An unmatched phrase becomes a `PROPOSED` concept and the
+normalizer returns **no id** for it, deliberately — `PROPOSED` is what
+keeps a machine-invented concept out of retrieval until something promotes
+it (D8). So a strategy built from all-new phrases is real and not yet
+findable.
+
+That is recorded as an **OPEN `HIGH` gap** naming the strategy and the
+phrases that resolved to nothing, on the create path and the update path
+alike. Hard rule 11: zero identified gaps never means finished, and a gap
+the library cannot see is one nobody will ever close.
+
+*Rejected:* linking the `PROPOSED` concepts into `strategy_concepts` so the
+count looks right. That is the retrieval spine; putting unpromoted concepts
+in it is precisely what D8 prevents, and it would trade a visible gap for
+an invisible one.
+
+---
+
+## D37 — Discovery finds; it does not ingest. And the access policy is a registry row
+**SETTLED 2026-09-10**
+
+K02–K06 add five ways for something to arrive. They add **no** ways for
+something to be processed: every adapter ends at
+`knowledge_ingest.deliver_to_inbox()` and K07/K08 take it from there.
+
+Two ingestion paths would be two normalizers, two dedup rules and two
+places for rights handling to be forgotten — and the second one always
+learns about §52 later than the first. "Discovery is another way things
+arrive at the inbox" is not a simplification; it is the correct
+description.
+
+### The policy is data, checked at one chokepoint
+
+Three sentences of the specification are policy:
+
+| | |
+|---|---|
+| K03 | "Not indiscriminate scraping. Respect access restrictions." |
+| K06 | "Do not build brittle unauthorized scraping as a core dependency." |
+| §49 | acquisition is provider-independent and the adapter is replaceable |
+
+A policy inside an adapter is one the next adapter reinterprets. It lives
+in `acquisition_adapters` (migration `021`) — `allowed_hosts`,
+`respect_robots`, `requires_authorization`, `min_interval_seconds`,
+`repeat_after_hours` — and `acquisition.fetch()` is the only place a
+request is made. Adding an adapter is an INSERT (hard rule 13); what it may
+do is a column, not an argument someone remembered to pass.
+
+**An unregistered adapter fetches nothing.** No row means no policy, and
+this layer will not act on behalf of one.
+
+### Refusing is an outcome, and it is recorded
+
+`source_fetches` records every request **and every refusal, with the
+reason**. "robots.txt disallowed this" and "no authorization is recorded"
+are findings about our access. A discovery layer that logged them nowhere
+would be indistinguishable from one that was quietly scraping.
+
+A `robots.txt` that **errors or cannot be read is a refusal**. "Respect
+access restrictions" cannot mean "respect them when they are conveniently
+available". A 404 is the one honest "no restriction stated".
+
+### K06 has no scraper to be brittle
+
+`YOUTUBE` is registered with `requires_authorization = true` and no
+authorization note, so the chokepoint refuses before anything is requested
+— not even `robots.txt` — and the item is recorded `ACCESS_DENIED`. That
+is a **true statement about our access**, not a failure. The day an
+authorization exists it becomes a registry note and the same path fetches.
+
+K05 is the same shape at a smaller scale: an episode with no published
+transcript is recorded `FULL_TEXT_NOT_AVAILABLE`, so it is not
+rediscovered every run and its content is not manufactured from a title and
+a blurb.
+
+### One item, whose status progresses
+
+Discovery registers a `source_items` row when it *finds* something;
+normalization used to insert another when it *read* it, and the two
+collided on `uq_item_url`. They are one item at two stages —
+`DISCOVERED` → `QUEUED` → `NORMALIZED` — so the normalizer now reconciles
+by URL and then by content hash.
+
+The same seam produced a second, worse bug: a monitored page keeps its URL
+and changes its content, which hit `uq_envelope_url_version`. §56 says the
+same raw source processed again is a **new version** and neither is lost,
+so `open_envelope` now bumps `source_version` and the receipt says it did.
+Both were reachable only once discovery existed, and neither was
+hypothetical.
+
+### What has NOT been verified, and it matters
+
+**No adapter in this build has ever spoken to its real API.** The build
+environment's egress proxy blocks `eutils.ncbi.nlm.nih.gov`,
+`api.crossref.org` and `pubmed.ncbi.nlm.nih.gov` — all three answered
+`000`. The suite drives the **real** adapters through the **real**
+chokepoint with only `transport()` replaced, which proves the policy, the
+query history, the cursor, the refusal paths, the parsing and the handoff.
+It proves nothing about whether PubMed's JSON is shaped the way this code
+reads it.
+
+That is a weaker claim than anything else in this build and `PROGRESS.md`
+labels it as such. The first live run of `PUBMED` should be treated as
+unverified code, not as a regression if it fails.
+
+*Rejected:* a feed library. A feed is a documented format and this reads
+five fields from it; a dependency would be a larger surface than the
+parsing it replaces.
+
+*Rejected:* letting discovery normalize HTML itself, since it already has
+the bytes. That is the second normalizer this decision exists to prevent.
+
+---
+
+## D38 — A rate belongs to a modality, and K14 embeds text only
+**SETTLED 2026-09-10**
+
+`gemini-embedding-2` text input is **$0.20 per 1M tokens**, paid tier —
+supplied by the practitioner 2026-09-10, the one number D34 said it would
+not guess. The gap `load_prices.py` had been naming on every run is closed
+and `v_unpriced_spend` is empty for `MODEL_EMBEDDING`.
+
+### The model is multimodal, and the modalities are priced 60x apart
+
+| | per 1M tokens |
+|---|---|
+| TEXT | **$0.20** |
+| IMAGE | $0.45 |
+| AUDIO | $6.50 |
+| VIDEO | $12.00 |
+
+A registry keyed on model name alone has **one rate per model**. An audio
+embedding priced at the text rate under-reports by **32x** and a video one
+by **60x** — and the cost table would look fine while being wrong, which is
+the failure D30 exists to prevent arriving through a different door. A
+fabricated rate and a borrowed one corrupt the same totals.
+
+So the key is `(model_name, modality)` in `model_prices`, `cost_events`
+records which modality it paid for, and both halves of `price_call` —
+SQL and Python — **refuse to guess**:
+
+* a modality given with no rate → `UNPRICED`, **never another modality's rate**
+* no modality given, model priced in **several** → `UNPRICED`
+* no modality given, model priced in **one** → that one, unambiguously
+
+The last case is what keeps every single-modality caller working unchanged,
+including the frozen n8n workflow (D32), which passes no modality and does
+not need to: an engine run is text and Claude models carry one rate.
+
+### K14 embeds TEXT ONLY, and it is enforced in two places
+
+Transcripts and extracted document text, never the source media. Embedding
+a podcast's audio instead of its transcript is a **32x bill for a worse
+retrieval index** — the audio carries no more meaning than the words and
+far more tokens.
+
+| where | what it refuses |
+|---|---|
+| `scripts/embedding.py` | media magic bytes (PNG, JPEG, Ogg, MP3, Matroska, PDF, FLAC), `data:` media URLs, media MIME types, non-UTF-8 bytes, non-strings, empty payloads — **before the provider is called** |
+| `ck_embedding_text_only` | any `cost_events` row with `model_role = 'MODEL_EMBEDDING'` and a modality other than TEXT |
+
+Two layers because either alone is a habit. The code refusal is what stops
+the spend; the constraint is what stops a second code path from ever
+appearing that does not refuse.
+
+**This is a cost decision, not a capability limit.** If multimodal
+embedding is ever actually wanted, drop the constraint in a migration that
+says why and change `embedding.py` deliberately. The rates for the other
+three modalities are already loaded, so that day is a policy change and not
+a pricing one.
+
+### One embedding boundary
+
+`embedding.embed()` is the only path, for the same reason there is one
+`RUN_ENGINE`. It also enforces D34 at the call rather than only at the
+column: a vector that comes back non-unit-norm or wrong-dimensioned is
+refused **before it is returned**, so the failure surfaces where it
+happened instead of one layer later at the insert.
+
+Token counts are an **estimate** — the embeddings endpoint returns no usage
+block — and `estimate_tokens()` says so in its name and its docstring. The
+measurement report must not quote them as measurements.
+
+*Rejected:* one rate per model with the modality handled at the call site.
+That is the arrangement being replaced: it puts the guarantee in whichever
+caller remembered, and the registry stays capable of expressing something
+false.
+
+*Rejected:* defaulting an unstated modality to TEXT. It is the cheapest of
+the four, so every mistake would round in the direction of under-reporting
+— silently, and in the direction nobody checks.
+
+---
+
 ## OPEN
 
 **O1 — Intake form. `RESOLVED FOR V1` — see D22.** Core Intake V1 is built:
@@ -783,3 +1905,869 @@ complete 19-part reports on one prompt hash. Re-run
 re-confirm a settled result.
 **F4** Multi-tenant anything, mobile app, billing, client portal. Explicitly
 out of scope: this is internal single-practitioner software.
+
+---
+
+## D39 — Retrieval breadth is a mechanism, not a hope
+**SETTLED 2026-09-10**
+
+BUILD_GUIDE step 17's acceptance criterion is *"the cross-domain case
+retrieves across insulin sensitivity, hepatic fat, triglycerides, muscle,
+appetite, sleep, vegetarian implementation, exercise and behaviour — **not
+three disease folders**."*
+
+That is not a quality target that better embeddings eventually reach. It is
+a statement about what the ranking must be built to do, because the two
+things standing in its way are both structural.
+
+### Why similarity alone always returns the folders
+
+A case note about insulin resistance is lexically and semantically **close**
+to insulin-resistance material and **far** from sleep material. That is not
+a defect in the index; it is what similarity means. Retrieval that ranks by
+text or vector similarity to the presenting complaint therefore returns the
+presenting complaint's folder, and the better the embeddings the more
+reliably it does so.
+
+The sleep and behaviour material is relevant because **Engine 1 said it
+was** — the case's normalized concepts include `SLEEP_QUALITY` and
+`BEHAVIOUR_CHANGE` — not because the words resemble each other. So the
+concept spine is a **retrieval channel** here, not a filter applied to one:
+`strategy_concepts` is queried with the case's concepts and contributes its
+own scored hits, alongside full text and vector. `by_concept()` is the
+channel that can reach material no similarity score would.
+
+### Why a fixed per-bucket cap would have been a knob, not a property
+
+Even with the spine, an imbalanced library defeats breadth on volume alone.
+Six insulin strategies and one sleep strategy means the top of any blended
+ranking is insulin strategies. So each query concept may fill at most
+`per_bucket_cap` slots in a first pass, and leftover capacity is filled from
+what that pass deferred — the cap changes the **order** in which breadth and
+depth are spent and costs no recall.
+
+The cap is **derived, not a constant**: `limit // len(concepts)`. A fixed
+cap of 3 satisfies the criterion at a page of 27 and fails it at a page of
+12, where three folders take nine of the twelve slots. A build whose
+acceptance test passes only because the test chose the cap has tested the
+test. `derive_cap()` means the default satisfies the criterion, and the
+suite asserts the cap it used was the derived one.
+
+**Rejected:** a fixed cap (fails at small pages); returning N per concept
+regardless of score (throws away ranking entirely and returns weak
+material to fill quotas); reranking with a model (a per-query LLM call on
+the hot path, for an ordering problem that is deterministic).
+
+### Channel weights are renormalized over the channels that ran
+
+`concept 0.40 / fts 0.30 / vector 0.30`, divided by the weight of whichever
+channels actually produced hits. Without this, a database with no pgvector
+(D15) scores every result 30% lower than the same database with it — the
+same ordering wearing a different number, which reads as a quality drop
+that has not happened. Recall genuinely degrades without vectors; ranking
+does not, and the scores should say so.
+
+Raw channel scores are normalized to `[0,1]` **per channel** first.
+`ts_rank_cd` is unbounded and corpus-dependent, cosine similarity is a
+bounded angle; blending them raw lets whichever is numerically larger
+dominate for reasons unrelated to relevance.
+
+### One row, every channel that found it
+
+A strategy found by all three channels is **one result carrying three
+channels**, not three results. The channel list is why a retrieval is
+explainable afterwards — "why did this appear?" is answered by the row
+rather than reconstructed.
+
+### A3: held-out material is excluded by default
+
+Chunks from a held-out `source_items` row are filtered in the metadata
+step. Evaluation passes `include_held_out=True` deliberately. If production
+retrieval could see the held-out set, the measurement it exists for would
+be measuring itself.
+
+### Freshness is a hash of the TEXT, not of the row
+
+`embedding_source_hash` (migration 023) is the sha256 of the exact text
+that was embedded, so "do not regenerate unchanged embeddings" is a
+property rather than an intention: a second backfill pass makes **zero**
+provider calls and an edit to one row costs exactly one. Hashing the row
+would re-embed the library every time `retrieval_hits` moved — which
+retrieval itself increments, so reading the library would have paid to
+re-embed it.
+
+The embeddable text expression **mirrors the full-text index** on the same
+table. Two halves of one hybrid score computed over different text are not
+comparable, and the rerank combines them.
+
+`scripts/embed_library.py` chooses rows and text; it never calls a
+provider, checks a norm or prices a call. Those live in `embedding.py`
+(D38) because a second copy of a check is a second place for it to be
+wrong.
+
+---
+
+## D40 — Evaluation is five layers, and its expectations are never authored
+**SETTLED 2026-09-10** — implements D7; migration `024`
+
+D7 settled *why* there is no practitioner-authored gold benchmark. This is
+*how* the five layers are built, and what each one refuses to do.
+
+### Every expectation is derived from something the system already held
+
+| | the expectation comes from | human |
+|---|---|---|
+| A | the K1 ontology seed, which predates every extraction | none |
+| B | a HELD-OUT source, extracted separately, kept out of the library | none |
+| C | how many domains the library could possibly span | none |
+| D | the practitioner marking a small sample | QC only |
+| E | layer D's verdicts, as a rate | via D |
+
+### The concept-domain edge is a row, not a sentence
+
+Layer A scores against a domain's seeded concept family, and that family
+existed only inside `concepts.origin_detail` — prose, of the form
+`'... DOMAIN A (CONDITIONS & CLINICAL STATES); also DOMAIN B'`. Parsing it
+to decide what a test expects is the same mistake as routing on prose
+(hard rule 5). `concept_domains` is the edge; `seed_ontology.py` writes it,
+and the migration reconciled the 269 already-seeded concepts once. Both
+derivations produce **290 edges**, and the suite asserts they agree.
+
+### Layer A splits the family so the query cannot contain the answer
+
+Three of a domain's concepts become the query text; the **rest** are what
+must come back. The sets are disjoint by construction, and `query_concepts`
+is empty — handing the spine the family it is being asked to find is the
+same failure wearing a different hat (V2).
+
+The score is **recall@20**, and a family of 67 concepts is bounded above by
+20/67 before retrieval is judged at all. The score is deliberately **not**
+rescaled for that; the ceiling travels with the number in the result note
+instead. Rescaling a measure after reading it is how a measure stops
+meaning anything.
+
+### Layer B must not teach the library the answer key
+
+`knowledge_extract.py` already refuses to extract a held-out source into
+`claims` (A3). But the answer key still has to be produced, and producing
+it the ordinary way would have leaked it in a quieter place:
+`normalize.resolve()` **creates PROPOSED concepts and attaches trigram
+aliases**. The held-out vocabulary would have entered the ontology, and the
+library would have learned from the material it was being measured against
+— with nothing in the schema to notice.
+
+Two mechanisms:
+
+* `holdout_answer_keys` is the destination, and nothing in K10 or K11 reads
+  it. No `claims` row, no strategy, no provenance edge.
+* `normalize.resolve(..., read_only=True)` runs the SAME tiers and writes
+  nothing — no cache row, no alias, no proposal, no escalation.
+
+`read_only` is a parameter on the shared resolver rather than a second
+matcher in `evaluate.py`, deliberately. An answer key built by a different
+resolver would be in a different vocabulary from the library, and the
+comparison would measure the two resolvers against each other (V2).
+
+### Layer C measures breadth against an achievable ceiling
+
+"Not three disease folders" is a claim about how many domains a page spans,
+so layer C's metric is `DOMAIN_BREADTH` and the denominator is **how many
+domains the library actually has strategies in** — computed, never assumed.
+A library holding one domain cannot span two, and scoring it 0.3 for that
+would be measuring the library's age.
+
+A library spanning **no** domain is `UNSCORABLE`, recorded as such and
+**excluded from the mean rather than counted as zero**. The metric is a
+column on the test row (`evaluation_metric`), not a branch keyed off the
+layer: A and B ask "did the expected material come back", C asks something
+else, and a third question should be a value rather than an `if`.
+
+### An empty expectation is not a perfect score
+
+`ck_test_has_expectation` refuses a test with nothing to expect. Recall over
+an empty set is undefined, not 1.0 — and a young library reporting a perfect
+score for knowing nothing is the single most plausible way this whole layer
+could have become decorative.
+
+### Layer D is capped, and layer E is a rate
+
+The sample is drawn automatically from a layer C case, so nobody authors a
+query, and a **second sample is refused while one is unreviewed**. A queue
+that grows whether or not anyone looks at it is the recurring manual job
+hard rule 3 forbids, arriving quietly.
+
+D7's fourth verdict — "an important item was missing" — is about the sample,
+not about any row in it, so it lives on the sample and
+`ck_missing_needs_note` refuses it without a note. "Something was missing"
+that does not say what cannot become a knowledge gap or a query fix.
+
+Layer E's denominator is what was **reviewed**, never what was presented: a
+half-reviewed sample would otherwise report half the rate. `v_discovery_value`
+gives the per-sample rate and `v_discovery_value_trend` pools items across
+samples rather than averaging per-sample rates, so a three-item sample does
+not weigh as much as a thirty-item one.
+
+### A score is recorded with the configuration that produced it
+
+`retrieval_test_runs` stores `vector_enabled`, `library_size` and the
+`score_floor` the run judged against. Recall with pgvector and recall
+without it are different numbers (D15) and must never be trended as one
+line; a floor that moved between runs would make the history meaningless.
+
+**Measured on the first real run** (`docs/evidence/layer_a_baseline.md`):
+full text alone **0.1372**, full text + vector **0.3255**, same fourteen
+tests, 269 concepts embedded in between. The floor was 0.30 before either
+run — a threshold chosen to sit just under the number it judges is not a
+threshold.
+
+---
+
+## D41 — Controversy and negative knowledge are passes, not by-products
+**SETTLED 2026-09-10** — BUILD_GUIDE step 19; migration `025`
+
+`controversies`, `controversy_positions` and `negative_knowledge` have
+existed since migration `003` and nothing had ever written to them. That is
+not an oversight in the pipeline; it is a property of what the pipeline
+does.
+
+### Why they cannot fall out of ingestion
+
+K09 reads **one source** and produces claims. K11 turns claims into
+strategies. Nothing on that path can produce *"these two bodies of evidence
+contradict each other"* or *"this was investigated and does not work"*,
+because **no single source says either**. Both are statements about what has
+accumulated, so both need a dedicated pass over the accumulation — per
+domain, and **once that domain reaches moderate coverage rather than at the
+end** (BUILD_PLAN K9). Running it at the end is how a library ends up
+confidently recommending something the evidence already argued about.
+
+Two new E7 modes, both knowledge-clock: `CONTROVERSY` (§R14) and `GAP`
+(§R15). Adding them was an INSERT in `load_handoffs.py` plus the output
+contracts — the mode list is registry data, and migration `020` already
+removed the copy that lived in a trigger.
+
+### A controversy with one position is not a controversy
+
+It is a consensus statement, or a gap, and stored here it would be
+retrieved and shown to the practitioner as a **live disagreement**.
+`trg_controversy_positions_at_commit` refuses it — a CONSTRAINT TRIGGER
+deferred to commit, because the positions are written after the parent and
+an immediate check would make the correct write order impossible. Deleting
+a position back down to one is refused the same way.
+
+`ck_position_has_evidence` requires each position's `evidence_summary`.
+`held_by` records who holds a position, which is a fact about them and
+never the evidence (§12) — recorded beside it, never instead of it.
+
+**Do not manufacture controversy where consensus exists.** An empty result
+is legitimate and common; a fabricated controversy is indistinguishable
+from a real one at retrieval time, which makes it worse than silence.
+
+### Negative knowledge must be able to stop the next search
+
+That is the only job it has — 003's own comment: *"prevents repeated wasted
+research"*. So `ck_negative_is_actionable` requires `why_investigated`,
+`evidence_examined` **and** `revisit_trigger`. Without the first two the
+next pass cannot tell whether its question was already answered or answered
+badly; without the third, *"this does not work"* is a permanent verdict on
+a moving field — a `COMPLETE` status by another name, which §70 forbids.
+
+**Absence of evidence is not evidence of absence.** Something nobody has
+studied is a gap; something examined and found wanting is negative
+knowledge. Recording the first as the second tells the library it has an
+answer when what it has is a hole.
+
+### "Nobody looked" and "nothing found" must not be the same row
+
+`domain_gap_assessments` already made that distinction for gaps.
+`domain_controversy_assessments` now makes it for K12, for the same reason
+and in the same shape: a row means the pass **ran**, and
+`controversies_found = 0` is an honest result. Without it, a domain with no
+controversies and a domain nobody examined are both an absent row — and the
+second is the dangerous one (hard rule 11).
+
+`v_controversy_state.overdue` is the number worth watching: a domain deep
+enough to have disagreements in it, with no pass over them.
+
+### A gap's status is a closed set
+
+`knowledge_gaps.status` was free text defaulting to `'OPEN'`, and
+`v_domain_readiness` computes `foundation_ready` from `status = 'OPEN'`. A
+row written as `'open'` would have made a CRITICAL gap invisible and flipped
+a domain to ready — silently, and in the direction that hides the problem.
+`ck_gap_status` closes it to OPEN / RESEARCHING / RESOLVED / SUPERSEDED, and
+`ck_gap_resolution_coherent` means "resolved" cannot be a state something
+drifts into: it requires the resolution and the timestamp together.
+
+An unrecognised severity from a model lands at `MEDIUM` — the schema
+default — and is never promoted to CRITICAL or quietly demoted to LOW.
+
+### Escalation is capped and ranks by impact
+
+Hard rule 3. `v_knowledge_gap_queue` orders severity first, then how much of
+the library leans on that domain, then age — deterministically, so the same
+cap always takes the same top N. `--escalate` moves that top N from `OPEN`
+to `RESEARCHING`.
+
+**`RESEARCHING` marks a gap as taken up; it does not run a research pass.**
+Wiring an escalated gap into a live E7 run belongs to the continuous-update
+step (BUILD_PLAN K11 / step 21) and is deliberately **not** invented here: a
+gap question is not a claim, and `knowledge_research.py` researches claims.
+Building half a loop that looks finished would be worse than naming the
+boundary.
+
+---
+
+## D42 — A plan that leaves no row cannot be checked
+**SETTLED 2026-09-10** — BUILD_GUIDE step 20; migration `026`; implements D6
+
+The safety gate (`trg_block_unapproved_communication`) and `case_flags`
+have existed since migration `004`. **Nothing ever evaluated a rule**, so
+no HOLD could open and the gate had never had anything to block. Step 20
+is the rule set, and building it surfaced a dependency that had been
+invisible.
+
+### The rules match on a NAME, so the plan has to exist as rows
+
+Every deterministic rule in D6 that matters turns on what is being
+*proposed*: a glucose-lowering intervention for a client on insulin, a
+vitamin-K load for one on warfarin. `client_interventions` has existed
+since `004` and nothing wrote to it, so those rules would have evaluated
+against an empty table and **passed every client clean having inspected
+nothing** — the worst possible way for a safety layer to be green.
+
+E2 and E3 name their plans in the handoff, as prose for the next engine to
+reason with. Prose cannot be turned into clinical rows without parsing it,
+and parsing prose into safety-bearing data is the thing hard rule 5 refuses
+for routing and that is *more* dangerous here. So §60B
+`<BEHAVIOUR_PLAN_ITEMS>` and §70B `<NUTRITION_PLAN_ITEMS>` are build-added
+strict-JSON contracts — the seventh and eighth instances of the same
+pattern as §R10–§R15 (D35, D36): a stage had substance and no block to
+carry it.
+
+Everything they write is `PROPOSED`. Nothing in those blocks starts an
+intervention or reaches a client; the review and Engine 5 are in between.
+Engine 4 needs the same rows later — `WORSENING_MARKER` reads
+`client_interventions.outcome`.
+
+### Narrow is the mechanism, not the aspiration
+
+Six rules. **A client on metformin, a statin, an ACE inhibitor, thyroid
+replacement and amlodipine passes clean**, and `test_safety.py` asserts
+that first, because the failure mode is a rule set that quietly widens
+until the gate is a rubber stamp — which is less protection than no gate,
+plus friction (D6).
+
+Two of the six need **both halves**: insulin *and* a glucose-lowering
+intervention; warfarin *and* an interacting one. Either alone is an
+ordinary client. Metformin is neither insulin nor a sulfonylurea, which is
+exactly why the acceptance case passes.
+
+`WORSENING_MARKER` is a **NOTE**, never a HOLD (hard rule 9). It must be
+seen; blocking every plan for a client whose one marker moved the wrong way
+is the rubber stamp again.
+
+### What is data and what is code
+
+The rule LOGIC is SQL, because D6 says so and because a missed flag is the
+case you cannot afford. Everything else is rows:
+
+| | |
+|---|---|
+| `safety_rules` | which rules exist, at what severity. Disabling one is an UPDATE. |
+| `critical_lab_thresholds` | CRITICAL, not merely out of reference range. |
+| `safety_match_patterns` | every drug and intervention name, by class. |
+
+Adding a sulfonylurea is an INSERT (hard rule 13). A drug list inside a
+function is how the next drug in the class goes unflagged, and the suite
+proves the difference: an unregistered sulfonylurea is honestly **not**
+matched, and one INSERT later it is.
+
+`trg_flag_rule_registered` refuses a deterministic flag whose `rule_key` is
+not in the catalogue. A rule the catalogue does not know cannot be
+explained to the practitioner, disabled, or audited — and two existing
+suites were writing invented keys, which is how that was found.
+
+### Evaluating and writing are separate, and nothing auto-closes
+
+`evaluate_safety_rules()` computes and writes nothing, so a practitioner
+view, a dry run and a test all read the same answer. `apply_safety_rules()`
+opens each firing rule **once**; a rule that stops firing is **never**
+auto-closed. Clearing a deterministic flag is a practitioner act and
+`trg_protect_deterministic_flags` enforces that an engine cannot do it.
+
+The critical-lab rule reads the **latest** value per marker, not the worst
+ever seen: a value corrected two years ago is history, not a reason to hold
+today's plan.
+
+### Release: three conditions, none substituting for another
+
+| | | |
+|---|---|---|
+| **Approval** | a practitioner accepted the analysis | `client_release.py` |
+| **Drafting** | E5 writes the client-facing message | **never gated** |
+| **Release** | it is sent | trigger on HOLDs, file on approval |
+
+Drafting with an open HOLD is deliberately allowed — the practitioner may
+need to see what would be said in order to decide whether the HOLD matters.
+Hard rule 9 gates *release*, not analysis or drafting.
+
+The approval check lives in the script and the HOLD check in a trigger, on
+purpose: **a workflow can be edited, reordered or bypassed; a trigger
+cannot be forgotten**. The check that must never be missed lives where
+nothing can route around it, and the script's job is to fail earlier and
+more legibly. `test_safety.py` proves the trigger half by writing the
+UPDATE directly, so there is no doubt which layer refused.
+
+---
+
+## D43 — A follow-up is a different pipeline, not CLIENT_NEW with a flag
+**SETTLED 2026-09-10** — BUILD_GUIDE step 21; migration `027`
+
+```
+follow-up -> E6 UPDATE -> E4 -> routing -> E1/E2/E3 -> E6 -> review
+```
+
+### Why not one pipeline with a parameter
+
+`CLIENT_NEW` runs every engine in a fixed order because a new client needs
+all of them and there is nothing yet to route on. A follow-up is the
+opposite case: most of the case is unchanged, **Engine 4 is the routing
+authority** (§64A), and running E1, E2 and E3 unconditionally would spend a
+full cycle re-deriving a plan nothing has challenged.
+
+The difference is not a flag. It is which engines run, in what mode, and on
+whose say-so.
+
+### Routing reads a typed field, and an unknown value stops
+
+`ROUTING_RECOMMENDATION` is a closed enum in the control contract, and
+`ROUTES` maps each value to the engines it means. A value the map does not
+know **stops the pipeline** rather than routing nowhere — routing on an
+unrecognised recommendation is guessing what an engine meant (hard rule 5).
+
+The contract also refuses a recommendation that carries no
+`ROUTING_REASON`, which the suite asserts rather than merely satisfies:
+"route to Engine 1" with no reason is a decision the practitioner cannot
+review.
+
+`MULTIPLE` runs E1 → E2 → E3 as a chain, not three engines in parallel: E1
+re-deciding what matters invalidates the plans built on the old decision.
+`MEDICAL_COORDINATION` and `MORE_DATA` replan nothing and still queue a
+review — both mean "a human, or more data, first", and the review queue is
+where a human is.
+
+### E6 runs in UPDATE mode, and the delta is still not the state
+
+`CLIENT_NEW` uses `REBUILD` because the case is being established across one
+cycle. A follow-up is Engine 6 §A1's *normal* path: a `<CASE_MEMORY_DELTA>`
+describing what changed. The delta goes in the `delta` column and a **full
+state** becomes `canonical_state` (D24) — storing a diff there would make
+`get_current_client_state()` return a description of a change instead of a
+case.
+
+### Learning that leaves no row is not learning (extends D42)
+
+`client_interventions.outcome` has existed since migration `004` and
+**nothing ever wrote it** — so `WORSENING_MARKER` (D6) read a column nobody
+had filled and could never fire for any client. Engine 4 now emits §64B
+`<PROGRESS_OUTCOMES>`, one entry per live intervention. Same argument as
+§60B/§70B, one layer later: the plan had to become rows before it could be
+checked; the *response* has to become rows before anything can learn from it.
+
+The live interventions are **passed in** rather than left for the engine to
+recall, because §64B asks for one entry per intervention and an engine
+cannot be held to that if it was never told what the list was. An outcome
+naming something this client does not have is dropped and counted —
+`record_intervention_outcome` refuses it anyway, since a response to a plan
+nobody made is not a response.
+
+**`TOO_EARLY` and `NOT_TRACKED` are real answers.** An unreadable outcome
+lands at `NOT_TRACKED`, never at `STABLE`: `STABLE` claims a measurement
+that was never made, and the next cycle would reason as though the
+intervention had been tried and found neutral. `v_intervention_response`
+exposes `never_assessed` for the same reason — the column default is
+`NOT_TRACKED`, so without it "nobody looked" and "looked and found nothing"
+are the same value.
+
+### An outcome that changes is history
+
+`intervention_outcome_history` records every assessment with what it
+replaced. IMPROVING becoming WORSENING is arguably the most important fact
+a follow-up produces and a bare `UPDATE` loses it. One function
+(`record_intervention_outcome`) writes the history row **before** the
+column, so an outcome cannot move without leaving what it moved from — and
+`STOPPED` requires a reason, because "stopped" with none cannot tell a later
+cycle whether it failed, was unworkable, or simply finished.
+
+**Adherence is stored beside the outcome, never folded into it.** An
+intervention nobody carried out has not failed; it has not been tested.
+Collapsing the two is how a workable plan gets abandoned and an unworkable
+one gets tried again.
+
+### A follow-up is processed once, and the budget is real
+
+`processed_at` makes the queue a queue. Re-running one would spend another
+routing hop and write a second set of outcomes over the first, so it is
+refused with the timestamp of the first run.
+
+One follow-up opens one cycle and spends one hop against
+`case_cycles.max_loops`; `ck_loop_bound` refuses the hop past it. That is
+what stops a case cycling on its own recommendation (hard rule 3).
+
+### Nothing here reaches a client
+
+The cycle ends at the review queue, exactly as `CLIENT_NEW` does. E5 and
+release stay in `client_release.py`, behind a practitioner decision and the
+safety gate (hard rule 9).
+
+---
+
+## D44 — The budget was a name; K00 is what made it matter
+**SETTLED 2026-09-10** — BUILD_GUIDE step 22; migration `028`; A4, hard rule 3
+
+`K00_FOUNDATION_CONTROLLER` adds **no new knowledge work**. Every stage it
+drives already exists as its own script (K02–K13). What it adds is the
+decision of what runs next, the position so a restart resumes, and the
+stop.
+
+### `KNOWLEDGE_DAILY_TOKEN_BUDGET` had never been read
+
+It has been in `.env.example` since the beginning and **nothing has ever
+read it**. That mattered nowhere: every earlier stage ran on fixtures or one
+item at a time, under a human who could see the bill.
+
+K00 is where it matters — a loop that discovers, ingests, extracts,
+researches and synthesises across 26 domains, unattended. An unenforced
+budget on *that* is not an oversight, it is the entire risk. This is the
+fourth thing in this build to have existed as a name with nothing behind it
+(the safety rules, `client_interventions.outcome`, `client_followups`, and
+now the budget), and the pattern is always the same: a control that only
+mattered once something was built that could actually run away.
+
+**The cap is measured from `cost_events`**, not from a counter the
+controller keeps. A counter can be forgotten to increment; the rows are
+what actually happened. Client work is excluded **in both directions**: a
+case does not eat the foundation budget, and a practitioner with a case in
+front of them is never waiting on tomorrow.
+
+**Unset means unbounded, and every caller says so.** No default is invented
+here — choosing a number would be a spending decision that belongs to the
+practitioner, not to the builder.
+
+### It does not execute by default
+
+`--plan` is the default; `--execute` is an explicit act. K00 is the one
+component that could begin mass ingestion unattended, and the standing
+instruction is one source through the complete loop first. **A controller
+whose safe mode is the one you have to remember to ask for is not safe.**
+
+`DISCOVER` and `INGEST` are not executable stages at all. Both are real,
+tested scripts; wiring them into an unattended loop before a single source
+has been through the whole thing by hand is exactly what that instruction
+forbids. They are reported as **MANUAL, with the reason**, rather than
+quietly omitted — a stage that vanishes from the plan looks like a stage
+that does not exist.
+
+### Library stages are not per-domain, and pretending otherwise is a bug
+
+A claim belongs to a **source**, not to a domain: `knowledge_extract`,
+`knowledge_research` and `knowledge_synthesize` each queue library-wide.
+Running them once per domain had every domain claim the same item — three
+domains "processing" one claim, with the accounting to match. Caught in the
+first `--plan` output, which is what a dry run is for.
+
+`CONTROVERSY` and `GAP` genuinely are per-domain: both read across what has
+accumulated in one domain, which is why they exist as separate passes at
+all (D41). So `Stage.scope` is `LIBRARY` or `DOMAIN`, and library stages run
+**once** per batch, before the per-domain ones that depend on them.
+
+### The cursor is a row, and a failing domain is paused
+
+`foundation_progress` holds each domain's stage. A controller keeping its
+position in memory would restart every domain from `DISCOVER` after a
+container restart — which turns a bounded build into an unbounded one.
+
+A domain that fails `K00_ERROR_PAUSE_AFTER` times consecutively is
+**paused, with its reason**, and leaves the working queue while staying
+visible. An unattended loop that retries a permanent failure spends the
+whole budget on it and covers nothing else. `record_error` ensures the
+progress row before writing: failing to record a failure because the row
+was missing is the worst possible moment to be strict — the domain would
+fail silently and forever, never reaching the pause.
+
+### Priority orders the queue and nothing else
+
+Core domains first, then `wave1_priority`, then least-recently-advanced.
+That is a **weight on this queue**. It never restricts what Engine 7 may
+discover, autonomous domain expansion continues throughout, and the suite
+asserts no column exists that would turn it into a boundary.
+
+### `WAVE1_FOUNDATION_READY` is computed, and `IDLE` is not `COMPLETE`
+
+`v_wave1_readiness` reports A4's four dimensions **at once** — domain
+coverage, knowledge depth, retrieval quality, provenance — and every one is
+a floor rather than a definition of quality. A strategy with no concepts
+counts against provenance, not depth: it is a strategy nothing will ever
+retrieve (D8).
+
+It is a **view**, never a stored flag, because a saved READY outlives the
+library it described: a row saying so from three months ago is worse than
+no row. The suite asserts no base table carries a contradicting column.
+
+`foundation_stage` has no `COMPLETE` value (§70). A domain with nothing
+queued is `IDLE` and **stays in the queue** — the next source to arrive puts
+it back to work.
+
+---
+
+## D45 — Practice experience is aggregated from counts, and the cohort counts people
+**SETTLED 2026-09-10** — BUILD_GUIDE step 23; migration `029`; D9, D43, hard rule 6
+
+D9 settled the *architecture* of practice experience in migration `003`:
+no foreign key to `evidence_records`, no view joining them, minimum cohort
+five, always returned to engines in its own labelled block. What it could
+not settle was whether any of that was doing anything, because
+**`practice_strategy_outcomes` had never held a row.** `ck_min_cohort` had
+been passing every insert it never saw.
+
+That is the fifth control in this build that existed as a name over a table
+nothing populated — after `client_interventions` (D42),
+`client_interventions.outcome` (D43), `client_followups` (D43) and
+`KNOWLEDGE_DAILY_TOKEN_BUDGET` (D44). Step 21 is what changed: started
+interventions with recorded outcomes, and `intervention_outcome_history`
+holding what each outcome replaced. There is finally something to
+aggregate.
+
+### The cohort counts PEOPLE, and counts each of them once
+
+`n_clients` means **distinct clients with a recorded outcome**, taking each
+client's latest one. Five intervention rows from two clients is one
+person's record with a count on it, and a client who tried the same
+strategy three times is one observation, not three. The minimum of five
+only means something if the number it guards counts people.
+
+The database agrees rather than trusting the runner:
+`ck_practice_outcomes_account_for_cohort` refuses a distribution that does
+not sum to `n_clients`, and `ck_practice_adherence_accounts_for_cohort`
+does the same for adherence. A per-row `CHECK` cannot run a subquery, so
+`jsonb_counts_total()` is `IMMUTABLE` and the constraint calls it.
+
+### The denominator travels with the numerator
+
+Five improved out of five assessed is a finding. Five out of five assessed
+where **thirty started it and twenty-five were never looked at** is a
+selection effect with a number in front of it, and the two are the same row
+unless the exposed count is stored beside the cohort.
+`ck_practice_generated_complete` refuses a generated aggregate that cannot
+say out of how many, over what window, with what distribution.
+
+`v_practice_cohort_candidates` separates the three states that all look
+like an absent row: nobody has run the aggregator, the cohort is genuinely
+three, and eleven clients started it and **nobody has assessed one**. Only
+the last is a standing failure to look, and it is the one an absent row
+hides — the same reasoning as `domain_gap_assessments` and
+`domain_controversy_assessments` (D41).
+
+### A proposal nobody started is not experience
+
+`started_on IS NOT NULL`. A plan that was never carried out says nothing
+about the strategy, and counting proposals inflates every cohort with
+things that never happened.
+
+### Counts, never copied client text
+
+Every summary is composed from counts. No `stop_reason`, no adherence note,
+no outcome evidence string is copied out of the client layer. At a cohort
+of five one verbatim sentence is quasi-identifying, and a
+"de-identified" aggregate that depends on nobody having written anything
+distinctive is not de-identified. The count of stops travels; the reasons
+stay in the client record. Surfacing reason text is a later decision with
+its own de-identification step, not something to slip in here.
+
+`trg_practice_deidentified` is the **backstop**, not the plan: it refuses a
+UUID, an email address, a client display name or an external reference in
+any free-text column. It is `SECURITY DEFINER` on purpose — `clients` is
+RLS-forced, and a check running with the caller's visibility would compare
+against the one client in scope, find no match, and pass. A check that
+passes because it could not see what it was checking for is worse than no
+check.
+
+This is the one place in the schema where client-identifying material could
+cross from the RLS-protected client layer into the **global, un-scoped**
+knowledge layer, so it is checked at that boundary rather than trusted
+upstream.
+
+### The runtime reads aggregates; it never creates one
+
+Migration `005` granted `phi_runtime` full DML on every global table, this
+one included, before anything wrote to it. But aggregation is a
+**cross-client read** and `phi_runtime`'s scope is transaction-local and
+single-client (hard rule 8): as `phi_runtime` the cohort is always one
+person or zero. `029` revokes INSERT, UPDATE and DELETE and keeps SELECT —
+a path that can only ever produce a wrong answer should not exist.
+
+### Adherence sits beside the outcome, at cohort scale too
+
+D43 kept them apart per intervention; the same rule has to survive
+aggregation. `adherence_counts` is its own distribution, and where adherence
+is unrecorded for the majority the summary **says so in those words**: a
+neutral or poor outcome in that cohort is *untested*, not ineffective.
+Folding adherence into the outcome is how a workable strategy gets
+abandoned on the evidence of nobody having done it.
+
+### The label is a column, not a caption
+
+D9 requires the block to be separately labelled. `v_practice_experience`
+carries `basis` and `evidence_status` as **fields on every row**, and the
+payload block repeats them per entry, because a caption around a block is
+what gets dropped when a payload is reformatted.
+
+It reaches E7 and E1 Pass B as a **top-level key**, never nested inside
+`E7_HANDOFF` — relaying it only through E7's prose handoff would make its
+arrival depend on an engine having repeated it. Engine 1's Pass B section,
+Engine 7 §A4 and Engine 4 all already say how to weigh practice
+experience; until step 23 nothing produced it, so all three were reasoning
+without the one body of knowledge that is entirely the practitioner's own.
+
+### `--plan` by default
+
+`--execute` is an explicit act, as with K00 (D44). This writes to a global
+table from cross-client reads, and a runner whose safe mode is the one you
+have to remember to ask for is not safe. Re-running is a no-op:
+`uq_practice_generated` is a partial unique index so the aggregator
+replaces its own row and never collides with a practitioner-recorded
+observation, and an unchanged aggregate is not rewritten at all — the same
+reason `embedding_source_hash` exists (`023`), so `generated_at` does not
+move on a row nothing changed.
+
+---
+
+## D46 — The YouTube adapter is shaped by the actor's REAL output
+**SETTLED 2026-09-10** — BUILD_GUIDE step 16 (K06); migration `030`; D37, §12, §16, §40, §42, §47
+
+Migration `021` registered `YOUTUBE` as `requires_authorization` with no
+authorization note, so the chokepoint refused every fetch and every item
+became `ACCESS_DENIED`. That was correct while no authorization existed.
+One does now.
+
+### What the authorization actually is, stated precisely
+
+The practitioner holds an **Apify** account, and the transcript comes from
+a published actor on that platform under Apify's terms. This is an
+authorization to call **Apify's** documented API with our token. It is
+**not** a permission from YouTube, and nothing here requests youtube.com —
+`allowed_hosts = {api.apify.com}` says so structurally, and the suite
+asserts that a youtube.com URL is refused by the same adapter.
+
+`respect_robots` is off for exactly one reason: this is a documented API
+called with our own credential, the same shape as `PUBMED`. It is not a
+licence to read pages.
+
+Clearing the note, or unsetting `APIFY_TOKEN`, returns the adapter to
+refusing. Both are the same finding — *we cannot read this video* — so the
+missing token is **recorded as a refusal and raised as `Refused`**, not as
+a configuration crash that takes a discovery run down.
+
+### The actor was RUN before any code was written against it
+
+The first guess at the input field was `videoUrls`. It is **`urls`**. That
+one wrong guess is the whole argument, and four more things the live output
+showed would each have been a defect:
+
+**1. There is no flat transcript field, and the segments OVERLAP.**
+Only `segments`, and in the measured video segment 1 runs 0 → 2.16 while
+segment 2 *starts* at 1.04 — YouTube's rolling-caption format, where each
+caption redisplays the tail of the one before it. Naive concatenation
+duplicates words throughout, and the damage does not look like a joining
+bug downstream: it looks like a rambling source, so claim extraction blames
+the speaker.
+
+`dedupe_segments()` gates the trim on the **timings**, not on the text. Two
+segments that do not overlap in time are two different things being said,
+and a speaker who genuinely repeats themselves must survive intact — which
+is what the suite's second fixture asserts, using the same words with and
+without a time overlap so the fixture can tell the right answer from the
+wrong one (V2).
+
+**2. `isAutoGenerated` was true.** That is ASR, not a human transcript, and
+"postprandial", "glycaemic" and "visceral adiposity" are precisely what ASR
+mangles. `transcript_is_auto_generated` rides on the envelope, reaches
+every chunk's metadata, and `v_asr_derived_claims` answers "which
+conclusions rest on machine transcription?" with a list.
+
+NULL means **not a transcript**, never "human" — the same distinction
+`never_assessed` makes elsewhere, and
+`ck_transcript_provenance_complete` refuses the claim without naming who
+produced it.
+
+That view joins through `envelope_derived_records`, the provenance registry
+hard rule 12 already requires. The obvious join — claims → `source_items`
+→ envelope via `source_id` — looks right and silently returns nothing: the
+envelope's source is the one the *normalizer* upserts for the document, not
+the channel the item was discovered from.
+
+**3. Identity is `videoId`, never `videoUrl`.** The live input URL carried
+playlist and timestamp parameters and the canonical id does not. Everything
+is canonicalised before anything is registered, and
+`uq_item_source_external` makes it structural. Scoped to
+`(source_id, external_id)` rather than `external_id` alone because that
+column also holds **feed GUIDs**, which are unique per feed and promise
+nothing across feeds.
+
+`register_item()` is now an upsert. Seeing a source again is normal — a
+channel is polled, a video is reachable from a playlist and from its own
+URL — and before this a second sighting raised a unique violation that took
+the whole run down. A re-discovery touches `last_seen` and **never moves
+the status backwards**: resetting a `NORMALIZED` item to `QUEUED` would
+invite the whole pipeline to run over it again.
+
+**4. `channelId` is the creator, not `channelName`.** Names change; §40
+profiles accumulate across sources, so keying on a display name means a
+rename starts a second profile holding half the history while the first
+stops growing unnoticed. `source_creators` gains `(external_source,
+external_id)`, and `creator_type` is recorded as **`OTHER`** — a channel id
+says who published, never whether they are a researcher, a clinician or a
+coach, and `creator_type` is what §12 weighs a claim against.
+
+### Timings survive using the normalizer we already have
+
+The transcript is rendered as markdown whose block headings **are**
+timestamps — `## [14:32]`. `knowledge_ingest.segment()` already treats a
+heading path as the chunk's `location` (§16, §42: chapter, page and
+timestamp are part of the content), and K09 already carries `location` onto
+the claim. So a claim citing minute 14 is provenance, with **no second
+ingestion path and no change to the chunker** (D37). Blocks are sized well
+under `TARGET_CHARS` so a block is never split across chunks — half a block
+filed under a timestamp it did not belong to is worse than no timestamp.
+
+The description gets its own `## Video description` heading rather than
+being dropped or merged: it is genuinely part of the source (§12), and the
+location is what keeps a claim from promotional copy distinguishable from
+one made on camera.
+
+### The chokepoint grew; the adapter did not grow a socket
+
+`acquisition.fetch()` gained `method`, `body` and `extra_headers` so an
+actor run still goes through the one place a request leaves this process
+(D37). Neither the body nor the headers is ever recorded — and `redact()`
+now strips credential-bearing query parameters for **every** adapter,
+because `source_fetches.url` is permanent and an API that accepts `?token=`
+will let one be written there forever.
+
+### The no-captions case is NOT implemented from a guess
+
+A video without captions has never been run, so its payload shape is
+unknown and nothing pretends otherwise. What is enforced is the
+shape-independent invariant: **no usable segments means no transcript** —
+the item is `FULL_TEXT_NOT_AVAILABLE` and nothing is delivered. An empty
+string must never travel as a transcript; it would pass through extraction
+as a source that taught us nothing, and §54's delta analysis would agree
+with it.
+
+### Cost is measured, not estimated
+
+One video, **$0.01**, because the per-run start fee dominates a
+single-video run. The advertised per-video rate is only approached across a
+batch, so `run_actor()` takes a **list** and the suite asserts that two
+videos cost one run.

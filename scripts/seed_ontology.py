@@ -39,6 +39,7 @@ from pathlib import Path
 
 import psycopg
 
+import concept_key
 import trigram
 
 REPO = Path(__file__).resolve().parent.parent
@@ -154,11 +155,11 @@ def declared_hash(text: str) -> str:
     return re.search(r"`([0-9a-f]{64})`", text).group(1)
 
 
-def canonical_key(term: str) -> str:
-    """ck_canonical_key_shape requires ^[A-Z][A-Z0-9_]{2,79}$."""
-    key = re.sub(r"[^A-Za-z0-9]+", "_", term).strip("_").upper()
-    key = re.sub(r"^[^A-Z]+", "", key)[:80]
-    return key if re.fullmatch(r"[A-Z][A-Z0-9_]{2,79}", key) else ""
+# One rule, shared with normalize.py. Both create concepts and both must
+# satisfy ck_canonical_key_shape; they were not using the same rule, and
+# the normalizer's version produced keys the database rejected.
+# Re-exported so existing callers and tests keep working.
+canonical_key = concept_key.canonical_key
 
 
 def split_aliases(term: str) -> tuple[str, list[str]]:
@@ -216,7 +217,8 @@ def parse(text: str) -> list[dict]:
 
 def seed(conn, verbose: bool = True) -> dict[str, int]:
     text = SEED.read_text()
-    stats = {"domains": 0, "concepts": 0, "reused": 0, "aliases": 0, "confusable": 0}
+    stats = {"domains": 0, "concepts": 0, "reused": 0, "aliases": 0,
+             "confusable": 0, "domain_edges": 0}
 
     domains = parse(text)
     for dom in domains:
@@ -268,10 +270,16 @@ def seed(conn, verbose: bool = True) -> dict[str, int]:
                     limit 1""", (key, name)).fetchone()
             if existing:
                 concept_id = existing[0]
+                # coalesce on BOTH sides. A concept created by another path
+                # may have a NULL origin_detail, and then `NOT LIKE` is NULL
+                # -- so the WHERE excluded the row, the append never ran, and
+                # the concept gained a domain edge with no provenance naming
+                # it. Hard rule 7: provenance is enforced, not requested.
                 conn.execute(
                     """update concepts
-                          set origin_detail = origin_detail || %s
-                        where concept_id = %s and origin_detail not like %s""",
+                          set origin_detail = coalesce(origin_detail, '') || %s
+                        where concept_id = %s
+                          and coalesce(origin_detail, '') not like %s""",
                     (f"; also DOMAIN {letter}", concept_id, f"%DOMAIN {letter}%"))
                 stats["reused"] += 1
             else:
@@ -285,6 +293,16 @@ def seed(conn, verbose: bool = True) -> dict[str, int]:
                      f"K1 seed, foundation_domains.md DOMAIN {letter} ({dom['name']})")
                 ).fetchone()[0]
                 stats["concepts"] += 1
+            # The domain edge is a ROW, not a sentence in origin_detail
+            # (migration 024). Layer A scores against this family and
+            # cannot be made to parse provenance prose for it.
+            conn.execute(
+                """insert into concept_domains (concept_id, domain_id, source)
+                   select %s, domain_id, 'K1_SEED' from knowledge_domains
+                    where domain_key = %s and active
+                   on conflict do nothing""",
+                (concept_id, domain_key))
+
             siblings.append(str(concept_id))
 
             for alias in aliases:
@@ -298,11 +316,14 @@ def seed(conn, verbose: bool = True) -> dict[str, int]:
         stats["confusable"] += _generate_confusable(conn, letter, siblings)
 
     stats["confusable"] += _resolve_alias_collisions(conn)
+    stats["domain_edges"] = conn.execute(
+        "select count(*) from concept_domains where source = 'K1_SEED'").fetchone()[0]
 
     if verbose:
         print(f"K1 seed: {stats['domains']} domains, {stats['concepts']} new concepts, "
               f"{stats['reused']} reused across domains, {stats['aliases']} aliases, "
-              f"{stats['confusable']} confusable pairs")
+              f"{stats['confusable']} confusable pairs, "
+              f"{stats['domain_edges']} concept-domain edges")
     return stats
 
 
