@@ -8,6 +8,13 @@ envelope -> chunks -> claims -> concepts -> delta -> evidence -> strategies -> r
 
 then run a second time to prove it is recognised as already known.
 
+**This file is the run report. The OUTPUT ITSELF is in
+`first_source_loop_rows.md`** — all 7 claims verbatim, all 71 concept
+proposals one per line, the per-claim K10 and K11 decisions, and all 6
+strategy cards in full. Sections 3 and 6 below quote examples to make an
+argument; the companion file selects nothing. Two of the decisions asked
+for there turned out not to be rows at all, which its preamble records.
+
 | | |
 |---|---|
 | Source | `zg3GBH6fG2I` — "Move Like This After Eating (It Changes Everything)" |
