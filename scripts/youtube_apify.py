@@ -125,7 +125,74 @@ class ApifyUnavailable(RuntimeError):
 
 
 class NoTranscript(RuntimeError):
-    """The item has no usable segments. A true statement, not a failure."""
+    """The item has no usable segments.
+
+    Whether that is a TRUE STATEMENT about the video or a failure to read
+    it is the distinction `transcript_absent` carries, and it is not a
+    detail: `FULL_TEXT_NOT_AVAILABLE` is recorded so a source is not
+    rediscovered every run, so recording it for a video we simply could
+    not reach this time marks a readable video permanently unreadable.
+
+    Observed live on 2026-09-11, both shapes, same actor, same HTTP 201,
+    same SUCCEEDED run status — the failure is entirely inside the item:
+
+        error "No transcript available for this video"  ... metadata PRESENT
+        error "Failed to fetch transcript XML: HTTP 404" ... every field BLANK
+
+    The second one was this video, and a retry 63 seconds later returned
+    391 segments.
+    """
+
+    def __init__(self, message: str, *, transcript_absent: bool = True,
+                 actor_error: str | None = None):
+        super().__init__(message)
+        self.transcript_absent = transcript_absent
+        self.actor_error = actor_error
+
+
+# ---------------------------------------------------------------------
+# Did the actor reach the video at all?
+# ---------------------------------------------------------------------
+#
+# The actor reports an item-level failure by returning a FULL item with
+# every field zeroed and an `error` string. It does not fail the run: the
+# HTTP status is 201 and the run status is SUCCEEDED either way, so the
+# only place the difference exists is in these fields.
+#
+# The signal used here is METADATA, not the wording of `error`. A message
+# is a string the actor's authors may reword; "did this item come back
+# with the video's title, duration and channel" is a fact about whether
+# the actor got as far as the video page. An item carrying the video's
+# metadata and no captions is the actor telling us the video has none. An
+# item carrying nothing is the actor telling us it never looked.
+
+REACHED_FIELDS = ("videoTitle", "channelId", "channelName", "publishDate",
+                  "thumbnail")
+
+
+def actor_error(item: dict) -> str | None:
+    """The actor's OWN explanation, verbatim, or None.
+
+    Never paraphrased into our own words. "Failed to fetch transcript XML:
+    HTTP 404" and "No transcript available for this video" are different
+    facts and the practitioner reading `access_note` months later needs
+    the one the actor actually stated.
+    """
+    value = item.get("error")
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def reached_video(item: dict) -> bool:
+    """Whether this item carries evidence the actor read the video page."""
+    if any(str(item.get(f) or "").strip() for f in REACHED_FIELDS):
+        return True
+    try:
+        return float(item.get("durationSeconds") or 0) > 0
+    except (TypeError, ValueError):
+        return False
 
 
 # ---------------------------------------------------------------------
@@ -397,12 +464,17 @@ def prepare(item: dict) -> dict:
     only outcome for a video without captions, and it stays true whatever
     shape such a payload turns out to have.
     """
+    stated = actor_error(item)
+    reached = reached_video(item)
+    said = f' The actor said: "{stated}".' if stated else ""
+
     video_id = (item.get("videoId") or "").strip() \
         or (video_id_of(item.get("videoUrl") or "") or "")
     if not VIDEO_ID.match(video_id):
         raise NoTranscript(
             "the dataset item carries no usable videoId, so it has no stable "
-            "identity and would be re-registered on every run.")
+            "identity and would be re-registered on every run." + said,
+            transcript_absent=False, actor_error=stated)
     item = {**item, "videoId": video_id}
 
     segments = item.get("segments")
@@ -410,14 +482,22 @@ def prepare(item: dict) -> dict:
         raise NoTranscript(
             "no transcript segments were returned. There is no flat "
             "transcript field to fall back on, and an empty string must "
-            "never travel as a transcript (K05/K06).")
+            "never travel as a transcript (K05/K06)."
+            + said
+            + ("" if reached else
+               " The item came back with no title, channel or duration "
+               "either, so the actor did not read the video — this is a "
+               "failure to reach it, NOT a statement that it has no "
+               "captions."),
+            transcript_absent=reached, actor_error=stated)
 
     deduped = dedupe_segments(segments)
     document = transcript_markdown(item, deduped)
     if not any(p["text"] for p in deduped):
         raise NoTranscript(
             "every segment was empty once de-overlapped, so there is no "
-            "transcript text.")
+            "transcript text." + said,
+            transcript_absent=reached, actor_error=stated)
     return {"video_id": video_id, "video": item, "deduped": deduped,
             "markdown": document, "meta": sidecar_meta(item, deduped)}
 

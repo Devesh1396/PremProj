@@ -1858,6 +1858,64 @@ the four, so every mistake would round in the direction of under-reporting
 
 ## OPEN
 
+**O9 — Two decisions the system makes about a claim leave no auditable row.**
+`RAISED 2026-09-11, from the first real source through the loop.` Not
+fixed, deliberately: the options differ in what they cost the practitioner
+and that is not the builder's call.
+
+**What is missing.** K10 decides whether to research a claim, and K10
+decides how strong the resulting evidence is. Neither decision is stored.
+
+- The triage verdict is a pure function of `claims.claim_type` applied
+  inside `knowledge_research.queue()` (`RESEARCH_TYPES = ('SAFETY',
+  'INTERVENTION_EFFECT')`). `skipped_reason()` exists to explain a skip and
+  **is never written anywhere** — `grep` finds only its definition.
+- `evidence_confidence` is returned by `apply_assessment()`, printed by
+  `research_one()`, and has no column on `claims`.
+- K11's four-way verdict is applied and the token discarded; only its
+  consequences persist.
+- `engine_runs` stores no response body, so the original `EVIDENCE_JSON`
+  and `SYNTHESIS_JSON` are gone.
+
+**Why it matters.** A practitioner looking at a strategy card cannot ask
+why the claim behind it was researched, or why a neighbouring claim was
+not. On the 2026-09-11 run the MECHANISM claim was skipped — correctly,
+by a rule that is right — and nothing in the database says so or says why.
+Both verdicts had to be *derived* for `first_source_loop_rows.md`, which
+is a reconstruction, not a record. That is the same shape as D42 and D43:
+a decision nothing wrote down, discovered only when something finally
+asked.
+
+It is also the hard-rule-3 boundary. Escalation is capped and ranks by
+impact, and "why was this skipped" is exactly the question a practitioner
+asks *once* and then stops asking if there is no answer.
+
+**Options.**
+
+*A. Store the triage verdict on the claim.* Two columns — a verdict and
+the reason `skipped_reason()` already produces. Cheapest, and it makes the
+existing dead function live. Does not cover K11.
+
+*B. A `claim_decisions` table, one row per decision per stage.* Covers K10
+triage, `evidence_confidence` and K11's verdict in one shape, and extends
+to stages not yet built. More schema than the question strictly needs, and
+a second place claims are written.
+
+*C. Store the engine response on `engine_runs`.* Recovers everything,
+including decisions nobody has thought to record yet. But D28 already says
+a failed engine response is client data and RLS-forces `dead_letter_jobs`;
+storing every successful response makes that true of every run, at
+unbounded size, for knowledge runs that carry no client.
+
+*D. Do nothing, and say so.* Defensible only if the practitioner never
+needs to ask. The run suggests otherwise.
+
+**Leaning A, then B if K11's verdict turns out to matter as much.** Not
+decided. What is NOT in question is that `skipped_reason()` should either
+be written or deleted — an explanation computed and thrown away is worse
+than no explanation, because it reads like the feature exists.
+
+
 **O1 — Intake form. `RESOLVED FOR V1` — see D22.** Core Intake V1 is built:
 scope and exclusions in D22, schema in migration `009_intake.sql`. It emits
 structured JSON, never prose; an incomplete intake runs anyway, populates
@@ -2771,3 +2829,68 @@ One video, **$0.01**, because the per-run start fee dominates a
 single-video run. The advertised per-video rate is only approached across a
 batch, so `run_actor()` takes a **list** and the suite asserts that two
 videos cost one run.
+
+## D47 — Evidence belongs to the claim it was researched for, not to a time window
+
+**Decided 2026-09-11, on the first real source through the complete loop.**
+
+`knowledge_synthesize.evidence_for()` reconstructed the claim→evidence
+relationship as "every `evidence_records` row created at or after this
+claim's `created_at`, newest twenty". There was no column to join on;
+K10 wrote evidence and nothing recorded which claim it had been
+researching.
+
+### What that produced
+
+Seven claims came out of one video and six were researched in one batch.
+The first claim — a mechanism statement about non-insulin-mediated
+skeletal muscle glucose uptake — collected **all sixteen** evidence
+records, four of which were trials of a mulberry-leaf extract researched
+for a claim about a commercial supplement. The strategy card built on
+that claim would have carried them as its evidence, in a system whose
+entire argument is that an output must be traceable to what it rests on.
+
+### Why every suite passed over it
+
+**Every fixture researches one claim.** With one claim in the table,
+"evidence written after this claim" and "evidence written for this claim"
+select the same rows, and the fixture cannot tell the right answer from
+the wrong one. That is V2's fifth rule verbatim, and the reason the new
+check uses two claims with two different studies and asserts **"only
+these"** rather than "fewer" — a time window gives the *earlier* claim the
+*later* claim's study, so that is the direction the assertion has to
+point.
+
+### The decision
+
+`evidence_records.claim_id` (migration `031`), written by K10, read by
+K11.
+
+**`ON DELETE SET NULL`, never CASCADE.** The study exists independently
+of the claim that led us to it. That is D10 restated: a video surfacing
+an idea has not evidenced it, and the literature does not stop being
+literature when the claim that pointed at it is deleted.
+
+**Existing rows are left NULL rather than back-filled by timestamp.**
+Back-filling would use exactly the signal this decision exists because it
+was proven unreliable, and a guessed link recorded as a real one is worse
+than an absent one — the next reader cannot tell which rows were guessed.
+`v_evidence_without_claim` makes the distinction visible: "older than the
+link" is history, "the link exists and this row still has none" is a
+defect.
+
+### Rejected
+
+**Joining through `envelope_derived_records`.** Evidence deliberately has
+no edge to the discovery envelope (D10, D36) and must not gain one. The
+envelope surfaced the claim; the evidence came from independent research.
+
+**A `claim_evidence` join table.** K10 researches one claim per run and
+writes what it finds; the relationship is many-to-one, not many-to-many.
+A join table would model a generality that does not exist and would let
+two claims share an evidence row without either one being the reason it
+was written.
+
+**Keeping the window and capping it harder.** The cap was never the
+problem. Twenty rows was already more than any single claim produces; the
+problem is that "recent" is not "related".

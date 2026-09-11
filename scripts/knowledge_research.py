@@ -145,11 +145,17 @@ def study_item(conn, record: dict) -> str | None:
     if not (doi or pmid or url):
         return None
 
+    # Explicit ::text casts on every one of these. Any of the three is
+    # legitimately NULL -- a study is identified by a DOI or a PMID or a
+    # URL, rarely all three -- and Postgres cannot infer a type for a bare
+    # parameter used only as `%s is not null`, so it raises
+    # IndeterminateDatatype before the query runs at all. The same fix,
+    # with the same reason, is in knowledge_discover.already_known().
     existing = conn.execute(
         "select item_id from source_items "
-        " where (%s is not null and lower(doi) = lower(%s)) "
-        "    or (%s is not null and pmid = %s) "
-        "    or (%s is not null and url = %s) limit 1",
+        " where (%s::text is not null and lower(doi) = lower(%s::text)) "
+        "    or (%s::text is not null and pmid = %s::text) "
+        "    or (%s::text is not null and url = %s::text) limit 1",
         (doi, doi, pmid, pmid, url, url)).fetchone()
     if existing:
         return str(existing[0])
@@ -198,13 +204,13 @@ def write_evidence(conn, claim_id: str, records: list) -> list[tuple[str, str]]:
         size = record.get("sample_size")
         evidence_id = conn.execute(
             """insert into evidence_records
-                 (item_id, citation, publication_year, design, population,
-                  sample_size, intervention, comparator, exposure, duration,
-                  outcomes, results_summary, magnitude_summary, limitations,
-                  applicability, funding_conflict_notes)
-               values (%s,%s,%s,%s::study_design,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                 (claim_id, item_id, citation, publication_year, design,
+                  population, sample_size, intervention, comparator, exposure,
+                  duration, outcomes, results_summary, magnitude_summary,
+                  limitations, applicability, funding_conflict_notes)
+               values (%s,%s,%s,%s,%s::study_design,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                returning evidence_id""",
-            (study_item(conn, record), citation,
+            (claim_id, study_item(conn, record), citation,
              year if isinstance(year, int) else None, design,
              record.get("population"),
              size if isinstance(size, int) else None,

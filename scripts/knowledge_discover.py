@@ -114,7 +114,14 @@ def already_known(conn, *, url=None, guid=None, doi=None, pmid=None) -> bool:
 # statement about work that has ALREADY happened -- finding the same video
 # again must not reset a NORMALIZED item to QUEUED and invite the whole
 # pipeline to run over it a second time.
-REDISCOVERABLE = ("DISCOVERED", "QUEUED")
+#
+# FAILED is here because it is a statement about an ATTEMPT, not about the
+# item: "we could not read this on 2026-09-11" is exactly the thing a
+# retry is entitled to overturn, and the live run that put it there was
+# overturned 63 seconds later. FULL_TEXT_NOT_AVAILABLE and ACCESS_DENIED
+# stay out: those are statements about the SOURCE, and re-reading them is
+# a decision for the practitioner, not a side effect of a poll.
+REDISCOVERABLE = ("DISCOVERED", "QUEUED", "FAILED")
 
 
 def register_item(conn, source_id: str, *, title, url=None, guid=None,
@@ -144,18 +151,26 @@ def register_item(conn, source_id: str, *, title, url=None, guid=None,
 
     if existing is not None:
         item_id, current = existing
+        # The note describes the STATUS. When a retry moves the item on
+        # and says nothing, the old note is a description of a state the
+        # item is no longer in -- a successfully queued video still
+        # captioned "the actor could not read this" is worse than no note,
+        # because it reads as current.
+        applying = current in REDISCOVERABLE
         conn.execute(
             """update source_items
                   set last_seen = now(),
                       title = coalesce(nullif(title,''), %s),
                       external_id = coalesce(external_id, %s),
                       url = coalesce(url, %s),
-                      access_note = coalesce(%s, access_note),
+                      access_note = case when %s then %s
+                                         else coalesce(%s, access_note) end,
                       ingestion_status = case when %s then %s::ingestion_status
                                               else ingestion_status end
                 where item_id = %s""",
-            ((title or "")[:500], guid, url, note,
-             current in REDISCOVERABLE, status, item_id))
+            ((title or "")[:500], guid, url,
+             applying, note, note,
+             applying, status, item_id))
         return str(item_id)
 
     return str(conn.execute(
@@ -482,22 +497,36 @@ def discover_video(conn, source, transport=None, urls=None) -> dict:
                 "detail": "refused, and recorded as inaccessible (K06)"}
     delivered = 0
     unavailable = 0
+    unread = 0
     for item in items:
         try:
             ready = YT.prepare(item)
         except YT.NoTranscript as exc:
-            # The honest outcome, and the ONLY one for a video whose
-            # captions we could not read. Nothing is delivered, so nothing
-            # downstream can mistake an empty string for a source that
-            # taught us nothing.
+            # Nothing is delivered either way, so nothing downstream can
+            # mistake an empty string for a source that taught us nothing.
+            # What differs is what we RECORD about the video.
+            #
+            # FULL_TEXT_NOT_AVAILABLE is a claim about the video and it
+            # sticks: the item is not rediscovered, so nothing will ever
+            # look again. That is right when the actor read the video and
+            # reported no captions, and wrong when the actor never reached
+            # it -- which is what happened on the first live run of this
+            # adapter, and a retry a minute later returned 391 segments.
             vid = (item.get("videoId") or "").strip()
+            if exc.transcript_absent:
+                status, counter = "FULL_TEXT_NOT_AVAILABLE", "unavailable"
+            else:
+                status, counter = "FAILED", "unread"
             register_item(
                 conn, str(source_id),
                 title=item.get("videoTitle") or vid or name,
                 url=YT.canonical_url(vid) if YT.VIDEO_ID.match(vid or "") else None,
                 guid=vid or None,
-                status="FULL_TEXT_NOT_AVAILABLE", note=str(exc)[:1000])
-            unavailable += 1
+                status=status, note=str(exc)[:1000])
+            if counter == "unavailable":
+                unavailable += 1
+            else:
+                unread += 1
             continue
 
         meta = dict(ready["meta"])
@@ -523,9 +552,12 @@ def discover_video(conn, source, transport=None, urls=None) -> dict:
     detail = f"{delivered} transcript(s) delivered to the inbox"
     if unavailable:
         detail += f", {unavailable} with no usable transcript"
+    if unread:
+        detail += (f", {unread} the actor could not read (recorded FAILED, "
+                   "not as a video without captions — a retry may succeed)")
     return {"adapter": "YOUTUBE", "source": name, "entries": len(items),
             "new": delivered, "delivered": delivered,
-            "unavailable": unavailable, "detail": detail}
+            "unavailable": unavailable, "unread": unread, "detail": detail}
 
 
 # ---------------------------------------------------------------------

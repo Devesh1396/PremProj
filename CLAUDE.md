@@ -336,11 +336,14 @@ run as `phi_runtime` at all (D25). See `PROGRESS.md` *Deployed to the VPS*.
 layer, all seven canonical prompts installed, and build steps **10b and
 11–15**. Step 11 is **frozen**: changes to it are bug fixes only.
 
-31 migrations, 97 tables, 41 views, 55 enums, 255 indexes, 103 check
+32 migrations, 97 tables, 42 views, 55 enums, 255 indexes, 103 check
 constraints, 54 triggers, 31 RLS tables, 62 policies — measured
 2026-09-10, with the counting queries recorded in `PROGRESS.md`; earlier
 figures used a different method and do not reconcile, so re-measure rather
-than adjust. **Twenty-eight test suites**, passing from an empty database,
+than adjust. **Migrations, views and enums were re-counted on 2026-09-11
+after migration `031`** (32 / 42 / 55); the rest of the line is still the
+2026-09-10 measurement and was NOT re-counted, because a count taken with
+a different query is not a correction. **Twenty-eight test suites**, passing from an empty database,
 idempotent on a re-run, and verified in four configurations: full, **no
 pgvector**, **no optional extension at all**, and **`MODEL_EMBEDDING`
 unset with pgvector present** — the last is what the VPS actually runs,
@@ -799,8 +802,73 @@ Until real sources are ingested the library is nearly empty, so Engine 7
 retrieves little and Pass B reasons from a thin retrieval set — that is
 expected, not a bug. Layers B and C have nothing to report yet, and
 `v_evaluation_state` shows `tests_defined = 0` rather than a passing
-score. **Do not begin mass ingestion**: one source through
-the complete loop first, then the 20-video pilot.
+score.
+
+**One source HAS now been through the complete loop, live — 2026-09-11
+(D47).** One YouTube video fetched from the real Apify API: envelope →
+13 chunks → 7 claims → concepts → §54 delta → 16 evidence records → 6
+strategy cards → retrievable by a case query, then re-run and correctly
+recognised as already known. **$0.4959** in 14 LLM calls, 0 UNPRICED.
+Every row is in `docs/evidence/first_source_loop.md`; do not summarise it
+away, it is the only record of what the output actually looks like.
+
+**Still do not begin the 20-video pilot.** The blocker is concept
+normalization, not cost: 71 proposals and **one** resolution against a
+seed that holds the right concepts. 51 PROPOSED concepts were created
+instead, and 4 of 6 strategies ended with no canonical concept and an
+OPEN gap. Twenty sources would bury the ontology.
+
+**`normalize._tier_semantic()` IS A STUB, and that is the real blocker
+(diagnosis: `docs/evidence/normalization_diagnosis.md`, $0.000301).** Its
+last line is `return [], 0.0` unconditionally, after two guards that both
+pass; its comment says "neither is true until K14" and K14 has been built
+since step 17. Proven live with pgvector 0.6.0 and all 269 concepts
+embedded for real: `resolve()` still returns **0 of 71**. Embedding the
+library buys zero resolutions until the tier is written. An earlier note
+here blamed `llm=None` in `normalize_claim_concepts()`; that is a real
+gap but it is NOT the cause, and the LLM tier is worth about **2 calls in
+56** once the semantic tier exists.
+
+**Trigram cannot be rescued by a threshold, and the two tiers cannot
+share one.** `postprandial walking` is 20 characters and trigram's best
+is `postprandial glucose` at 0.448 — the wrong word; cosine gives
+`post-meal movement` at 0.833. It is synonymy, not length. The measured
+cosine knee is **0.82** (23 admitted, 16 right, 6 partial, 1 wrong);
+`ALIAS_THRESHOLD` 0.92 is a trigram number and would admit 1 of 56.
+`CREATE_THRESHOLD` 0.72 is not a second decision point — it is the
+`HAVING` gate inside `_tier_trigram`, so a weak match never leaves the
+query.
+
+**Most wrong merges cross a `concept_type` boundary** — a TIME WINDOW, a
+DRUG CLASS, a MOLECULE and a MECHANISM all mapped to a BIOMARKER — and
+the resolver never consults that column. **And the tier must return a
+candidate SET**: `confusable_with()` fires only on a span, and the one
+wrong merge at 0.80 has both halves of a do-not-merge pair in its top-3,
+so a top-1 would silently defeat a guard that already works.
+
+**The long phrases are NOT an extraction-prompt bug.** All seven
+`mechanism` values exceed 60 characters because §39 specifies `mechanism`
+as "the mechanism the source proposes" — a proposition, and the engine
+complied. The bug is that `normalize_claim_concepts()` sends `mechanism`
+to a concept resolver at all. **Do not touch `prompts/` for this.**
+
+**The first live call to any real API in this build FAILED, and the
+failure was informative.** The actor answers HTTP 201 from a SUCCEEDED
+run and reports item-level failure in an `error` field nothing read; a
+transient read failure and a genuinely caption-less video were recorded
+identically as `FULL_TEXT_NOT_AVAILABLE`, which is not rediscoverable, so
+a readable video was permanently marked unreadable. Both real payloads
+are now fixtures. **Both set `isAutoGenerated: false`, never null** — the
+"NULL never means human" rule is not something the provider gives us for
+free; what protects the envelope is that a failed item never gets one.
+
+**The rolling-caption overlap is a TIMING artefact, not a text one.** On
+the real 391 segments, 386 pairs overlap in time, **one** has a text
+match, and the single word dropped was a speaker saying "Woo!" twice. The
+"naive concatenation duplicates words throughout" premise in D46 and in
+`test_youtube.py`'s hand-written fixture is wrong for this actor. Raised,
+not changed: altering `dedupe_segments()` changes every future
+transcript.
 
 **n8n is pinned to 2.11.4, the version the VPS runs (D32).** The pin
 follows the VPS; it is **never** raised to keep current. Re-pinning found
