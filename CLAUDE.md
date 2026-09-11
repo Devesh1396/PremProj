@@ -529,11 +529,19 @@ highest-quality transcript type there is and its claims stay off
 read; `None` (no transcript), `False` (human) and `True` (ASR) are three
 distinct answers.
 
-**Key the refusal on `error` present OR segments empty — never either
-alone**, because a future actor version may drop one signal, and segments
-arriving *with* an error is a partial transcript, which is worse than none
-(nothing downstream can tell it was truncated). Keep the **actor's own
-wording** in the note. The item is registered so it is not rediscovered
+**The branch is `segments`, and only `segments`.** Whether a transcript
+exists is a structural fact about the payload; `error` is free text a third
+party writes. An actor version that started setting it for something
+non-fatal — "some segments may be incomplete", "retried after a rate limit"
+— would, if it were the condition, make this refuse perfectly usable
+transcripts. **Quietly losing good sources is the worse failure**, because
+nothing reports it.
+
+**The actor's wording is carried on BOTH paths and branched on by neither.**
+"No transcript available for this video" says which of several things went
+wrong, in the vocabulary of the system that knows, where "nothing readable"
+does not — and a transcript that arrives WITH a warning is ingested and
+keeps the warning, rather than having it dropped on the floor. The item is registered so it is not rediscovered
 (K05's treatment of a podcast with no transcript) and **nothing reaches
 the inbox, not even a sidecar** — an empty body must never become a source;
 it would pass through extraction as a source that taught us nothing and

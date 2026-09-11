@@ -85,9 +85,21 @@ first confirming segments exist records a failed fetch as the
 highest-quality transcript type there is. `auto_generated_flag()` is the
 one place that field is read.
 
-The refusal keys on `error` present **OR** segments empty — never either
-alone, because a future actor version may stop setting one of them. The
-item is registered `FULL_TEXT_NOT_AVAILABLE` so it is not rediscovered
+**The branch is `segments`, and only `segments`.** Whether a transcript
+exists is a structural fact about the payload; `error` is free text a third
+party writes. An actor version that started setting it for something
+non-fatal — "some segments may be incomplete", "retried after a rate limit"
+— would, if it were the condition, make this refuse perfectly usable
+transcripts. **Quietly losing good sources is the worse failure**, because
+nothing reports it.
+
+**The actor's wording is carried on BOTH paths and branched on by neither.**
+"No transcript available for this video" says which of several things went
+wrong, in the vocabulary of the system that knows, where "nothing readable"
+does not — and a transcript that arrives WITH a warning is ingested and
+keeps the warning, rather than having it dropped on the floor.
+
+The item is registered `FULL_TEXT_NOT_AVAILABLE` so it is not rediscovered
 (the treatment K05 gives a podcast with no published transcript), the
 actor's OWN wording is kept in the note, and **nothing reaches the inbox**.
 An empty body must never become a source: it would pass through extraction
@@ -156,38 +168,50 @@ class NoTranscript(RuntimeError):
 # keywords, thumbnail, publish date. Only five fields differ, and one of
 # them is a free-text `error`.
 #
-# So the refusal is keyed on `error` present **OR** segments empty, never on
-# either alone: a future actor version may stop setting `error`, or may
-# report an error alongside some junk segments, and only one of those two
-# signals would survive.
+# The refusal branches on `segments` ALONE. `error` is free text a third
+# party writes: make it the condition and an actor version that starts
+# setting it for something non-fatal silently refuses usable transcripts.
+# Its text is carried into the note on both paths, and branched on by
+# neither.
+
+
+def reported_error(item: dict) -> str | None:
+    """The actor's own error text, if it gave any.
+
+    Read on BOTH paths and branched on by NEITHER. See `unavailable_reason`.
+    """
+    return (item.get("error") or "").strip() or None
 
 
 def unavailable_reason(item: dict) -> str | None:
     """Why this item has no transcript, or None if it has one.
 
-    Returns the ACTOR'S OWN wording where there is any. "No transcript
-    available for this video" is worth far more six months from now than a
-    generic "nothing readable" — it says which of several things went
-    wrong, in the vocabulary of the system that knows.
-    """
-    reported = (item.get("error") or "").strip()
-    segments = item.get("segments")
-    empty = not isinstance(segments, list) or not segments
+    **The branch is `segments`, and only `segments`.** Whether a transcript
+    exists is a structural fact about the payload; `error` is free text
+    written by a third party. An actor version that starts setting `error`
+    for something non-fatal — "some segments may be incomplete", "retried
+    after a rate limit" — would, if it were the condition, make this refuse
+    perfectly usable transcripts. Quietly losing good sources is a worse
+    failure than the one that guards against, because nothing reports it.
 
-    if reported and empty:
-        return (f"the actor reported: {reported!r} and returned no transcript "
-                "segments.")
+    The actor's wording is still carried, because it is the most useful
+    thing in the note: "No transcript available for this video" says which
+    of several things went wrong, in the vocabulary of the system that
+    knows, and a generic "nothing readable" does not. Carried, not branched
+    on — and `sidecar_meta` carries it on the SUCCESS path too, so a
+    transcript that arrives with a warning attached keeps the warning
+    instead of having it dropped on the floor.
+    """
+    segments = item.get("segments")
+    if isinstance(segments, list) and segments:
+        return None
+
+    reported = reported_error(item)
     if reported:
-        # Segments AND an error. Trust the error: a partial or salvaged
-        # transcript presented as a whole one is worse than none, because
-        # nothing downstream can tell it was truncated.
-        return (f"the actor reported: {reported!r}. Segments were present but "
-                "an error alongside them means the transcript cannot be "
-                "trusted to be complete.")
-    if empty:
-        return ("no transcript segments were returned and the actor reported "
-                "no error. There is no flat transcript field to fall back on.")
-    return None
+        return (f"no transcript segments were returned. The actor reported: "
+                f"{reported!r}.")
+    return ("no transcript segments were returned and the actor reported no "
+            "error. There is no flat transcript field to fall back on.")
 
 
 def auto_generated_flag(item: dict, segments) -> bool | None:
@@ -384,7 +408,13 @@ def sidecar_meta(video: dict, deduped: list[dict]) -> dict:
         "external_ref": video["videoId"],
         "personal_note": (
             f"Discovered by YOUTUBE via {PROVIDER}. Transcript de-overlapped "
-            f"from {len(deduped)} rolling caption(s)."),
+            f"from {len(deduped)} rolling caption(s)."
+            # A transcript that arrived WITH a warning keeps the warning.
+            # `error` is not what decides whether this is usable, but
+            # discarding it would throw away the only note saying the
+            # transcript may be partial.
+            + (f" The actor also reported: {reported_error(video)!r}."
+               if reported_error(video) else "")),
         "topics": [k for k in (video.get("keywords") or []) if k][:20],
         # Migration 030. NULL would mean "not a transcript"; this is one.
         # Never `bool(video["isAutoGenerated"])` directly — see

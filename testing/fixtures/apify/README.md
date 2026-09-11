@@ -26,13 +26,23 @@ highest-quality transcript type there is. `auto_generated_flag()` in
 `scripts/youtube_apify.py` is the one place that field is read, and it
 returns `None` when there are no segments.
 
-VERBATIM from the capture: the five fields above, `viewCount` 9213178,
-`durationSeconds` 515, and the twenty-six-keyword array's length.
-PLACEHOLDER: `videoId`, `videoTitle`, `description`, `thumbnail`,
-`publishDate` and the keyword strings — the capture's identity fields were
-not recorded, and inventing plausible ones is honest where inventing a
-plausible *shape* would not be. Nothing the adapter branches on is a
-placeholder.
+**`error` is carried, never branched on.** The branch is `segments`, and
+only `segments` — whether a transcript exists is a structural fact, while
+`error` is free text a third party writes. An actor version that started
+setting it for something non-fatal would, if it were the condition, make
+the adapter refuse perfectly usable transcripts and report nothing. The
+actor's wording is still kept in the note on the refusal path, and on the
+SUCCESS path too: a transcript that arrives carrying a warning keeps the
+warning rather than having it dropped.
+
+VERBATIM from the capture: the five fields above, `channelName`
+"Netflix India", `viewCount` 9213178, `durationSeconds` 515, and the
+twenty-six-keyword array's length.
+PLACEHOLDER: `videoId`, `channelId`, `videoTitle`, `description`,
+`thumbnail`, `publishDate` and the keyword strings — those identity fields
+were not recorded in the capture, and inventing plausible ones is honest
+where inventing a plausible *shape* would not be. **Nothing the adapter
+branches on is a placeholder.**
 
 ## The captions path
 

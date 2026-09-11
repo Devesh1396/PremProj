@@ -2781,17 +2781,25 @@ the one place in the codebase that field is read, and it returns `None`
 without segments. `None` (not a transcript), `False` (human) and `True`
 (ASR) are three distinct answers and the suite asserts all three.
 
-**The refusal keys on `error` present OR segments empty, never either
-alone.** A future actor version may stop setting `error`, or may report one
-alongside salvaged segments; only one of the two signals would survive
-either change. Segments *with* an error are treated as unusable
-deliberately: a partial transcript presented as a whole one is worse than
-none, because nothing downstream can tell it was truncated.
+**The branch is `segments`, and only `segments`.** Whether a transcript
+exists is a structural fact about the payload; `error` is free text a third
+party writes. An actor version that started setting it for something
+non-fatal — "some segments may be incomplete", "retried after a rate limit"
+— would, if it were the condition, make this refuse perfectly usable
+transcripts. **Quietly losing good sources is the worse failure**, because
+nothing reports it.
 
-**The note carries the actor's own wording.** "No transcript available for
-this video" tells a reader six months from now which of several things went
-wrong, in the vocabulary of the system that knows. "Nothing readable" does
-not.
+**The actor's wording is carried on BOTH paths and branched on by neither.**
+"No transcript available for this video" says which of several things went
+wrong, in the vocabulary of the system that knows, where "nothing readable"
+does not — and a transcript that arrives WITH a warning is ingested and
+keeps the warning, rather than having it dropped on the floor.
+
+*(An earlier revision of this adapter branched on `error` OR empty segments.
+That was reversed: the guarded case — a partial transcript presented as a
+whole one — is real but rarer than the case it created, which is refusing a
+good transcript because a third party attached a warning to it. The warning
+is now recorded instead, which addresses both.)*
 
 **The item is registered; nothing is delivered.** Registration is what
 stops it being rediscovered and re-paid-for every run — the treatment K05

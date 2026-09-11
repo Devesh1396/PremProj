@@ -151,13 +151,19 @@ is read anywhere in the codebase, and it returns `None` without segments.
 The suite asserts all three states are distinct: `None` (no transcript),
 `False` (human), `True` (ASR).
 
-**The refusal keys on `error` present OR segments empty, never either
-alone** — a future actor version may stop setting one of the two signals,
-or report an error alongside salvaged segments, and a partial transcript
-presented as a whole one is worse than none because nothing downstream can
-tell it was truncated. **The note keeps the actor's own wording**: "No
-transcript available for this video" says which thing went wrong six months
-from now, and "nothing readable" does not.
+**The branch is `segments`, and only `segments`.** Whether a transcript
+exists is a structural fact about the payload; `error` is free text a third
+party writes. An actor version that started setting it for something
+non-fatal — "some segments may be incomplete", "retried after a rate limit"
+— would, if it were the condition, make this refuse perfectly usable
+transcripts. **Quietly losing good sources is the worse failure**, because
+nothing reports it.
+
+**The actor's wording is carried on BOTH paths and branched on by neither.**
+"No transcript available for this video" says which of several things went
+wrong, in the vocabulary of the system that knows, where "nothing readable"
+does not — and a transcript that arrives WITH a warning is ingested and
+keeps the warning, rather than having it dropped on the floor.
 
 **The item is registered so it is not rediscovered** — the treatment K05
 already gives a podcast with no published transcript — and **nothing
@@ -183,7 +189,7 @@ list and the suite asserts two videos cost one run.
 |---|---|
 | `030` | the authorization note, `allowed_hosts`, transcript provenance columns, `uq_item_source_external`, creator external identity, `v_asr_derived_claims` |
 | `youtube_apify.py` | de-overlap, canonicalisation, the timestamped markdown |
-| `test_youtube.py` | 79 checks |
+| `test_youtube.py` | 82 checks |
 
 **The authorization is with APIFY, not from YouTube**, and the registry
 note says so in those words. `allowed_hosts` is `api.apify.com` alone and
