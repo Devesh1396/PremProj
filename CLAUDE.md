@@ -842,6 +842,46 @@ recognised as already known. **$0.4959** in 14 LLM calls, 0 UNPRICED.
 Every row is in `docs/evidence/first_source_loop.md`; do not summarise it
 away, it is the only record of what the output actually looks like.
 
+## ⛔ K10 IS BROKEN. DO NOT RUN IT. (audited 2026-09-18, D48)
+
+A practising nutritionist audited that run against the raw transcript and
+the literature. **Of 15 evidence records: 0 VERIFIED, 12 WRONG IN DETAIL,
+3 CANNOT VERIFY.** Unresolvable citations; real papers with fabricated
+authors, titles, `n` and effect sizes; effect sizes transplanted from a
+different meta-analysis; an identifier pointing at an unrelated
+chronic-pancreatitis paper; an invented negative finding; and walking
+studies marked `SUPPORTS` for seated calf raises and vacuuming.
+
+**`knowledge_research.py` writes `'Identified by K10 from a citation, not
+fetched.'`** K10 asks Engine 7 and persists what the model RECALLS. The
+`PUBMED`, `CLINICAL_TRIALS` and Crossref adapters have never executed
+once. A model asked for citations returns citation-shaped text, and
+nothing downstream tells that from a retrieved record.
+
+- **The 16 evidence rows are INVALIDATED. Do not patch them.**
+- **Do not run K10 until retrieval is fail-closed** — an evidence record
+  must be unwritable without a fetch that succeeded.
+- **The 20-video pilot stays closed.**
+
+**Fixing retrieval is NOT sufficient.** `evidence_records` stores
+DIRECTION and has **no DIRECTNESS field**, so a correctly retrieved
+walking trial still has nowhere to say it is not about seated calf raises.
+Indirect evidence is laundered as `SUPPORTS`, with real citations.
+
+**Provenance failed the same audit.** Stored timestamp ranges do not
+contain the statements they cite — **six of seven wrong**, claim 1 stored
+at `[05:24]` for a statement at 06:06–06:20. The chain resolves cleanly to
+the wrong second, which passes inspection. Any claim elsewhere in this
+file that "full provenance closes" is false.
+
+**Three judgements are computed and discarded, never stored**: K10's
+triage verdict, K10's `evidence_confidence`, K11's verdict. A judgement
+thrown away cannot be audited later.
+
+**K07, K08, K09 and the strategy-card structure are NOT implicated** — six
+of seven claims were legitimate checkable assertions and one correctly
+qualified the source. The architecture is sound; K10 is the broken part.
+
 **Still do not begin the 20-video pilot.** The blocker is concept
 normalization, not cost: 71 proposals and **one** resolution against a
 seed that holds the right concepts. 51 PROPOSED concepts were created

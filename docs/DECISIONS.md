@@ -2947,3 +2947,80 @@ was written.
 **Keeping the window and capping it harder.** The cap was never the
 problem. Twenty rows was already more than any single claim produces; the
 problem is that "recent" is not "related".
+
+---
+
+## D48 — K10 persists what a model recalls; that is not evidence
+**SETTLED 2026-09-18** — clinical audit of the 2026-09-11 loop run; D10, D35, D36, hard rule 7
+
+A practising nutritionist audited the first real source's output against
+the raw transcript and the published literature. **Of 15 evidence records:
+0 VERIFIED, 12 WRONG IN DETAIL, 3 CANNOT VERIFY.**
+
+Seven distinct failure modes: unresolvable citations; real papers with
+fabricated authors and titles; real papers with fabricated `n` and effect
+sizes; effect sizes transplanted from a different meta-analysis; an
+identifier pointing at an unrelated chronic-pancreatitis paper; an invented
+negative finding; and walking studies marked `SUPPORTS` for seated calf
+raises and for vacuuming.
+
+### The root cause is one line, and it is honest about itself
+
+`knowledge_research.py` writes the item with
+`'Identified by K10 from a citation, not fetched.'` K10 asks Engine 7 for
+evidence and **persists what the model recalls**. The `PUBMED`,
+`CLINICAL_TRIALS` and Crossref adapters exist, are registered, are tested
+through the real chokepoint — and **have never executed once**.
+
+This is the failure D35 and D36 were shaped to prevent one layer up, and it
+reappeared below them. A model asked for citations returns citation-shaped
+text at the same confidence as a retrieved record, and nothing downstream
+can tell the two apart, because the distinction was never stored.
+
+**K10 must be fail-closed**: an `evidence_records` row must be unwritable
+without a fetch that succeeded. Not "preferably fetched" — unwritable.
+Until then K10 does not run, on anything.
+
+### Retrieval alone is not the fix
+
+`evidence_records` stores **direction** — `strategy_evidence_relation` is
+`SUPPORTS` / `PARTIALLY_SUPPORTS` / `LIMITS` / `CONFLICTS` / `NEUTRAL` /
+`CONTEXTUALIZES` — and has **no directness field**. So failure mode 7
+survives a perfect retrieval layer: a correctly fetched walking trial still
+has nowhere to record that it is not about seated calf raises, and gets
+laundered as `SUPPORTS`. That would be worse than the current state, not
+better, because the citations would then be real.
+
+Directness is a separate axis from direction and needs a separate column.
+A study is about this intervention, about a related one, or about a
+different one; that is not a shade of "supports".
+
+### Provenance failed the same audit
+
+The stored timestamp ranges do not contain the statements they cite. Claim
+1 is stored at `[05:24]`; the statement is at 06:06–06:20. Claim 4's
+comparative conclusion is at 11:24–11:35, outside its stored range. **Six
+of seven are wrong this way.**
+
+The chain is structurally complete and resolves cleanly to the wrong
+second, which is the dangerous shape: it passes every inspection that
+checks whether provenance exists, and fails the only one that checks
+whether it is true. The build record's "full provenance closes" is
+withdrawn.
+
+### A judgement that is discarded cannot be audited
+
+K10's triage verdict, K10's `evidence_confidence` and K11's verdict are all
+computed and **never stored** — the dump disclosed this itself. That is why
+this audit had to be done by hand against the transcript rather than
+against the database. Each is a decision the system made about its own
+output, and each is exactly what a later reviewer needs.
+
+### What is NOT implicated
+
+K07, K08, K09 and the strategy-card structure. Six of seven claims were
+legitimate checkable assertions, and in one place the system correctly
+qualified the source beyond what the video said. **The architecture is
+sound; K10 is the broken part.** The 16 existing evidence rows are
+invalidated and must not be patched — a fabricated record corrected by hand
+is still a record nothing fetched.

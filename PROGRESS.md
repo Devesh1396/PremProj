@@ -250,11 +250,76 @@ harness*.
 
 ## The first real source through the complete loop — 2026-09-11
 
+> ## ⛔ AUDITED BY A PRACTISING NUTRITIONIST, 2026-09-18 — THE EVIDENCE LAYER FAILED
+>
+> **Read this before anything below it.** The section that follows was
+> written the day the loop ran and reports it as a success. A clinical
+> audit against the raw transcript and the actual literature says
+> otherwise, and the failure is in the code, not in one unlucky run.
+>
+> **Of 15 audited evidence records: 0 VERIFIED, 12 WRONG IN DETAIL, 3
+> CANNOT VERIFY.** Seven distinct failure modes:
+>
+> 1. citations that cannot be resolved to any paper;
+> 2. real papers with **fabricated authors and titles**;
+> 3. real papers with **fabricated `n` and effect sizes**;
+> 4. effect sizes **transplanted from a different meta-analysis**;
+> 5. an identifier pointing at an **unrelated chronic-pancreatitis paper**;
+> 6. an **invented negative finding**;
+> 7. **walking studies marked `SUPPORTS`** for seated calf raises and for
+>    vacuuming.
+>
+> **Root cause, in the code:** `knowledge_research.py` writes the item with
+> `'Identified by K10 from a citation, not fetched.'` K10 asks Engine 7 and
+> **persists what the model recalls.** The `PUBMED`, `CLINICAL_TRIALS` and
+> Crossref adapters have never executed once — the fetch that would have
+> falsified every one of these is not wired to K10 at all. A model asked
+> for citations produces citation-shaped text, and nothing downstream
+> distinguishes that from a retrieved record.
+>
+> **Failure mode 7 survives even if retrieval is fixed.** `evidence_records`
+> stores DIRECTION (`strategy_evidence_relation`: `SUPPORTS`,
+> `LIMITS`, `CONFLICTS`, …) and has **no DIRECTNESS field at all**. A
+> perfectly retrieved walking trial has nowhere to record that it is not
+> about seated calf raises, so indirect evidence is laundered as
+> `SUPPORTS`. Fixing retrieval alone would produce *real* citations still
+> attached to the wrong intervention.
+>
+> **Provenance does not survive audit either.** The stored timestamp ranges
+> do not contain the statements they claim to support — claim 1 is stored
+> at `[05:24]` and the statement is at 06:06–06:20; claim 4's comparative
+> conclusion is at 11:24–11:35, outside its stored range. **Six of seven
+> are wrong this way.** So the "full provenance closes" claim below is
+> **false**: the chain is structurally complete and points at the wrong
+> place.
+>
+> **Three computed values are discarded, never stored** — K10's triage
+> verdict, K10's `evidence_confidence`, and K11's verdict. The dump
+> disclosed this itself. A judgement that is computed and thrown away
+> cannot be audited later, which is why this audit had to be done by hand
+> against the transcript.
+>
+> ### Consequences, in force now
+>
+> - **The 16 existing evidence rows are INVALIDATED. Do not patch them.**
+> - **Do not run K10 on anything until retrieval is fail-closed** — until
+>   an evidence record cannot be written without a fetch that succeeded.
+> - **The 20-video pilot stays closed.**
+> - K07, K08, K09 and the strategy-card structure are NOT implicated. Six
+>   of seven claims were legitimate checkable assertions and in one place
+>   the system correctly qualified the source. **The architecture is sound;
+>   K10 is the broken part.**
+>
+> Everything below this box is the pre-audit record, kept unedited except
+> where a sentence is now known to be false and is marked inline. Read it
+> as what was believed on 2026-09-11, not as the current state.
+
 **One video, live from Apify, end to end, then again.** Full record with
 every row: `docs/evidence/first_source_loop.md`. `zg3GBH6fG2I`, "Move Like
 This After Eating", Glucose Revolution — 391 segments, ASR, 13 chunks,
 **7 claims, 16 evidence records, 6 strategy cards**, retrievable by a
-later case query. **$0.4959** in 14 LLM calls, 0 UNPRICED, on the
+later case query. *(The 16 evidence records were later invalidated — see
+the audit box above. The 7 claims and 6 cards were not.)* **$0.4959** in 14 LLM calls, 0 UNPRICED, on the
 no-pgvector / `MODEL_EMBEDDING`-unset floor the VPS runs.
 
 **RUN 2 added nothing.** Same claims, same strategies, same proposals,
@@ -379,9 +444,16 @@ video's sponsor read for its own commercial supplement, whose only cited
 support was "personal endorsement and customer testimonials", came out as
 **"Mulberry Leaf Extract (DNJ) for Acute Postprandial Glycemic
 Attenuation"** with four independent records and `evidence_confidence =
-UNKNOWN`: brand dropped, bioactive kept, confidence not inflated. Full
-provenance closes — strategy → claim → `[04:12]` → chunk → preserved raw
-file → actor segment at t=252.2s.
+UNKNOWN`: brand dropped, bioactive kept, confidence not inflated. *(The
+card's shape held up; its four "independent records" are among the 16 the
+audit invalidated.)*
+
+~~Full provenance closes — strategy → claim → `[04:12]` → chunk →
+preserved raw file → actor segment at t=252.2s.~~ **FALSE, per the
+2026-09-18 audit.** The chain is structurally complete and the timestamps
+are wrong: six of seven stored ranges do not contain the statement they
+cite. A provenance chain that resolves cleanly to the wrong second is
+worse than a broken one, because it passes inspection.
 
 **Do not begin the 20-video pilot yet.** At ~$0.50 a source it is ~$10 in
 model spend, and §3 of the evidence doc is the reason to fix concept
