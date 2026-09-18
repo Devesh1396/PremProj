@@ -945,9 +945,19 @@ Knowledge Inbox path** — not a second ingestion path (D37).
 
 `docs/evidence/curated_gate1.md` has every row. Migrations `032`/`033`,
 `curated_parser.py`, `curated_import.py`, `test_curated.py`. **6 of 6
-strategies, 24 fields all VERBATIM, 0 transformed, 0 provider calls.** The
-Strategy 6 routing table — the block K09 lost entirely — is stored
-byte-identical to a span fixed before the importer existed.
+strategies, 24 fields all VERBATIM, 0 transformed.** The Strategy 6 routing
+table — the block K09 lost entirely — is stored byte-identical to a span
+fixed before the importer existed.
+
+**PRESERVATION AND NORMALIZATION ARE SEPARATE GUARANTEES, and only the
+first is zero-provider.** The deterministic PARSE makes no model call and
+the code enforces that: `curated_parser.py` has no provider in it. Concept
+normalization is a different step, and since GATE 2 it reaches the semantic
+tier — **measured on Video 1: 8 embedding calls, $0.000017**, one per
+strategy name, when `MODEL_EMBEDDING` and `LLM_API_KEY` are configured.
+`test_curated.py` measures zero only because it sets `LLM_API_KEY = ""`.
+Do not restate "0 provider calls" for a curated import as a whole unless
+the code still enforces it.
 
 **The only architectural change is `source_kinds.extractor`.** An envelope
 whose kind is registered `CURATED_DETERMINISTIC` goes to the parser
@@ -984,8 +994,11 @@ no such passage so nothing was forced into a generic flag — **but this
 must be closed before a section that does is imported.**
 
 **A PASS here means preservation ONLY.** Concept normalization is GATE 2
-and retrieval is GATE 3. **0 of 8 phrases resolved** against 269 seeded
-concepts, run `read_only=True` so nothing entered the ontology.
+and retrieval is GATE 3. At the time: **0 of 8 phrases resolved** against
+269 seeded concepts, run `read_only=True` so nothing entered the ontology.
+**After GATE 2 it is 1 of 8** — `Meal-linked postprandial movement` →
+`POST_MEAL_MOVEMENT` at cosine 0.869, by the semantic tier. Still
+`read_only=True`, so still nothing entered the ontology.
 
 **The next preservation test is NOT Video 2.** Video 1 is one of the most
 structured sections; the next must be one of the LEAST structured, to try
@@ -1106,6 +1119,43 @@ specification asks for a sentence. The bug was always the CALLER sending it
 to a concept resolver, and that is fixed. Shortening an authoritative
 specification to make a resolver's life easier would be hard rule 1 in
 reverse.
+
+**THREE BYPASS PATHS FOUND BY REVIEW AND CLOSED (migrations `034`/`035`).**
+Each was a guard that existed with a path around it, each is proven by
+reverting the fix and watching the suite go red, and **none moved a number
+in the sweep** — it is byte-identical before and after, which is why a green
+measurement did not find them.
+
+1. **THE CACHE ANSWERED WHAT THE RESOLVER WOULD REFUSE.** Keyed on
+   `phrase_norm` alone and read BEFORE `allowed_types`, the type guard, the
+   candidate set and `confusable_with()`. A phrase resolved with no caller
+   type knowledge was served unchanged to a caller that had it; and a
+   do-not-merge pair added AFTER caching could never invalidate the row,
+   because the objection lives in the CANDIDATES and a one-concept answer
+   spans nothing. `034` stores `candidate_ids`, `cache_is_safe()` re-runs
+   both guards on every read, and a failed check is a MISS that resolves
+   properly rather than a deleted row.
+   **`resolved_under_types` is PROVENANCE, not the check**: NULL means the
+   type was UNKNOWN at write time, which is NOT "valid for every type". The
+   check is the cached concept's own type against the READER's set. A row
+   written before `034` has no candidate set and is refused, because "we
+   cannot check" is not "we checked".
+2. **A STRUCTURALLY KNOWN INTERVENTION BECAME A PROPOSED PHYSIOLOGY.**
+   `_propose_new(..., "PHYSIOLOGY")` was a literal at the end of the chain,
+   so `soleus push-up` from an `intervention` field became PHYSIOLOGY and
+   undid the type work above it. There is no honest narrow type — §R11 does
+   not say EXERCISE rather than FOOD — so a phrase typed only to a SET now
+   gets a `concept_proposals` row carrying that set, decision `NEEDS_TYPE`,
+   and **no concept at all**. A set of exactly ONE is knowledge and is used.
+   `v_concept_needs_type` is a READ, not a queue (hard rule 3), and these
+   rows are not counted against D8's escalation cap.
+   **One attempt now leaves ONE row**: the rejection branch used to write
+   LOGGED and then fall through to AUTO_CREATE, two rows disagreeing.
+3. **AN UNCONFIRMED ALIAS RESOLVED THROUGH TRIGRAM.** `_tier_alias` filters
+   `a.confirmed`; `_tier_trigram` did not, so an unconfirmed alias equal to
+   the query scored 1.0 and resolved the phrase through the back door.
+   "Unconfirmed" meant nothing. Now filtered in both tiers, with the suite
+   asserting both directions.
 
 **Still not GATE 3.** `retrieval.by_concept()` reads `strategies`,
 `strategy_concepts` and `implementation_patterns` and does not reference

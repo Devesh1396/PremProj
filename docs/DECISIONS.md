@@ -3429,6 +3429,89 @@ threshold decision, with its own measurement to do. It is why
 had never once executed: it sat behind `if r.decision == "RESOLVED"` and
 that branch was unreachable.
 
+### Reviewed, and three bypass paths closed — migrations `034`/`035`
+
+An independent review of the branch found three places where a guard
+existed and a path around it did not. Each is proven by reverting the fix
+and watching the suite go red, and **none of them moves a number in the
+sweep**: it is byte-identical before and after, phrase for phrase. They
+were bypasses, not scoring errors, which is why a green measurement did not
+find them.
+
+**1. The cache answered what the resolver would refuse.**
+`normalization_cache` is keyed on `phrase_norm` alone and `resolve()`
+returned a hit BEFORE `allowed_types`, the type rejection, the candidate
+set and `confusable_with()`. Two distinct holes, and the second is the one
+that could not be fixed by re-checking the answer: a semantic resolution is
+the top-1 of a SET and the confusable guard fires on the SET, so a
+do-not-merge pair added after caching is invisible to any check over one
+concept. `034` stores `candidate_ids`; `cache_is_safe()` re-runs both
+guards on every read; a failed check is a MISS and the tiers resolve
+properly, rather than the row being deleted — deleting would make the cache
+depend on who asked last.
+
+**`resolved_under_types` is provenance and not the check.** NULL means the
+type was unknown at write time, which is NOT "valid for every type"; what
+has to hold is that the cached concept is a kind of thing the READER
+allows, and that is what is tested. One property makes reading a row
+written under a narrower set safe: the type guard refuses and never shops,
+so a cached answer is always the tier's own top-1. A row written before
+`034` carries no candidate set and is refused rather than trusted, because
+"we cannot check this" is not "we checked this".
+
+**2. A structurally known intervention became a PROPOSED PHYSIOLOGY.**
+`_propose_new(..., "PHYSIOLOGY")` was a literal at the end of the chain, so
+`soleus push-up` out of a Claim Card `intervention` field became a PROPOSED
+PHYSIOLOGY concept and undid the type work above it. There is no honest
+narrow type to write — §R11 says "what is being done or taken" and does not
+say EXERCISE rather than FOOD rather than BEHAVIOUR — and
+`concepts.concept_type` is NOT NULL with no UNKNOWN in the enum. So a
+phrase typed only to a SET gets a `concept_proposals` row carrying that set
+(`allowed_types`) with decision `NEEDS_TYPE` and **no concept at all**. A
+set of exactly one is knowledge, not uncertainty, and is used.
+
+Nothing downstream is worse off: a strategy with no canonical concept is
+already an OPEN gap rather than a link to a PROPOSED one (D8), and a
+PROPOSED concept is not retrievable — it was junk in the ontology, not a
+working answer. `v_concept_needs_type` (`035`) is a READ, not a queue:
+nothing blocks on emptying it and these rows are not counted against D8's
+escalation cap, so hard rule 3 is not breached. **And one attempt now
+leaves one row** — the rejection branch used to write LOGGED and then fall
+through to AUTO_CREATE, two rows about one attempt saying opposite things.
+
+**3. An unconfirmed alias resolved through the trigram tier.**
+`_tier_alias` filters `a.confirmed`; `_tier_trigram` joined
+`concept_aliases` without it, so an unconfirmed alias equal to the query
+contributed similarity 1.0 — the alias tier refusing the row while the tier
+underneath used it as an exact match. "Unconfirmed" meant nothing. Measured
+by reverting: the trigram tier returns 1.0 off a `confirmed = false` row.
+This is the hole that made the semantic tier's no-alias rule necessary, and
+closing it is what makes an unconfirmed row genuinely inert.
+
+### Preservation and normalization are separate guarantees
+
+GATE 1's deterministic PARSE is still zero-provider and the code enforces
+it. **Curated concept normalization is not**, and since this work it
+reaches the semantic tier: measured on Video 1, **8 embedding calls,
+$0.000017**, one per strategy name, when `MODEL_EMBEDDING` and
+`LLM_API_KEY` are configured. `test_curated.py` measures zero only because
+it clears `LLM_API_KEY`. D50's "0 provider calls" is true of the parse and
+must not be restated for a curated import as a whole.
+
+GATE 1's "0 of 8 phrases resolved" is now **1 of 8** — `Meal-linked
+postprandial movement` → `POST_MEAL_MOVEMENT` at cosine 0.869, still
+`read_only=True`, so still nothing entered the ontology.
+
+### The production-relevant subset, reported apart from the history
+
+The committed answer key is unchanged and the headline stays the full
+historical 56. But the seven `mechanism` phrases are no longer sent to the
+resolver at all, so on the 49 that are: **33 RIGHT, 4 REFUSED_CONFUSABLE, 6
+PARTIAL_MISS, 2 MISSED, 4 WRONG**. Excluding mechanism removes **no RIGHT
+and no WRONG** — all seven were PARTIAL or PARTIAL_MISS, which is the
+expected shape for a proposition. **0.82 is not re-derived from the subset
+and is not retuned.**
+
 ### Still not done
 
 This is GATE 2 and only GATE 2. `retrieval.by_concept()` reads `strategies`,

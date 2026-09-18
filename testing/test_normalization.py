@@ -225,12 +225,17 @@ def gate2(conn, check, concept) -> None:
                          allowed_types=NZ.TARGET_TYPES, embed_call=fake_embed_pop)
     check("a refused crossing does not resolve to the next type-compatible concept",
           not r_typed.concept_ids, repr(r_typed))
+    # The refusal is RECORDED, and in ONE row. This check used to assert a
+    # LOGGED row written at rejection time -- which was real, and was then
+    # followed by an AUTO_CREATE row for the same attempt, so the two rows
+    # disagreed about what happened. The refusal now travels to the single
+    # terminal row instead.
+    recorded = conn.execute(
+        """select decision::text, decision_note from concept_proposals
+            where raw_phrase=%s""", (pop_query,)).fetchall()
     check("...the refusal is RECORDED, not merely performed",
-          conn.execute(
-              """select count(*) from concept_proposals
-                  where raw_phrase=%s and decision='LOGGED'
-                    and decision_note like 'refused on concept_type%%'""",
-              (pop_query,)).fetchone()[0] == 1)
+          len(recorded) == 1 and "refused on concept_type" in (recorded[0][1] or ""),
+          str(recorded))
     r_untyped = NZ.resolve(conn, pop_query, llm=None, use_cache=False,
                            embed_call=fake_embed_pop)
     check("...and the SAME phrase resolves when no caller claimed to know the type",
@@ -338,6 +343,243 @@ def gate2(conn, check, concept) -> None:
           conn.execute(
               "select count(*) from concepts where canonical_key like %s",
               (PFX + "SEM_%",)).fetchone()[0] == 0)
+
+
+
+def gate2_review(conn, check, concept) -> None:
+    """The three invariants the GATE 2 review found open.
+
+    All three have the same shape: a guard that exists, and a path around
+    it that nobody had walked.
+    """
+    import knowledge_extract as KE
+
+    print("\nGATE 2 review 1: the cache may not answer what the resolver would refuse")
+
+    if not preflight.have_capability(conn, "vector"):
+        return
+    if not preflight.have_env(
+            "MODEL_EMBEDDING",
+            "the semantic tier cannot be exercised at all, so the cache-bypass, "
+            "typed-proposal and unconfirmed-alias checks below do not run"):
+        return
+
+    dims = conn.execute("select embedding_dim()").fetchone()[0]
+    pinned = conn.execute(
+        "select embedding_model from concepts where embedding is not null "
+        "limit 1").fetchone()
+    model = pinned[0] if pinned else "c3test-fixture-embedding"
+
+    def embed_concept(key, name, ctype, angle):
+        cid = concept(key, name, ctype)
+        conn.execute(
+            """update concepts set embedding = %s::vector, embedding_model = %s,
+                      embedding_dim = %s, embedding_source_hash = %s
+                where concept_id = %s""",
+            (str(unit(angle, dims)), model, dims, key.lower(), cid))
+        return cid
+
+    # One POPULATION concept the query lands on, and an EXERCISE one it does
+    # not, so "the caller allows a different type" and "a type-compatible
+    # concept exists nearby" are separable.
+    pop = embed_concept("CACHE_POP", "c3test cohort of desk workers", "POPULATION", 0.0)
+    exe = embed_concept("CACHE_EXE", "c3test standing break", "EXERCISE", 30.0)
+
+    def at_zero(_model, _text, d):
+        return unit(0.0, d)
+
+    phrase = "c3test people who sit at desks"
+    conn.execute("delete from normalization_cache where phrase_norm = norm_phrase(%s)",
+                 (phrase,))
+    conn.execute("delete from concept_proposals where raw_phrase = %s", (phrase,))
+
+    # 1. resolves with NO caller type knowledge, and is cached.
+    r1 = NZ.resolve(conn, phrase, llm=None, embed_call=at_zero)
+    check("a phrase resolves semantically when no caller claims to know the type",
+          r1.decision == "RESOLVED" and r1.concept_ids == [pop], repr(r1))
+    row = conn.execute(
+        """select concept_ids, candidate_ids, resolved_under_types
+             from normalization_cache where phrase_norm = norm_phrase(%s)""",
+        (phrase,)).fetchone()
+    check("...and is cached with the candidate set the guard will need",
+          row is not None and row[1] is not None and len(row[1]) >= 1, str(row))
+    check("...recording that the type was UNKNOWN at write time, not 'any type'",
+          row is not None and row[2] is None, str(row and row[2]))
+
+    # 2. the SAME phrase, now from a caller that structurally knows better.
+    r2 = NZ.resolve(conn, phrase, llm=None, allowed_types=NZ.TARGET_TYPES,
+                    embed_call=at_zero)
+    check("THE CACHE DOES NOT RETURN THE INCOMPATIBLE CONCEPT TO A TYPED CALLER",
+          pop not in r2.concept_ids, repr(r2))
+    check("...and it did not quietly answer from cache at all",
+          r2.method != "cache", repr(r2))
+    check("...nor shop down the list for the type-compatible neighbour",
+          exe not in r2.concept_ids, repr(r2))
+
+    # 3. and the untyped caller is not punished for someone else's context.
+    r3 = NZ.resolve(conn, phrase, llm=None, embed_call=at_zero)
+    check("the untyped caller still gets its answer, from cache",
+          r3.method == "cache" and r3.concept_ids == [pop], repr(r3))
+
+    # ------------------------------------------------------------------
+    print("\nthe cache cannot outlive the CONFUSABLE_DO_NOT_MERGE guard either")
+
+    near = embed_concept("CACHE_NEAR", "c3test deskbound population", "POPULATION", 20.0)
+    conn.execute("delete from normalization_cache where phrase_norm = norm_phrase(%s)",
+                 (phrase,))
+    r4 = NZ.resolve(conn, phrase, llm=None, embed_call=at_zero)
+    check("the phrase resolves and caches again", r4.decision == "RESOLVED", repr(r4))
+    cand = conn.execute(
+        "select candidate_ids from normalization_cache where phrase_norm = norm_phrase(%s)",
+        (phrase,)).fetchone()[0]
+    check("...and the stored candidates include the near neighbour, not just the answer",
+          near in [str(c) for c in cand] and len(cand) > 1, str(cand))
+
+    # The ontology changes AFTER the row was written.
+    conn.execute(
+        """insert into concept_relations (from_concept, to_concept, relation_type, note)
+           values (%s,%s,'CONFUSABLE_DO_NOT_MERGE','c3test gate 2 review')
+           on conflict do nothing""", (pop, near))
+    r5 = NZ.resolve(conn, phrase, llm=None, embed_call=at_zero)
+    check("A PAIR ADDED AFTER CACHING INVALIDATES THE HIT",
+          r5.method != "cache" and not r5.concept_ids, repr(r5))
+    check("...and the live resolver refuses the phrase, as it now must",
+          r5.decision == "ESCALATED" and "CONFUSABLE_DO_NOT_MERGE" in r5.note,
+          repr(r5))
+    check("...which re-checking the cached ANSWER could never have caught: "
+          "it is one concept and one concept spans nothing",
+          NZ.confusable_with(conn, [pop]) == [])
+    conn.execute(
+        """delete from concept_relations where relation_type='CONFUSABLE_DO_NOT_MERGE'
+            and (from_concept=%s or to_concept=%s)""", (pop, pop))
+
+    conn.execute("delete from normalization_cache where phrase_norm = norm_phrase(%s)",
+                 (phrase,))
+    conn.execute("delete from concept_proposals where raw_phrase = %s", (phrase,))
+
+    # ------------------------------------------------------------------
+    print("\nGATE 2 review 2: a known intervention is never created as PHYSIOLOGY")
+
+    novel = "c3test soleus push-up against a wall"
+    conn.execute("delete from concepts where canonical_name = %s", (novel,))
+    conn.execute("delete from concept_proposals where raw_phrase = %s", (novel,))
+
+    r = NZ.resolve(conn, novel, context="c3test", llm=None,
+                   allowed_types=NZ.INTERVENTION_TYPES, embed_call=at_zero)
+    check("an unresolved INTERVENTION does not become a concept at all",
+          conn.execute("select count(*) from concepts where canonical_name=%s",
+                       (novel,)).fetchone()[0] == 0, repr(r))
+    check("...it is NEEDS_TYPE, not AUTO_CREATE",
+          r.decision == "NEEDS_TYPE", repr(r))
+    check("...and PHYSIOLOGY appears nowhere near it",
+          conn.execute(
+              """select count(*) from concepts
+                  where canonical_name=%s and concept_type='PHYSIOLOGY'""",
+              (novel,)).fetchone()[0] == 0)
+    rows = conn.execute(
+        """select decision::text, allowed_types, decision_note
+             from concept_proposals where raw_phrase=%s""", (novel,)).fetchall()
+    check("EXACTLY ONE proposal row for one normalization attempt",
+          len(rows) == 1, str(rows))
+    check("...carrying the SET the caller could vouch for, not a narrowing of it",
+          rows and sorted(rows[0][1] or []) == sorted(NZ.INTERVENTION_TYPES),
+          str(rows and rows[0][1]))
+    check("...and the view can find it without anyone maintaining a queue",
+          conn.execute(
+              "select count(*) from v_concept_needs_type where raw_phrase=%s",
+              (novel,)).fetchone()[0] == 1)
+
+    # A caller that names exactly one type HAS the knowledge; use it.
+    single = "c3test a wholly novel exercise"
+    conn.execute("delete from concepts where canonical_name = %s", (single,))
+    conn.execute("delete from concept_proposals where raw_phrase = %s", (single,))
+    NZ.resolve(conn, single, context="c3test", llm=None,
+               allowed_types=frozenset({"EXERCISE"}), embed_call=at_zero)
+    check("a caller naming ONE type is knowledge, and the concept is created with it",
+          conn.execute(
+              """select concept_type::text from concepts where canonical_name=%s""",
+              (single,)).fetchone() == ("EXERCISE",))
+
+    # A structurally-known TARGET is not given an invented narrow type either.
+    tgt = "c3test a wholly novel measured outcome"
+    conn.execute("delete from concepts where canonical_name = %s", (tgt,))
+    conn.execute("delete from concept_proposals where raw_phrase = %s", (tgt,))
+    rt = NZ.resolve(conn, tgt, context="c3test", llm=None,
+                    allowed_types=NZ.TARGET_TYPES, embed_call=at_zero)
+    check("an unresolved TARGET is not assigned a narrow type either",
+          rt.decision == "NEEDS_TYPE"
+          and conn.execute("select count(*) from concepts where canonical_name=%s",
+                           (tgt,)).fetchone()[0] == 0, repr(rt))
+
+    # ------------------------------------------------------------------
+    print("\na type rejection leaves ONE outcome, not a contradictory pair")
+
+    crossed = "c3test a phrase whose nearest concept is the wrong kind"
+    conn.execute("delete from concepts where canonical_name = %s", (crossed,))
+    conn.execute("delete from concept_proposals where raw_phrase = %s", (crossed,))
+    rc = NZ.resolve(conn, crossed, context="c3test", llm=None,
+                    allowed_types=NZ.INTERVENTION_TYPES, embed_call=at_zero)
+    rows = conn.execute(
+        """select decision::text, decision_note from concept_proposals
+            where raw_phrase=%s order by created_at""", (crossed,)).fetchall()
+    check("one refused normalization attempt writes exactly one proposal row",
+          len(rows) == 1, str(rows))
+    check("...and it is not a LOGGED refusal followed by an AUTO_CREATE",
+          [d for d, _ in rows] != ["LOGGED", "AUTO_CREATE"], str(rows))
+    check("...the single row still says the candidate was refused on type",
+          rows and "concept_type" in (rows[0][1] or ""), str(rows))
+    check("...and no concept was created behind it",
+          conn.execute("select count(*) from concepts where canonical_name=%s",
+                       (crossed,)).fetchone()[0] == 0, repr(rc))
+
+    for name in (novel, single, tgt, crossed):
+        conn.execute("delete from concepts where canonical_name=%s", (name,))
+        conn.execute("delete from concept_proposals where raw_phrase=%s", (name,))
+
+    # ------------------------------------------------------------------
+    print("\nGATE 2 review 3: an UNCONFIRMED alias resolves nothing, by any tier")
+
+    host = concept("ALIAS_HOST", "c3test alias host concept")
+    query = "c3test an alias nobody confirmed"
+    conn.execute("delete from concept_aliases where alias_text=%s", (query,))
+    conn.execute("delete from concepts where canonical_name=%s", (query,))
+    conn.execute("delete from concept_proposals where raw_phrase=%s", (query,))
+    conn.execute("delete from normalization_cache where phrase_norm=norm_phrase(%s)",
+                 (query,))
+    conn.execute(
+        """insert into concept_aliases (concept_id, alias_text, method, confidence, confirmed)
+           values (%s,%s,'SEMANTIC',0.83,false)""", (host, query))
+
+    alias_tier = NZ._tier_alias(conn, NZ.norm(conn, query))
+    check("the alias tier refuses an unconfirmed alias",
+          not alias_tier.candidates, repr(alias_tier))
+    tri = NZ._tier_trigram(conn, NZ.norm(conn, query))
+    check("THE TRIGRAM TIER CANNOT USE IT AS A 1.0 SHORTCUT EITHER",
+          host not in tri.candidate_ids or tri.confidence < 1.0,
+          f"{tri.confidence} {[c.name for c in tri.candidates]}")
+    check("...so an unconfirmed row influences no resolution at all",
+          not any(c.concept_id == host for c in tri.candidates),
+          str([(c.name, c.score) for c in tri.candidates]))
+
+    conn.execute("update concept_aliases set confirmed = true where alias_text=%s",
+                 (query,))
+    alias_tier = NZ._tier_alias(conn, NZ.norm(conn, query))
+    check("confirming it turns the deterministic path back on",
+          alias_tier.selected == [host], repr(alias_tier))
+    r = NZ.resolve(conn, query, llm=boom, use_cache=False)
+    check("...and resolve() answers from the alias tier, with no LLM",
+          r.decision == "RESOLVED" and r.method == "alias"
+          and r.concept_ids == [host], repr(r))
+
+    conn.execute("delete from concept_aliases where alias_text=%s", (query,))
+    conn.execute("delete from normalization_cache where phrase_norm=norm_phrase(%s)",
+                 (query,))
+    for key in ("CACHE_POP", "CACHE_EXE", "CACHE_NEAR", "ALIAS_HOST"):
+        conn.execute("delete from concepts where canonical_key=%s", (PFX + key,))
+    check("the review fixtures do not outlive the review",
+          conn.execute(
+              "select count(*) from concepts where canonical_key like %s",
+              (PFX + "CACHE_%",)).fetchone()[0] == 0)
 
 
 def main() -> int:
@@ -558,6 +800,7 @@ def main() -> int:
           conn.execute("select count(*) from v_concept_escalation_queue").fetchone()[0] >= 0)
 
     gate2(conn, check, concept)
+    gate2_review(conn, check, concept)
 
     print("\nan Engine 1 Pass A phrase list resolves end to end")
     results = NZ.resolve_all(conn, [

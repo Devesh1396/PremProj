@@ -395,3 +395,125 @@ measured on dataset A, where the expectations came from somewhere else.
 - **The LLM tier is untouched**, still last, still optional, still
   unreachable from K09. D51 put it at about 2 calls in 56 once the tier
   below it works; nothing here tests that estimate.
+
+
+---
+
+## 8. After the review — three bypass paths, closed
+
+An independent review of this branch found three places where a guard
+existed and a path around it did not. All three are closed, each is proven
+by reverting the fix and watching the suite go red, and **none of them
+moves a single number in §1–§6**: the historical sweep is byte-identical
+before and after, phrase for phrase and verdict for verdict. They were
+bypasses, not scoring errors, which is exactly why a green sweep did not
+find them.
+
+### 8.1 The cache answered what the resolver would refuse
+
+`normalization_cache` is keyed on `phrase_norm` alone and `resolve()`
+returned a hit **before** `allowed_types`, before the type rejection,
+before the candidate set existed and before `confusable_with()` ran. Two
+distinct holes:
+
+**Context.** A phrase first resolved with nobody claiming to know its type
+was served unchanged to a caller that DID know. Measured: `c3test people
+who sit at desks` resolves to a POPULATION concept untyped, and the old
+cache then returned that same POPULATION concept to a caller supplying
+`TARGET_TYPES`. The guard never ran.
+
+**Staleness.** A semantic resolution is the top-1 of a set and the
+confusable guard fires on the SET, so re-checking the cached ANSWER cannot
+catch a pair added afterwards — one concept spans nothing. Measured: add a
+`CONFUSABLE_DO_NOT_MERGE` pair after caching, and the live resolver
+escalates while the old cache kept serving the answer.
+
+Migration `034` stores `candidate_ids` (so the confusable guard re-runs
+over what the tier considered) and `resolved_under_types`. `cache_is_safe()`
+runs both checks on every read; a failed check is a MISS and the tiers
+resolve properly, rather than the row being deleted — deleting it would
+make the cache depend on who asked last.
+
+**`resolved_under_types` is provenance, not the check.** NULL means the
+type was unknown at write time, which is **not** "valid for every type".
+What has to hold is that the cached concept is a kind of thing THIS caller
+allows, so that is what is checked. One property makes reading a row
+written under a narrower set safe: the type guard refuses and never shops,
+so a cached answer is always the tier's own top-1 and never a second choice
+promoted because it fitted. A row written before `034` has no candidate set
+and is refused rather than trusted.
+
+### 8.2 A structurally known intervention became a PROPOSED PHYSIOLOGY
+
+`_propose_new(..., "PHYSIOLOGY")` was a literal at the end of the chain. So
+`soleus push-up`, arriving from a Claim Card `intervention` field that §R11
+defines as "what is being done or taken", became a PROPOSED **PHYSIOLOGY**
+concept — undoing the type work one line below it.
+
+There is no honest narrow type to write: §R11 does not say EXERCISE rather
+than FOOD rather than BEHAVIOUR, and choosing from the phrase's wording is
+the resolver answering its own question. `concepts.concept_type` is NOT
+NULL and the enum has no UNKNOWN, so a phrase typed only to a SET now gets
+a `concept_proposals` row carrying that set (`allowed_types`, migration
+`034`) with decision `NEEDS_TYPE` and **no concept at all**. A set of
+exactly one is knowledge and is used.
+
+Nothing downstream is worse off. A strategy with no canonical concept is
+already recorded as an OPEN gap rather than linked to a PROPOSED one to
+make a count look right (D8), and a PROPOSED concept is not retrievable
+anyway — it was junk in the ontology, not a working answer. `v_concept_needs_type`
+(migration `035`) is a READ, not a queue: nothing is blocked on anyone
+emptying it, and these rows are not counted against D8's escalation cap.
+
+**And one attempt now leaves one row.** The type-rejection branch wrote a
+`LOGGED` proposal and then fell through to `AUTO_CREATE`, so a single
+normalization attempt left two rows saying opposite things. The refusal is
+carried to the terminal row instead.
+
+### 8.3 An unconfirmed alias resolved through the trigram tier
+
+`_tier_alias` filters `a.confirmed`. `_tier_trigram` joined
+`concept_aliases` with no such filter, so an unconfirmed alias equal to the
+query contributed `similarity = 1.0` and resolved the phrase through the
+back door — the alias tier refusing the row while the tier underneath it
+used the same row as an exact match. **"Unconfirmed" meant nothing.**
+
+Measured by reverting the fix: the trigram tier returns
+`1.0 ['c3test alias host concept']` off a row marked `confirmed = false`.
+
+This is the hole that made the semantic tier's no-alias rule necessary, and
+closing it is what makes an unconfirmed row genuinely inert rather than
+inert by convention. Confirming the alias turns the deterministic path back
+on, and the suite asserts both directions.
+
+---
+
+## 9. The production-relevant subset
+
+The committed answer key is unchanged and §1–§6 remain the full historical
+56. But **the seven `mechanism` phrases are no longer sent to the resolver
+at all** after this work, so they are history rather than a measurement of
+what the system now does. Reported separately rather than by editing the
+sample:
+
+```
+full historical 56
+  RIGHT 33  PARTIAL 4  PARTIAL_MISS 9  REFUSED_CONFUSABLE 4  MISSED 2  WRONG 4   (n=56)
+
+production-relevant 49  (target + intervention/K11; mechanism excluded)
+  RIGHT 33  PARTIAL 0  PARTIAL_MISS 6  REFUSED_CONFUSABLE 4  MISSED 2  WRONG 4   (n=49)
+
+the 7 mechanism propositions, on their own
+  RIGHT 0  PARTIAL 4  PARTIAL_MISS 3  REFUSED_CONFUSABLE 0  MISSED 0  WRONG 0   (n=7)
+```
+
+**Excluding mechanism removes no RIGHT and no WRONG.** All seven were
+PARTIAL or PARTIAL_MISS — sentences whose core idea a seeded concept names
+but which no single concept IS. That is the expected shape: a proposition
+could never have scored RIGHT, and the four PARTIAL verdicts in the full
+set are all of them.
+
+**0.82 is not re-derived from this subset and is not retuned.** The subset
+is a narrower view of the same measurement, not a new one, and choosing a
+threshold from it after seeing it would be the fitting this whole exercise
+is structured to avoid.

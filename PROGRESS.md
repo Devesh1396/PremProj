@@ -248,6 +248,44 @@ harness*.
 
 ---
 
+## GATE 2 review — three bypass paths closed — 2026-09-18
+
+Migrations `034`/`035`. Detail in `docs/evidence/gate2_semantic_tier.md` §8
+and §9, decisions in D51. **The sweep is byte-identical before and after**,
+phrase for phrase and verdict for verdict — these were bypasses, not
+scoring errors, which is why a green measurement did not find them. Each
+fix was verified by reverting it and watching the suite go red.
+
+1. **The cache answered what the resolver would refuse.** Keyed on
+   `phrase_norm` alone and read before `allowed_types`, the type guard, the
+   candidate set and `confusable_with()`. A pair added AFTER caching could
+   never invalidate the row, because the objection lives in the CANDIDATES
+   and a one-concept answer spans nothing. `034` stores `candidate_ids` and
+   `resolved_under_types`; `cache_is_safe()` re-runs both guards per read.
+   NULL `resolved_under_types` means *unknown at write time*, not *valid for
+   all types* — the check is the cached concept's own type against the
+   reader's set.
+2. **`soleus push-up` from an `intervention` field became a PROPOSED
+   PHYSIOLOGY.** Now a `NEEDS_TYPE` proposal carrying `allowed_types` and
+   **no concept**; a set of exactly one is used. One attempt leaves one row
+   (it used to write LOGGED then AUTO_CREATE, disagreeing with itself).
+3. **An unconfirmed alias scored 1.0 in the trigram tier**, which
+   `_tier_alias` would have refused. Filtered in both tiers now.
+
+**Preservation and normalization are separate guarantees.** GATE 1's parse
+is still zero-provider and the code enforces it; curated NORMALIZATION now
+reaches the semantic tier — measured on Video 1: **8 embedding calls,
+$0.000017**. `test_curated.py` measures zero only because it clears
+`LLM_API_KEY`. GATE 1's "0 of 8 phrases resolved" is now **1 of 8**
+(`Meal-linked postprandial movement` → `POST_MEAL_MOVEMENT`, 0.869), still
+`read_only=True`.
+
+**Production-relevant subset (49 phrases, mechanism excluded):** 33 RIGHT,
+4 REFUSED_CONFUSABLE, 6 PARTIAL_MISS, 2 MISSED, 4 WRONG. Excluding
+mechanism removes no RIGHT and no WRONG. 0.82 not retuned.
+
+`run_all.sh` twice and `run_bare.sh`, exit codes read explicitly.
+
 ## GATE 2 — the semantic tier is BUILT and measured — 2026-09-18
 
 Every row: `docs/evidence/gate2_semantic_tier.md`. D51 records the design

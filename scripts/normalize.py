@@ -320,16 +320,31 @@ def _tier_structured(conn, phrase_norm: str, **_) -> TierResult:
 def _tier_trigram(conn, phrase_norm: str, **_) -> TierResult:
     if not _capability(conn, "pg_trgm"):
         return TierResult.empty("pg_trgm absent (D15)")
+    # ONLY CONFIRMED ALIASES MAY INFLUENCE A RESOLUTION.
+    #
+    # This join had no `a.confirmed` filter while `_tier_alias` did, so an
+    # UNCONFIRMED alias equal to the query contributed similarity 1.0 here
+    # and resolved the phrase through the back door -- the alias tier would
+    # refuse the row and the tier underneath it would use the same row as an
+    # exact match. "Unconfirmed" meant nothing.
+    #
+    # It is not hypothetical: the semantic tier's first version wrote an
+    # unconfirmed alias, and a suite then resolved a phrase at 1.0 through
+    # exactly this path. That is why the semantic tier now writes no alias
+    # at all -- but the hole was here, and closing it is what makes the
+    # unconfirmed row genuinely inert rather than inert by convention.
     rows = conn.execute(
         """select c.concept_id::text, c.canonical_name, c.concept_type::text,
                   greatest(similarity(norm_phrase(c.canonical_name), %s),
-                           coalesce(max(similarity(a.alias_norm, %s)), 0)) as sim
+                           coalesce(max(similarity(a.alias_norm, %s))
+                                    filter (where a.confirmed), 0)) as sim
              from concepts c
              left join concept_aliases a on a.concept_id = c.concept_id
             where c.status in ('SEEDED','ACTIVE')
             group by c.concept_id, c.canonical_name, c.concept_type
            having greatest(similarity(norm_phrase(c.canonical_name), %s),
-                           coalesce(max(similarity(a.alias_norm, %s)), 0)) >= %s
+                           coalesce(max(similarity(a.alias_norm, %s))
+                                    filter (where a.confirmed), 0)) >= %s
             order by sim desc limit 5""",
         (phrase_norm, phrase_norm, phrase_norm, phrase_norm, CREATE_THRESHOLD)).fetchall()
     if not rows:
@@ -438,6 +453,66 @@ def _tier_semantic(conn, phrase_norm: str, *, phrase: str | None = None,
                       candidates=candidates, confidence=best)
 
 
+def cache_is_safe(conn, row, allowed_types: frozenset[str] | set[str] | None
+                  ) -> tuple[bool, str]:
+    """May this cache row be served to THIS caller? Returns (ok, why not).
+
+    The cache used to sit in front of every guard. It is keyed on
+    `phrase_norm` alone, so a phrase first resolved with nobody claiming to
+    know its type was served unchanged to a caller that DID know -- and the
+    type guard, the candidate set and `confusable_with()` never ran. A cache
+    that can answer what the resolver would refuse is not a cache, it is a
+    way around the resolver.
+
+    Two checks, and they fail for different reasons:
+
+    **The candidate set, re-checked.** A semantic resolution is the top-1 of
+    a set, and the confusable guard fires on the SET. Re-checking the cached
+    ANSWER cannot catch a pair added afterwards, because a one-concept
+    answer can never span anything -- the objection was in the candidates.
+    So the candidates are stored and re-checked here, and a row with none
+    stored (written before migration 034) is refused rather than trusted:
+    "we cannot check this" is not "we checked this".
+
+    **The type, against the READER.** Not against `resolved_under_types` --
+    that column is provenance and says what the entry was made under. What
+    has to hold is that the concept this row points at is a kind of thing
+    THIS caller allows. A row written under no type knowledge is not
+    thereby valid for every type; it is a row whose type nobody checked,
+    and the check happens now.
+
+    One property makes reading a row written under a NARROWER set safe: the
+    type guard refuses, it never shops. A cached answer is therefore always
+    the tier's own top-1 and never a second choice promoted because it
+    happened to fit -- so it means the same thing to a caller who asked for
+    less.
+    """
+    concept_ids = [str(c) for c in (row[0] or [])]
+    candidate_ids = [str(c) for c in (row[3] or [])] if row[3] is not None else None
+
+    if candidate_ids is None:
+        return (False,
+                "the row predates migration 034 and stored no candidate set, so "
+                "the CONFUSABLE_DO_NOT_MERGE guard cannot be re-run over it")
+
+    clash = confusable_with(conn, candidate_ids)
+    if clash:
+        return (False,
+                f"its candidates now span CONFUSABLE_DO_NOT_MERGE {clash} -- the "
+                "ontology changed after this was cached")
+
+    if allowed_types and concept_ids:
+        rows = conn.execute(
+            """select canonical_name, concept_type::text from concepts
+                where concept_id = any(%s::uuid[])""", (concept_ids,)).fetchall()
+        for name, ctype in rows:
+            if ctype not in allowed_types:
+                return (False,
+                        f"cached {name!r} is {ctype}; this caller allows "
+                        f"{sorted(allowed_types)}")
+    return True, ""
+
+
 def type_rejection(conn, tier: TierResult,
                    allowed_types: frozenset[str] | set[str] | None
                    ) -> tuple[Candidate, str] | None:
@@ -539,18 +614,30 @@ def resolve(conn, phrase: str, context: str | None = None,
     # A cache HIT bumps hit_count, which is a write -- small, but it would
     # make the cache look hotter than the runtime made it, and read_only
     # means read_only. The tiers produce what the cache stored anyway.
+    cache_refusal: str | None = None
     if use_cache and not read_only:
         cached = conn.execute(
-            """select concept_ids, method, confidence from normalization_cache
-                where phrase_norm=%s""", (phrase_norm,)).fetchone()
+            """select concept_ids, method, confidence, candidate_ids,
+                      resolved_under_types
+                 from normalization_cache where phrase_norm=%s""",
+            (phrase_norm,)).fetchone()
         if cached:
-            conn.execute(
-                """update normalization_cache
-                      set hit_count = hit_count + 1, last_used = now()
-                    where phrase_norm=%s""", (phrase_norm,))
-            return Resolution(phrase, [str(c) for c in cached[0]], "cache",
-                              float(cached[2] or 1.0), "RESOLVED",
-                              f"cached from {cached[1]}")
+            ok, why = cache_is_safe(conn, cached, allowed_types)
+            if ok:
+                conn.execute(
+                    """update normalization_cache
+                          set hit_count = hit_count + 1, last_used = now()
+                        where phrase_norm=%s""", (phrase_norm,))
+                return Resolution(phrase, [str(c) for c in cached[0]], "cache",
+                                  float(cached[2] or 1.0), "RESOLVED",
+                                  f"cached from {cached[1]}")
+            # NOT a hit. Fall through and resolve properly: the tiers will
+            # apply the guards live and reach whatever the right answer is
+            # in THIS context -- a refusal, an escalation, or a different
+            # concept. The stale row is left alone rather than deleted,
+            # because it may be perfectly valid for the next caller and
+            # deleting it would make the cache depend on who asked last.
+            cache_refusal = why
 
     # A tier that answers WEAKLY no longer ends the chain. It used to: a
     # trigram near-match at 0.778 returned LOGGED and the semantic tier was
@@ -560,6 +647,7 @@ def resolve(conn, phrase: str, context: str | None = None,
     # instead, and becomes the outcome only if nothing later can do better.
     near: tuple[str, TierResult] | None = None
     refused: str | None = None
+    refused_candidate: Candidate | None = None
 
     for method, fn in (("alias", _tier_alias), ("structured", _tier_structured),
                        ("trigram", _tier_trigram), ("semantic", _tier_semantic)):
@@ -596,11 +684,17 @@ def resolve(conn, phrase: str, context: str | None = None,
         if rejection is not None:
             candidate, why = rejection
             tier.rejected.append(rejection)
-            note = f"refused on concept_type: {why}"
-            refused = note
+            refused = f"refused on concept_type: {why}"
+            refused_candidate = candidate
             # A category crossing is not an ambiguity to escalate and not a
             # near-match to log against: the candidate is the wrong KIND of
             # thing, so the phrase carries on as if this tier had not spoken.
+            #
+            # NO PROPOSAL ROW IS WRITTEN HERE. It used to write LOGGED and
+            # then fall through to AUTO_CREATE, so one normalization attempt
+            # left two rows saying opposite things: "this candidate was
+            # refused" and "a concept was created". The refusal is carried
+            # and becomes part of the ONE terminal row instead.
             #
             # read_only takes the SAME branch, deliberately. An earlier
             # version returned here while the ordinary path continued, so
@@ -608,9 +702,6 @@ def resolve(conn, phrase: str, context: str | None = None,
             # have reported an outcome production never produces -- a
             # read-only mode that resolves differently from the mode it
             # exists to observe is the harness/production gap V2 is about.
-            if not read_only:
-                _proposal(conn, phrase, phrase_norm, context, candidate.concept_id,
-                          tier.confidence, method, "LOGGED", note)
             continue
 
         threshold = TIER_THRESHOLD[method]
@@ -618,7 +709,8 @@ def resolve(conn, phrase: str, context: str | None = None,
             if read_only:
                 return Resolution(phrase, tier.selected, method, tier.confidence,
                                   "RESOLVED", "read-only")
-            _cache(conn, phrase_norm, tier.selected, method, tier.confidence)
+            _cache(conn, phrase_norm, tier.selected, method, tier.confidence,
+                   candidate_ids=tier.candidate_ids, allowed_types=allowed_types)
             if method == "trigram":
                 _attach_alias(conn, tier.selected[0], phrase, phrase_norm,
                               method, tier.confidence, threshold)
@@ -662,11 +754,12 @@ def resolve(conn, phrase: str, context: str | None = None,
             return Resolution(phrase, [], method, tier.confidence, "UNRESOLVED",
                               "read-only: below the tier's own threshold")
         impact = impact_score(conn, phrase_norm)
+        tail = f"; {refused}" if refused else ""
         if impact > 0 and escalations_this_week(conn) < WEEKLY_CAP:
             return _escalate(conn, phrase, phrase_norm, ids, tier.confidence, method,
-                             f"ambiguous, impact={impact}")
+                             f"ambiguous, impact={impact}{tail}")
         return _log(conn, phrase, phrase_norm, ids, tier.confidence, method,
-                    f"low-impact ambiguity, impact={impact}")
+                    f"low-impact ambiguity, impact={impact}{tail}")
 
     # Nothing deterministic answered. This is where, and only where, an LLM
     # is worth paying for.
@@ -686,34 +779,66 @@ def resolve(conn, phrase: str, context: str | None = None,
         ids = [str(i) for i in verdict.get("concept_ids", [])]
         confidence = float(verdict.get("confidence", 0.0))
         if ids and confidence >= ALIAS_THRESHOLD and not confusable_with(conn, ids):
-            _cache(conn, phrase_norm, ids, "llm", confidence)
-            _attach_alias(conn, ids[0], phrase, phrase_norm, "llm", confidence)
-            return Resolution(phrase, ids, "llm", confidence, "RESOLVED")
-        if confidence < CREATE_THRESHOLD:
-            return _propose_new(conn, phrase, phrase_norm, context, confidence,
-                                verdict.get("concept_type", "PHYSIOLOGY"))
-        return _escalate(conn, phrase, phrase_norm, ids, confidence, "llm",
-                         "LLM was not confident enough to alias or to create")
+            llm_reject = type_rejection(
+                conn, TierResult(selected=ids,
+                                 candidates=_candidates_from(conn, ids, confidence),
+                                 confidence=confidence), allowed_types)
+            if llm_reject is not None:
+                # The LLM is a tier like any other and does not outrank the
+                # caller's structural knowledge.
+                refused = f"refused on concept_type: {llm_reject[1]}"
+                refused_candidate = llm_reject[0]
+            else:
+                _cache(conn, phrase_norm, ids, "llm", confidence,
+                       candidate_ids=ids, allowed_types=allowed_types)
+                _attach_alias(conn, ids[0], phrase, phrase_norm, "llm", confidence)
+                return Resolution(phrase, ids, "llm", confidence, "RESOLVED")
+        if refused is None and confidence >= CREATE_THRESHOLD and ids:
+            return _escalate(conn, phrase, phrase_norm, ids, confidence, "llm",
+                             "LLM was not confident enough to alias or to create")
+        return _terminal_proposal(
+            conn, phrase, phrase_norm, context, confidence, allowed_types,
+            refused, refused_candidate, verdict.get("concept_type"))
 
-    return _propose_new(conn, phrase, phrase_norm, context, 0.0, "PHYSIOLOGY")
+    return _terminal_proposal(conn, phrase, phrase_norm, context, 0.0,
+                              allowed_types, refused, refused_candidate, None)
 
 
 # ---------------------------------------------------------------------
 # Outcomes
 # ---------------------------------------------------------------------
 
-def _cache(conn, phrase_norm: str, ids: list[str], method: str, confidence: float) -> None:
-    """A confirmed result is cached so a phrase never costs a second call (D2)."""
+def _cache(conn, phrase_norm: str, ids: list[str], method: str, confidence: float,
+           candidate_ids: list[str] | None = None,
+           allowed_types: frozenset[str] | set[str] | None = None) -> None:
+    """A confirmed result is cached so a phrase never costs a second call (D2).
+
+    `candidate_ids` is what the tier CONSIDERED and is stored so the
+    confusable guard can be re-run on every read -- a one-concept answer
+    cannot span a do-not-merge pair, so without it a pair added later would
+    be invisible to `cache_is_safe()` forever.
+
+    `allowed_types` is recorded as PROVENANCE: what the caller could vouch
+    for when this was written. `None` is written as NULL and means the type
+    was unknown at write time, which is not the same as valid for every
+    type -- the read-side check is against the reader's set, not this one.
+    """
     conn.execute(
-        """insert into normalization_cache (phrase_norm, concept_ids, method, confidence)
-           values (%s,%s::uuid[],%s,%s)
+        """insert into normalization_cache
+             (phrase_norm, concept_ids, method, confidence, candidate_ids,
+              resolved_under_types)
+           values (%s,%s::uuid[],%s,%s,%s::uuid[],%s)
            on conflict (phrase_norm) do update
              set concept_ids = excluded.concept_ids,
                  method = excluded.method,
                  confidence = excluded.confidence,
+                 candidate_ids = excluded.candidate_ids,
+                 resolved_under_types = excluded.resolved_under_types,
                  hit_count = normalization_cache.hit_count + 1,
                  last_used = now()""",
-        (phrase_norm, ids, db_method(method), confidence))
+        (phrase_norm, ids, db_method(method), confidence,
+         list(candidate_ids if candidate_ids is not None else ids),
+         sorted(allowed_types) if allowed_types else None))
 
 
 def _attach_alias(conn, concept_id: str, phrase: str, phrase_norm: str,
@@ -742,14 +867,15 @@ def _attach_alias(conn, concept_id: str, phrase: str, phrase_norm: str,
 
 def _proposal(conn, phrase: str, phrase_norm: str, context: str | None,
               candidate: str | None, similarity: float, method: str,
-              decision: str, note: str, impact: int = 0) -> str:
+              decision: str, note: str, impact: int = 0,
+              allowed_types: list[str] | None = None) -> str:
     return str(conn.execute(
         """insert into concept_proposals
              (raw_phrase, context, candidate_concept, similarity, method,
-              impact_score, decision, decision_note)
-           values (%s,%s,%s,%s,%s,%s,%s,%s) returning proposal_id""",
+              impact_score, decision, decision_note, allowed_types)
+           values (%s,%s,%s,%s,%s,%s,%s,%s,%s) returning proposal_id""",
         (phrase, context, candidate, similarity, db_method(method), impact,
-         decision, note)
+         decision, note, allowed_types)
     ).fetchone()[0])
 
 
@@ -765,8 +891,72 @@ def _log(conn, phrase, phrase_norm, ids, confidence, method, note) -> Resolution
     return Resolution(phrase, [], method, confidence, "LOGGED", note)
 
 
+def _terminal_proposal(conn, phrase: str, phrase_norm: str, context: str | None,
+                       confidence: float,
+                       allowed_types: frozenset[str] | set[str] | None,
+                       refused: str | None, refused_candidate=None,
+                       llm_type: str | None = None) -> Resolution:
+    """The ONE row a normalization attempt that resolved nothing may write.
+
+    Two jobs, and the second is the one GATE 2 left undone.
+
+    **One outcome per attempt.** The type-rejection branch used to write a
+    LOGGED proposal and then fall through to AUTO_CREATE, so a single
+    attempt left two rows disagreeing with each other. The refusal is
+    carried here and becomes part of this row instead.
+
+    **Never invent a narrow type the caller did not vouch for.** Where the
+    caller structurally knows the phrase is an INTERVENTION, creating it as
+    PHYSIOLOGY is not a default, it is a contradiction of what the caller
+    said -- and it is what the resolver did, because `_propose_new` took a
+    literal `"PHYSIOLOGY"` at the end of the chain. §R11 says `intervention`
+    is "what is being done or taken"; it does not say EXERCISE rather than
+    FOOD rather than BEHAVIOUR, and choosing from the phrase's wording is
+    the resolver answering its own question.
+
+    `concepts.concept_type` is NOT NULL and the enum has no UNKNOWN, so a
+    phrase typed only to a SET gets a `concept_proposals` row carrying that
+    set and NO concept. Nothing downstream is worse off: a strategy with no
+    canonical concept is already recorded as an OPEN gap rather than linked
+    to a PROPOSED one to make a count look right (D8), and a PROPOSED
+    concept is not retrievable anyway -- it was junk in the ontology, not a
+    working answer.
+
+    A set of exactly ONE is knowledge, not uncertainty, and is used.
+    """
+    allowed = sorted(allowed_types) if allowed_types else None
+
+    if allowed and len(allowed) == 1:
+        # The caller named one type. That is not a guess.
+        return _propose_new(conn, phrase, phrase_norm, context, confidence,
+                            allowed[0], allowed_types=allowed_types,
+                            note_suffix=refused)
+
+    if allowed:
+        note = (f"no tier resolved it, and the caller vouches only for "
+                f"{allowed} -- a narrower type would be invented, so no "
+                f"concept was created")
+        if refused:
+            note = f"{refused}; {note}"
+        _proposal(conn, phrase, phrase_norm, context,
+                  refused_candidate.concept_id if refused_candidate else None,
+                  confidence, "none", "NEEDS_TYPE", note,
+                  impact=impact_score(conn, phrase_norm), allowed_types=allowed)
+        return Resolution(phrase, [], "none", confidence, "NEEDS_TYPE", note)
+
+    # The caller claims no type knowledge. PHYSIOLOGY here is still a
+    # default and still an invention -- but it is not a CONTRADICTION of
+    # anything the caller said, which is the difference. Raised in D51
+    # rather than changed, because removing it would stop Engine 1 Pass A
+    # and K11 creating concepts at all and that is a separate decision.
+    return _propose_new(conn, phrase, phrase_norm, context, confidence,
+                        llm_type or "PHYSIOLOGY", note_suffix=refused)
+
+
 def _propose_new(conn, phrase: str, phrase_norm: str, context: str | None,
-                 confidence: float, concept_type: str) -> Resolution:
+                 confidence: float, concept_type: str,
+                 allowed_types: frozenset[str] | set[str] | None = None,
+                 note_suffix: str | None = None) -> Resolution:
     """A phrase nothing matched becomes a PROPOSED concept, never a canonical one.
 
     D8 allows this to happen without a human -- the practitioner's time is
@@ -815,8 +1005,12 @@ def _propose_new(conn, phrase: str, phrase_norm: str, context: str | None,
              "C3_NORMALIZATION: proposed from an unmatched phrase; "
              f"context: {context or 'none'}")
         ).fetchone()[0])
+    note = "no deterministic tier matched"
+    if note_suffix:
+        note = f"{note}; {note_suffix}"
     _proposal(conn, phrase, phrase_norm, context, concept_id, confidence,
-              "none", "AUTO_CREATE", "no deterministic tier matched")
+              "none", "AUTO_CREATE", note,
+              allowed_types=sorted(allowed_types) if allowed_types else None)
     # NOT cached: a proposal is not a confirmed mapping.
     return Resolution(phrase, [], "none", confidence, "AUTO_CREATE",
                       f"proposed new concept {key} with status PROPOSED")
