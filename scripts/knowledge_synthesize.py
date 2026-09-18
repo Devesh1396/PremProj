@@ -191,17 +191,23 @@ def collision(conn, name: str) -> str | None:
 
 
 def evidence_for(conn, claim_id: str) -> list[str]:
-    """Evidence written by K10 while researching this claim.
+    """Evidence written by K10 while researching THIS claim.
 
-    Joined through the claim's own research run rather than through the
+    Joined on `evidence_records.claim_id` (migration 031) rather than the
     discovery envelope: the envelope surfaced the claim, the evidence came
     from independent research (D10).
+
+    This was a time window until 2026-09-11 -- "every evidence record
+    created after this claim was", newest 20. With one claim in a fixture
+    that returns the right rows; with seven claims from one video
+    researched in one batch it gave the first claim all seventeen records,
+    three of them about a supplement researched for a different claim
+    entirely. A strategy card would have cited them.
     """
     return [str(r[0]) for r in conn.execute(
         """select e.evidence_id from evidence_records e
-            where e.created_at >= (select c.created_at from claims c
-                                    where c.claim_id = %s)
-            order by e.created_at desc limit 20""", (claim_id,)).fetchall()]
+            where e.claim_id = %s
+            order by e.created_at""", (claim_id,)).fetchall()]
 
 
 def link_concepts(conn, strategy_id: str, concepts: list) -> tuple[int, list[str]]:
