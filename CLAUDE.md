@@ -26,7 +26,7 @@ finished it must keep working on n8n + PostgreSQL + an LLM API alone.
 
 | File | When |
 |---|---|
-| `docs/DECISIONS.md` | **Before proposing any structural change.** 44 settled decisions with rationale and rejected alternatives. |
+| `docs/DECISIONS.md` | **Before proposing any structural change.** 51 settled decisions with rationale and rejected alternatives. |
 | `docs/MASTER_SPEC.md` | The 40-phase build specification plus amendments. |
 | `BUILD_PLAN.md` | Milestones, dependencies, acceptance criteria. |
 | `PROGRESS.md` | What actually works, tests passed, bugs fixed, next exact task. |
@@ -1012,7 +1012,7 @@ instead, and 4 of 6 strategies ended with no canonical concept and an
 OPEN gap. Twenty sources would bury the ontology.
 
 **`normalize._tier_semantic()` IS A STUB, and that is the real blocker
-(diagnosis: `docs/evidence/normalization_diagnosis.md`, $0.000301).** Its
+(D51; diagnosis: `docs/evidence/normalization_diagnosis.md`, $0.000301).** Its
 last line is `return [], 0.0` unconditionally, after two guards that both
 pass; its comment says "neither is true until K14" and K14 has been built
 since step 17. Proven live with pgvector 0.6.0 and all 269 concepts

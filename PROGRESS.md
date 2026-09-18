@@ -294,7 +294,7 @@ deltas around the import, and cleanup follows the whole
 passage so nothing was forced into a generic flag — **must be closed
 before a section that does is imported.**
 
-**GATE 2 is unchanged and still blocked.** 0 of 8 phrases resolved against
+**GATE 2 is unchanged and still blocked (D51).** 0 of 8 phrases resolved against
 269 seeded concepts, `read_only=True` so nothing entered the ontology.
 `normalize._tier_semantic()` returns `[], 0.0` unconditionally — proven
 live with pgvector and all 269 concepts embedded, still 0 resolved. The
@@ -565,18 +565,35 @@ LOGGED at impact 0). The K1 seed holds exactly the right concepts —
 `post-meal movement`, `walking`, `post-meal glucose`, `skeletal-muscle
 glucose disposal`, `exercise timing` — and the run reached none of them,
 creating 51 PROPOSED concepts instead, 10 over 60 characters and 6
-containing a subordinate clause. Three causes: the engine answers `target`
-and `mechanism` with compound phrases and whole sentences;
-**`normalize_claim_concepts()` calls `resolve()` with `llm=None`**, so the
-LLM tier that exists for exactly this can never be reached from K09; and
-with pgvector absent the semantic tier cannot run either — leaving alias
-and structured matching as the only tiers that can ever fire here. The
-downstream cost is visible one stage later: **4 of 6 strategies carry no
-canonical concepts**, each correctly recorded as an OPEN gap (D8 behaving
-right over a bad input), and the concept retrieval channel could offer only
-two of six cards. Passing an LLM into K09's resolver is a spending decision
+containing a subordinate clause.
+
+~~Three causes: the engine answers `target` and `mechanism` with compound
+phrases and whole sentences; `normalize_claim_concepts()` calls `resolve()`
+with `llm=None`, so the LLM tier that exists for exactly this can never be
+reached from K09; and with pgvector absent the semantic tier cannot run
+either — leaving alias and structured matching as the only tiers that can
+ever fire here. Passing an LLM into K09's resolver is a spending decision
 and a change to D2's ordering; it belongs to the practitioner and to
-`DECISIONS.md`.
+`DECISIONS.md`.~~
+
+**WRONG on both mechanisms — corrected 2026-09-11 by measurement, D51.**
+`llm=None` is a real gap and it is **not** the cause: the LLM tier is worth
+about **2 calls in 56** once the tier below it works. And the semantic tier
+did not fail because pgvector was absent — **`normalize._tier_semantic()`
+is a STUB whose last line is `return [], 0.0` unconditionally**, after two
+guards that both pass. Proven live with pgvector 0.6.0 installed and all
+269 concepts embedded for real: `resolve()` still returned **0 of 71**. The
+one cause that survives from the paragraph above is the compound-phrase
+shape of `target` and `mechanism`, and even that is not an extraction bug —
+`mechanism` is specified as a proposition (§39) and the bug is that
+`normalize_claim_concepts()` sends it to a concept resolver at all. Full
+diagnosis: `docs/evidence/normalization_diagnosis.md`. **This is GATE 2 and
+is not fixed.**
+
+The downstream cost is visible one stage later: **4 of 6 strategies carry
+no canonical concepts**, each correctly recorded as an OPEN gap (D8
+behaving right over a bad input), and the concept retrieval channel could
+offer only two of six cards.
 
 ### What the output was actually like
 
@@ -2313,7 +2330,7 @@ failed attempt's tokens included in the run total.
 else.** One source produced 71 concept proposals and exactly one
 resolution against a 269-concept seed that contains the right concepts.
 
-**The diagnosis is done — `docs/evidence/normalization_diagnosis.md`.**
+**The diagnosis is done — D51, `docs/evidence/normalization_diagnosis.md`.**
 It cost $0.000301 and it changes what the fix is. The headline:
 
 **`normalize._tier_semantic()` IS A STUB.** Its last line is

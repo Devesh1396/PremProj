@@ -3231,3 +3231,91 @@ a generic flag. The acceptance section contains no such passage, so
 nothing was forced and the count is legitimately zero. **This must be
 closed before a section containing one is imported.** Reported rather than
 worked around, as D49 requires.
+
+---
+
+## D51 — The semantic tier is a stub; that is GATE 2's blocker, and the fix is constrained
+**SETTLED 2026-09-11 as a DIAGNOSIS — measured, not fixed.** Evidence:
+`docs/evidence/normalization_diagnosis.md`, $0.000301. Supersedes the
+`llm=None` explanation recorded in `PROGRESS.md` and `CLAUDE.md`.
+
+Two runs — the YouTube transcript (D47: 71 proposals, **one** resolution)
+and the curated source (D50 GATE 2: 0 of 8 phrases) — failed concept
+normalization against a K1 seed that demonstrably holds the right
+concepts. This records what the failure actually is, because the first
+explanation was wrong and a wrong diagnosis produces a wrong fix.
+
+### The recorded cause was wrong. Correcting it is the point of this record
+
+The build record said `normalize_claim_concepts()` calls `resolve()` with
+`llm=None`, so the LLM tier can never be reached from K09, and that with
+pgvector absent the semantic tier could not run either.
+
+**Both halves are wrong as causes.** `llm=None` is a real gap and it is
+not why nothing resolves — the LLM tier is worth about **2 calls in 56**
+once the tier beneath it works, so wiring it in is not the fix. And the
+semantic tier did not fail for want of pgvector:
+
+**`normalize._tier_semantic()` is a STUB.** Its last line is
+`return [], 0.0`, unconditionally, after two guards that both pass. Its
+comment says "neither is true until K14" — and K14 has been built since
+step 17. Proven live with pgvector 0.6.0 installed and all 269 concepts
+embedded with real 1536-dim vectors: `resolve()` still returns **0 of
+71**, the tier answering for none of them. **Embedding the library buys
+exactly zero resolutions until the tier is written.** That matters
+directly: "embed everything" reads like the obvious first move and would
+have cost provider calls to change nothing.
+
+### Rejected: rescue trigram with a lower threshold
+
+The failure is **synonymy, not length**. `postprandial walking` is 20
+characters, and trigram's best match is `postprandial glucose` at 0.448 —
+it matched the wrong word of the two. Cosine puts `post-meal movement`
+first at 0.833. Two vocabularies for one idea share almost no trigrams.
+Admitting `Light-to-moderate continuous walking → walking` on trigram
+needs a threshold of 0.216, below which `soleus pushup → sodium` (0.105)
+also gets in. There is no trigram threshold that separates them.
+
+### The two tiers cannot share one constant
+
+`ALIAS_THRESHOLD` 0.92 is a **trigram** number. At 0.92 the semantic tier
+would resolve **1 of 56**. The measured cosine knee is **0.82** — 23
+admitted, 16 right, 6 partial, 1 wrong; below 0.80 the wrong merges
+triple. `CREATE_THRESHOLD` 0.72 is not a second decision point to reuse
+either: it is the `HAVING` gate inside `_tier_trigram`, so a weak match
+never leaves the query.
+
+### `concept_type` is cheaper and sharper than any threshold
+
+**Most wrong merges cross a category boundary** — a TIME WINDOW, a DRUG
+CLASS, a MOLECULE and a MECHANISM all mapped to a BIOMARKER. `concepts`
+already carries `concept_type` and the resolver never consults it. A type
+check refuses those merges at any similarity; a threshold that excluded
+them would also exclude the right answers.
+
+### The tier must return a candidate SET, not a top-1
+
+`confusable_with()` fires only on a **span**. The single wrong merge at
+0.80 (`carbohydrate-rich meal → carbohydrate quality`) has **both halves
+of a do-not-merge pair in its top-3**. A top-1 implementation would
+silently defeat a guard that already works — the guard would be present,
+consulted, and structurally unable to fire.
+
+### Do not touch `prompts/` for this
+
+All seven `mechanism` values exceed 60 characters because §39 specifies
+`mechanism` as "the mechanism the source proposes" — a proposition. The
+engine complied with its specification. The bug is that
+`normalize_claim_concepts()` sends `mechanism` to a **concept** resolver
+at all. Shortening the prompt to make the resolver's life easier would
+damage an authoritative specification to paper over a caller's mistake
+(hard rule 1).
+
+### Status
+
+**Diagnosed, NOT fixed.** GATE 1 (preservation, D50) came first by
+instruction; this is GATE 2. Until it is fixed the 20-video pilot stays
+closed — the blocker is the ontology, not the cost: twenty sources at this
+resolution rate would add roughly a thousand proposals and several hundred
+sentence-shaped PROPOSED concepts to a library that is meant to be the
+answer key.
