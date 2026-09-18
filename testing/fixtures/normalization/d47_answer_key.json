@@ -1,0 +1,285 @@
+{
+  "_README": [
+    "The 56 distinct phrases the D47 live run proposed, with the outcome each SHOULD have",
+    "against the 269-concept K1 seed.",
+    "",
+    "PROVENANCE: extracted from docs/evidence/first_source_loop_rows.md section 2 (all 71",
+    "proposal rows, 56 distinct phrases). K09 was NOT re-run to produce this (GATE 2 task",
+    "requirement 6). `field` is recovered from section 1: the seven claims record `target`",
+    "and `mechanism` verbatim, so those phrases are identified exactly; everything else came",
+    "from the Claim Card `intervention` field or from K11's strategy-concept phrases, which",
+    "the stored claim row does not distinguish.",
+    "",
+    "THE VERDICTS WERE WRITTEN BEFORE ANY SWEEP RAN, from the MEANING of each pair and the",
+    "seed vocabulary, never from a score. That ordering is the only thing that stops a",
+    "threshold being fitted to the sample. Where docs/evidence/normalization_diagnosis.md",
+    "already recorded a verdict for a pair, that verdict is INHERITED rather than re-derived,",
+    "even where a later reading might be kinder to the numbers -- `inherited_from_diagnosis`",
+    "marks those.",
+    "",
+    "SAMPLE BIAS, stated once: these 56 phrases are the ones that FAILED to resolve in D47.",
+    "A phrase that resolved wrote no proposal row and is not here. This is a failure-selected",
+    "sample and is the right sample for 'what did the resolver miss' and the WRONG sample for",
+    "a hit rate. Dataset B (the existing structural tests in testing/test_normalization.py)",
+    "is scored separately for exactly this reason.",
+    "",
+    "expected:",
+    "  RESOLVE   a seeded concept means this. Resolving to one of `to` is RIGHT; resolving",
+    "            to anything else is WRONG; not resolving is MISSED.",
+    "  PARTIAL   the phrase is a sentence or a compound naming several things. No single",
+    "            concept IS the phrase. Resolving to one of `to` is PARTIAL (never RIGHT);",
+    "            not resolving is an acceptable outcome; resolving elsewhere is WRONG.",
+    "  NO_MATCH  nothing in the seed means this. NOT resolving is RIGHT -- a new PROPOSED",
+    "            concept is the correct outcome. Resolving to anything in `tolerable` is",
+    "            BROADER (counted apart, neither right nor wrong); anything else is WRONG.",
+    "",
+    "must_not:  a resolution that is a category error, listed so the type guard can be",
+    "           scored against something written down rather than against its own output.",
+    "confusable_expected: the phrase's near neighbourhood spans a CONFUSABLE_DO_NOT_MERGE",
+    "           pair, so the guard SHOULD refuse it. Refusal is the correct outcome even",
+    "           where `expected` is RESOLVE -- reported apart from MISSED, because a",
+    "           deliberate refusal and a failure to find anything are different events."
+  ],
+  "phrases": [
+    {"phrase": "Postprandial glucose excursion and hyperinsulinemia", "field": "target",
+     "expected": "PARTIAL", "to": ["postprandial glucose"],
+     "why": "two things joined by 'and' -- postprandial glucose AND hyperinsulinaemia; the seed has the first and not the second, so no single concept is the phrase"},
+
+    {"phrase": "Seated soleus push-up / calf raise", "field": "intervention_or_k11",
+     "expected": "NO_MATCH", "must_not": ["resistance training", "aerobic exercise"],
+     "why": "a specific named exercise the seed does not contain; AUTO_CREATE is correct"},
+
+    {"phrase": "Magnification and sustained cellular oxidative metabolism via soleus muscle fiber recruitment", "field": "mechanism",
+     "expected": "PARTIAL", "to": ["fatty-acid oxidation", "skeletal-muscle glucose disposal"],
+     "why": "a proposition, not a concept (§39); its core idea is oxidative metabolism in muscle, which no single seeded concept names"},
+
+    {"phrase": "Postprandial glucose spike", "field": "target",
+     "expected": "RESOLVE", "to": ["postprandial glucose", "post-meal glucose"],
+     "why": "the same physiology the seed already names; 'spike' is a magnitude word, not a different concept"},
+
+    {"phrase": "Seated calf raises / soleus push-up", "field": "intervention_or_k11",
+     "expected": "NO_MATCH", "must_not": ["resistance training", "aerobic exercise"],
+     "why": "as above; the seed has no calf-raise concept"},
+
+    {"phrase": "Soleus muscle glucose uptake into contracting muscle fibers via mitochondrial ATP demand", "field": "mechanism",
+     "expected": "PARTIAL", "to": ["skeletal-muscle glucose disposal"], "confusable_expected": true,
+     "why": "a proposition; its core idea is skeletal-muscle glucose disposal, whose neighbourhood spans the do-not-merge pair with 'glucose disposal'"},
+
+    {"phrase": "Postprandial blood glucose concentration", "field": "target",
+     "expected": "RESOLVE", "to": ["postprandial glucose", "post-meal glucose"],
+     "why": "a longer spelling of a seeded concept"},
+
+    {"phrase": "Light-to-moderate continuous walking", "field": "intervention_or_k11",
+     "expected": "RESOLVE", "to": ["walking", "post-meal movement"],
+     "why": "walking with an intensity qualifier; the seed's EXERCISE concept is exactly this"},
+
+    {"phrase": "Contracting leg, arm, and core muscles clear glucose from the bloodstream to fuel mitochondrial ATP production", "field": "mechanism",
+     "expected": "PARTIAL", "to": ["skeletal-muscle glucose disposal", "glucose disposal"], "confusable_expected": true,
+     "why": "a proposition; the idea it states is skeletal-muscle glucose disposal"},
+
+    {"phrase": "Postprandial glycemic control / glucose variability", "field": "target",
+     "expected": "PARTIAL", "to": ["postprandial glucose", "glycaemic variability"],
+     "why": "two seeded concepts joined by a slash; resolving to either drops the other"},
+
+    {"phrase": "10 bodyweight air squats repeated every 45 minutes", "field": "intervention_or_k11",
+     "expected": "NO_MATCH", "tolerable": ["sedentary interruption", "resistance training"],
+     "why": "a dosed protocol, not a concept; the seed names the category, not the prescription"},
+
+    {"phrase": "Repeated interrupted sitting with large-muscle dynamic resistance contractions maintaining recurring glucose disposal", "field": "mechanism",
+     "expected": "PARTIAL", "to": ["sedentary interruption", "skeletal-muscle glucose disposal", "glucose disposal"], "confusable_expected": true,
+     "why": "a proposition naming three seeded ideas at once"},
+
+    {"phrase": "Light household activity / domestic exercise snacks (vacuuming, tidying)", "field": "intervention_or_k11",
+     "expected": "PARTIAL", "to": ["physical activity", "sedentary interruption"],
+     "why": "a compound with examples; 'physical activity' covers part of it and loses the incidental-domestic sense"},
+
+    {"phrase": "Low-intensity incidental muscular contraction facilitating glucose disposal", "field": "mechanism",
+     "expected": "PARTIAL", "to": ["glucose disposal", "skeletal-muscle glucose disposal"], "confusable_expected": true,
+     "why": "a proposition; names the seeded pair directly, which is why the guard should fire"},
+
+    {"phrase": "Non-insulin-mediated glucose uptake and circulating insulin levels", "field": "target",
+     "expected": "PARTIAL", "to": ["skeletal-muscle glucose disposal", "glucose disposal", "fasting insulin"], "confusable_expected": true,
+     "why": "a compound: a disposal pathway AND an insulin measure"},
+
+    {"phrase": "Active skeletal muscle contraction (aerobic or resistance)", "field": "intervention_or_k11",
+     "expected": "PARTIAL", "to": ["resistance training", "aerobic exercise", "skeletal-muscle glucose disposal"],
+     "why": "an explicit disjunction of two seeded interventions; picking one is picking a coin flip"},
+
+    {"phrase": "Contracting muscle fibers uptake glucose independently of insulin action to fuel mitochondrial ATP production", "field": "mechanism",
+     "expected": "PARTIAL", "to": ["skeletal-muscle glucose disposal", "glucose disposal"], "confusable_expected": true,
+     "why": "a proposition; the idea is non-insulin-mediated muscle glucose disposal"},
+
+    {"phrase": "Abdominal bloating, energy stability, sugar cravings, fasting glucose, and fasting insulin", "field": "target",
+     "expected": "PARTIAL", "to": ["bloating", "cravings", "fasting glucose", "fasting insulin"],
+     "why": "FIVE concepts in one string; this needs a deterministic splitter, not a resolver"},
+
+    {"phrase": "Anti-Spike Formula (proprietary commercial supplement)", "field": "intervention_or_k11",
+     "expected": "NO_MATCH", "tolerable": ["supplement interventions"],
+     "why": "a brand name; the seed names the intervention class, and collapsing a product into the class loses the product"},
+
+    {"phrase": "Natural plant-derived bioactive molecules mitigating glucose absorption/spikes", "field": "mechanism",
+     "expected": "PARTIAL", "to": ["polyphenols", "supplement interventions"],
+     "why": "a proposition about a class of molecules; no seeded concept states it"},
+
+    {"phrase": "Soleus push-up", "field": "intervention_or_k11",
+     "expected": "NO_MATCH", "must_not": ["sodium", "resistance training"],
+     "why": "a genuinely new exercise concept; 'sodium' is the trigram noise match the diagnosis recorded",
+     "inherited_from_diagnosis": true},
+
+    {"phrase": "Postprandial glucose excursion", "field": "intervention_or_k11",
+     "expected": "RESOLVE", "to": ["postprandial glucose", "post-meal glucose"],
+     "why": "an excursion in postprandial glucose is postprandial glucose"},
+
+    {"phrase": "Postprandial hyperinsulinemia", "field": "intervention_or_k11",
+     "expected": "NO_MATCH", "must_not": ["postprandial glucose", "post-meal glucose"],
+     "tolerable": ["fasting insulin", "insulin secretion"],
+     "why": "post-meal INSULIN; the seed has fasting insulin and insulin secretion but not this, and mapping it onto a glucose concept swaps the analyte"},
+
+    {"phrase": "Oxidative phosphorylation", "field": "intervention_or_k11",
+     "expected": "NO_MATCH", "must_not": ["fatty-acid oxidation"],
+     "why": "a distinct cellular process; fatty-acid oxidation is a different pathway, not a synonym"},
+
+    {"phrase": "Sedentary behavior interruption", "field": "intervention_or_k11",
+     "expected": "RESOLVE", "to": ["sedentary interruption", "sedentary breaks"],
+     "why": "a spelling variant of a seeded concept"},
+
+    {"phrase": "soleus pushup", "field": "intervention_or_k11",
+     "expected": "NO_MATCH", "must_not": ["sodium", "resistance training"],
+     "why": "the same new concept, unspaced", "inherited_from_diagnosis": true},
+
+    {"phrase": "seated calf raises", "field": "intervention_or_k11",
+     "expected": "NO_MATCH", "must_not": ["resistance training"],
+     "why": "the diagnosis recorded 'seated calf raises -> resistance training' as a WRONG merge at 0.65; a specific movement is not its training category",
+     "inherited_from_diagnosis": true},
+
+    {"phrase": "postprandial glucose excursion", "field": "intervention_or_k11",
+     "expected": "RESOLVE", "to": ["postprandial glucose", "post-meal glucose"],
+     "why": "as above, lowercase"},
+
+    {"phrase": "sedentary desk workers", "field": "intervention_or_k11",
+     "expected": "NO_MATCH", "must_not": ["sedentary adults"],
+     "why": "the diagnosis recorded 'sedentary desk workers -> sedentary adults' as the WRONG merge admitted at 0.88. INHERITED rather than re-argued: a later reading could call it a defensible generalization, and relabelling it now would be relabelling to improve the score",
+     "inherited_from_diagnosis": true},
+
+    {"phrase": "postprandial blood glucose concentration", "field": "intervention_or_k11",
+     "expected": "RESOLVE", "to": ["postprandial glucose", "post-meal glucose"],
+     "why": "as above, lowercase"},
+
+    {"phrase": "postprandial walking", "field": "intervention_or_k11",
+     "expected": "RESOLVE", "to": ["post-meal movement", "walking"],
+     "why": "the diagnosis's headline synonymy case: post-meal movement is the seeded concept and shares almost no trigrams with it",
+     "inherited_from_diagnosis": true},
+
+    {"phrase": "skeletal muscle glucose uptake", "field": "intervention_or_k11",
+     "expected": "RESOLVE", "to": ["skeletal-muscle glucose disposal"], "confusable_expected": true,
+     "why": "uptake/disposal is the same physiology; its top neighbourhood spans the do-not-merge pair, so the guard should refuse it rather than resolve -- and that refusal is correct behaviour, not a miss"},
+
+    {"phrase": "GLUT4 translocation", "field": "intervention_or_k11",
+     "expected": "NO_MATCH", "tolerable": ["glucose transport"],
+     "why": "the diagnosis lists this among concepts the seed genuinely does not contain and that SHOULD auto-create; glucose transport is the broader process it belongs to",
+     "inherited_from_diagnosis": true},
+
+    {"phrase": "carbohydrate-rich meal", "field": "intervention_or_k11",
+     "expected": "NO_MATCH", "must_not": ["carbohydrate quality", "carbohydrate amount"], "confusable_expected": true,
+     "why": "a meal description, not a dietary lever; its top-3 holds BOTH halves of the carbohydrate quality/amount do-not-merge pair, which is the diagnosis's proof that a top-1 tier would defeat a working guard",
+     "inherited_from_diagnosis": true},
+
+    {"phrase": "healthy adults", "field": "intervention_or_k11",
+     "expected": "NO_MATCH", "must_not": ["older adults", "young adults", "sedentary adults"],
+     "why": "the diagnosis recorded 'healthy adults -> older adults' as WRONG: a different population",
+     "inherited_from_diagnosis": true},
+
+    {"phrase": "Postprandial Glycemic Control", "field": "intervention_or_k11",
+     "expected": "RESOLVE", "to": ["postprandial glucose", "post-meal glucose"],
+     "why": "control OF postprandial glucose; scored the same way as 'Postprandial glucose spike' for consistency"},
+
+    {"phrase": "Sedentary Behavior Interruption", "field": "intervention_or_k11",
+     "expected": "RESOLVE", "to": ["sedentary interruption", "sedentary breaks"],
+     "why": "as above, title case"},
+
+    {"phrase": "Non-Insulin-Dependent Glucose Disposal", "field": "intervention_or_k11",
+     "expected": "RESOLVE", "to": ["skeletal-muscle glucose disposal", "glucose disposal"], "confusable_expected": true,
+     "why": "names the do-not-merge pair's subject matter directly; the guard should refuse rather than pick a half"},
+
+    {"phrase": "GLUT4 Translocation", "field": "intervention_or_k11",
+     "expected": "NO_MATCH", "tolerable": ["glucose transport"],
+     "why": "as above, title case", "inherited_from_diagnosis": true},
+
+    {"phrase": "Air Squats", "field": "intervention_or_k11",
+     "expected": "NO_MATCH", "must_not": ["aerobic exercise"],
+     "why": "the diagnosis recorded 'Air Squats -> aerobic exercise' as WRONG: resistance mapped to aerobic",
+     "inherited_from_diagnosis": true},
+
+    {"phrase": "Overweight and Obese Adults", "field": "intervention_or_k11",
+     "expected": "NO_MATCH", "must_not": ["obesity", "older adults"],
+     "why": "the diagnosis recorded 'Overweight and Obese Adults -> obesity' as WRONG: a POPULATION mapped to a CONDITION. This is the clearest case the concept_type guard exists for",
+     "inherited_from_diagnosis": true},
+
+    {"phrase": "Severe Knee Osteoarthritis", "field": "intervention_or_k11",
+     "expected": "NO_MATCH", "must_not": ["bone-health issues", "insulin sensitivity", "mobility"],
+     "why": "the diagnosis recorded '-> bone-health issues' as WRONG: a joint disease is not a bone disease",
+     "inherited_from_diagnosis": true},
+
+    {"phrase": "Mulberry leaf extract", "field": "intervention_or_k11",
+     "expected": "NO_MATCH", "tolerable": ["supplement interventions", "polyphenols"],
+     "why": "the diagnosis lists it among genuinely new concepts that SHOULD auto-create",
+     "inherited_from_diagnosis": true},
+
+    {"phrase": "1-deoxynojirimycin", "field": "intervention_or_k11",
+     "expected": "NO_MATCH", "must_not": ["HbA1c", "defaults"],
+     "why": "the diagnosis recorded '-> HbA1c' as WRONG: a MOLECULE mapped to a biomarker",
+     "inherited_from_diagnosis": true},
+
+    {"phrase": "Alpha-glucosidase inhibition", "field": "intervention_or_k11",
+     "expected": "NO_MATCH", "must_not": ["HbA1c"],
+     "why": "the diagnosis recorded '-> HbA1c' as WRONG: a MECHANISM mapped to a biomarker",
+     "inherited_from_diagnosis": true},
+
+    {"phrase": "Postprandial hyperglycemia", "field": "intervention_or_k11",
+     "expected": "RESOLVE", "to": ["postprandial glucose", "post-meal glucose"],
+     "why": "the elevated state of the seeded concept, not a different one"},
+
+    {"phrase": "Abdominal bloating", "field": "intervention_or_k11",
+     "expected": "RESOLVE", "to": ["bloating"],
+     "why": "the seed's CONDITION concept with an anatomical qualifier"},
+
+    {"phrase": "Prescription antihyperglycemic medications", "field": "intervention_or_k11",
+     "expected": "NO_MATCH", "must_not": ["HbA1c", "medication-food interactions"],
+     "why": "the diagnosis recorded '-> HbA1c' as WRONG: a DRUG CLASS mapped to a biomarker. The seed's MEDICATION_CONTEXT concepts are contexts, not drug classes",
+     "inherited_from_diagnosis": true},
+
+    {"phrase": "Postprandial Glycemia", "field": "intervention_or_k11",
+     "expected": "RESOLVE", "to": ["postprandial glucose", "post-meal glucose"],
+     "why": "a synonym of the seeded concept"},
+
+    {"phrase": "Glucose Incremental Area Under the Curve", "field": "intervention_or_k11",
+     "expected": "PARTIAL", "to": ["post-meal glucose", "CGM metrics", "postprandial glucose"],
+     "why": "a summary statistic OF a seeded analyte; the seed has the analyte and not the measure, so resolving keeps the subject and loses the metric"},
+
+    {"phrase": "Type 2 Diabetes Mellitus", "field": "intervention_or_k11",
+     "expected": "RESOLVE", "to": ["type 2 diabetes"],
+     "why": "the full clinical name of a seeded concept; trigram reached 0.640 and its own gate refused it"},
+
+    {"phrase": "Impaired Glucose Tolerance", "field": "intervention_or_k11",
+     "expected": "PARTIAL", "to": ["prediabetes"],
+     "why": "the diagnosis calls IGT vs prediabetes genuine type ambiguity and one of only two residues that are actually an LLM question -- IGT is a subtype, so neither resolving nor refusing is clearly wrong",
+     "inherited_from_diagnosis": true},
+
+    {"phrase": "Non-Insulin-Mediated Glucose Disposal", "field": "intervention_or_k11",
+     "expected": "RESOLVE", "to": ["skeletal-muscle glucose disposal", "glucose disposal"], "confusable_expected": true,
+     "why": "as 'Non-Insulin-Dependent Glucose Disposal'"},
+
+    {"phrase": "Skeletal Muscle Contraction", "field": "intervention_or_k11",
+     "expected": "NO_MATCH", "tolerable": ["skeletal-muscle glucose disposal", "resistance training"],
+     "why": "the contraction itself is not seeded; the seed names what the contraction DOES (disposal), which is broader-and-adjacent rather than the same thing"},
+
+    {"phrase": "Light-Intensity Physical Activity", "field": "intervention_or_k11",
+     "expected": "RESOLVE", "to": ["physical activity", "walking"],
+     "why": "physical activity with an intensity qualifier; the seed has the concept"},
+
+    {"phrase": "Postprandial Window", "field": "intervention_or_k11",
+     "expected": "NO_MATCH", "must_not": ["postprandial glucose", "post-meal glucose", "meal timing"],
+     "why": "the diagnosis recorded '-> postprandial glucose' as WRONG: a TIME WINDOW mapped to a biomarker. A period of time is not an analyte",
+     "inherited_from_diagnosis": true}
+  ]
+}
