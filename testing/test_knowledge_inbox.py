@@ -69,8 +69,17 @@ def main() -> int:
         # -------------------------------------------------- source kinds
         print("\nsource_kinds — extensible registry (§48, §85)")
 
+        # 22 from migration 006, plus PRACTITIONER_CURATED from 032 (D49).
+        # Asserted as a floor rather than an equality: this registry is
+        # meant to grow by INSERT (hard rule 13), and a test that breaks
+        # every time it does is a test against the design.
         cur.execute("SELECT count(*) FROM source_kinds WHERE seeded")
-        check("22 seeded source kinds present", cur.fetchone()[0] == 22)
+        seeded = cur.fetchone()[0]
+        check("the 22 migration-006 seeded source kinds are present",
+              seeded >= 22, f"found {seeded}")
+        cur.execute("SELECT count(*) FROM source_kinds WHERE seeded "
+                    " AND source_kind = 'PRACTITIONER_CURATED'")
+        check("...and the curated kind 032 registered", cur.fetchone()[0] == 1)
 
         cur.execute(
             "SELECT count(*) FROM pg_type WHERE typname IN ('source_kind','source_kind_enum')"

@@ -248,6 +248,63 @@ harness*.
 
 ---
 
+## GATE 1 — curated preservation PASSES — 2026-09-18
+
+Every row: `docs/evidence/curated_gate1.md`. Migrations `032`/`033`,
+`scripts/curated_parser.py`, `scripts/curated_import.py`,
+`testing/test_curated.py`. Same source as the K09 run below, so the two
+are directly comparable.
+
+| | K09 (below) | curated parser |
+|---|---|---|
+| strategies | 5 of 6, **Strategy 6 lost** | **6 of 6** |
+| `client_decision_logic` | nowhere | **5 of 6** — the number the source has |
+| Strategy 6 routing table | absent | **byte-identical** to a span fixed before the importer existed |
+| `mechanism` | 7 fabricated | **field does not exist** |
+| provider calls | 1 ($0.0438) | **0** |
+| fields not backed by a source span | all of them | **0 — unstorable by constraint** |
+
+**The only architectural change is `source_kinds.extractor`** (D37 holds:
+no second inbox, envelope, provenance layer, normalizer or pipeline). What
+is new is `curated_fields`, carrying PER-FIELD provenance — `VERBATIM_SOURCE`
+at a named span, or `TRANSFORMED` naming its rule, with no third option.
+
+**11 of 42 blocks are `REVIEW_REQUIRED`, deliberately.** A construct in
+Video 1 that is not on the practitioner's list of expected constructs does
+not get a rule; 9 of 17 registry rules were needed here. Unknown structure
+keeps its heading, its text and its byte range.
+
+**Two defects found by the acceptance criteria, not by inspection.** The
+grammar was case-sensitive against a sentence-case document, so
+`Client decision logic` was silently lost on Strategies 1 and 4 — the very
+failure the work exists to prevent, reproduced by the fix. And a DEDUPED
+envelope carried `content_hash = NULL`, so the row that existed because of
+a hash match could not be found by that hash; fixed in the shared path.
+
+**Two defects in my own suite, both V2-shaped**: assertions written as
+global `count(*) == 0` passed alone and failed in sequence (they measured
+the harness); and the suite left 36 chunks in the library, which the
+full-text channel then found, breaking `test_evaluation`'s breadth
+assertion on the SECOND full run only. Both fixed — the counts are now
+deltas around the import, and cleanup follows the whole
+`source_items → documents → chunks` chain.
+
+**SCHEMA GAP:** `evidence_records` has no `verification_actor` /
+`verification_status` (D49 state B). Video 1 has no practitioner-verified
+passage so nothing was forced into a generic flag — **must be closed
+before a section that does is imported.**
+
+**GATE 2 is unchanged and still blocked.** 0 of 8 phrases resolved against
+269 seeded concepts, `read_only=True` so nothing entered the ontology.
+`normalize._tier_semantic()` returns `[], 0.0` unconditionally — proven
+live with pgvector and all 269 concepts embedded, still 0 resolved. The
+earlier claim that `llm=None` was the blocker is wrong. Most wrong merges
+are category crossings `concepts.concept_type` could catch, and the tier
+must return a candidate SET or `confusable_with()` can never fire.
+
+**Next preservation test is NOT Video 2** — it must be one of the least
+structured sections, to try the grammar at both ends.
+
 ## A CURATED source through K07–K09 — 2026-09-18
 
 Every row: `docs/evidence/curated_source_run.md`. ~300 hand-curated lines,

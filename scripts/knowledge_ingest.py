@@ -323,10 +323,17 @@ def open_envelope(conn, path: Path, digest: str, meta: dict) -> tuple[str, Recei
     if dup is not None:
         # DEDUPED keeps the row: the practitioner handed this over and the
         # record that they did is worth as much as the content.
+        #
+        # The content_hash is written HERE TOO, and that is the fix for a
+        # real bug: this branch used to return before the hash was set, so
+        # a row that existed BECAUSE of a hash match carried no hash and
+        # could not be found by the very key that established the match.
+        # `uq_envelope_hash` excludes rows with duplicate_of set, so there
+        # is no collision — the unique index was never what stopped this.
         conn.execute(
             "update source_envelopes set status='DEDUPED', duplicate_of=%s, "
-            "       processed_at=now() where envelope_id=%s",
-            (dup[0], envelope_id))
+            "       content_hash=%s, processed_at=now() where envelope_id=%s",
+            (dup[0], digest, envelope_id))
         receipt.outcome = "DUPLICATE"
         receipt.duplicate_of = str(dup[0])
         receipt.detail = ("Already ingested. Nothing was re-extracted and "

@@ -941,6 +941,56 @@ practitioner knowledge that is already curated.** Curated sources need
 **deterministic structural extraction**, and it goes **INSIDE the existing
 Knowledge Inbox path** — not a second ingestion path (D37).
 
+## GATE 1 PASSED — curated preservation is built (2026-09-18, D50)
+
+`docs/evidence/curated_gate1.md` has every row. Migrations `032`/`033`,
+`curated_parser.py`, `curated_import.py`, `test_curated.py`. **6 of 6
+strategies, 24 fields all VERBATIM, 0 transformed, 0 provider calls.** The
+Strategy 6 routing table — the block K09 lost entirely — is stored
+byte-identical to a span fixed before the importer existed.
+
+**The only architectural change is `source_kinds.extractor`.** An envelope
+whose kind is registered `CURATED_DETERMINISTIC` goes to the parser
+instead of K09; routing a kind stays an INSERT (hard rule 13). Everything
+else is reused: inbox, envelope, rights, content hash, §57 dedup, K08's
+chunker, the concept resolver, and `knowledge_entities` /
+`envelope_derived_records` (a new derived kind = enum value + registration
+trigger, hard rule 12).
+
+**`curated_fields` carries PER-FIELD provenance**, which nothing existing
+could express. Every stored text is `VERBATIM_SOURCE` — findable in the
+original at the span it names — or `TRANSFORMED` with the rule named.
+There is no third option, and that is what makes "no invented mechanism"
+and "no claim stronger than the source" **tests** rather than opinions.
+
+**The grammar is a REGISTRY** (`curated_grammar_rules`), and every rule
+must state why its construct is REUSABLE. **9 of 17 rules were needed
+here; 11 of 42 blocks are `REVIEW_REQUIRED`** — deliberately. A construct
+that appears in Video 1 and is not on the practitioner's list of expected
+constructs does NOT get a rule, because a parser fitted to the fixture is
+not a parser. Unknown structure keeps its heading, text and byte range.
+
+**Two defects this found.** The grammar was case-sensitive and the
+document is sentence-case, so `Client decision logic` (lowercase `d`) was
+lost on Strategies 1 and 4 — now every rule compiles case-insensitively.
+And **a DEDUPED envelope carried `content_hash = NULL`**: the row that
+existed because of a hash match could not be found by that hash. Fixed in
+the shared inbox path.
+
+**SCHEMA GAP, reported not worked around:** `evidence_records` has no
+`verification_actor` / `verification_status`, so it cannot distinguish
+practitioner verification from automated (D49 state B). Video 1 contains
+no such passage so nothing was forced into a generic flag — **but this
+must be closed before a section that does is imported.**
+
+**A PASS here means preservation ONLY.** Concept normalization is GATE 2
+and retrieval is GATE 3. **0 of 8 phrases resolved** against 269 seeded
+concepts, run `read_only=True` so nothing entered the ontology.
+
+**The next preservation test is NOT Video 2.** Video 1 is one of the most
+structured sections; the next must be one of the LEAST structured, to try
+the same grammar at both ends without fixture-specific tuning.
+
 ## THE THREE KNOWLEDGE STATES — NEVER COLLAPSE THEM (D49)
 
 | state | what it is | what must happen |

@@ -3136,3 +3136,98 @@ stored object  ->  stored source range  ->  ACTUAL source text
 and the assertion is that the range **contains** the text attributed to it.
 That is checkable on every write. "A location field is populated" is not,
 and populated-but-wrong is precisely the shape that passes review.
+
+---
+
+## D50 — Curated preservation is a parser and a dispatch column, not a pipeline
+**SETTLED 2026-09-18** — GATE 1; migrations `032`/`033`; D37, D48, D49, hard rules 12 and 13
+
+D49 said curated practitioner knowledge needs deterministic structural
+extraction inside the existing Knowledge Inbox path. This is what that
+turned out to be, and it is smaller than it sounds.
+
+### The architectural change is one column
+
+`source_kinds.extractor`. An envelope whose kind is registered
+`CURATED_DETERMINISTIC` is dispatched to the parser instead of to K09.
+Routing a new kind remains an INSERT (hard rule 13), and the predicate
+lives in the queue query rather than as a list of kinds inside the
+extractor.
+
+Everything else is reused unchanged: the inbox, the source envelope,
+rights, the content hash and §57 dedup, K08's chunker, the concept
+resolver, and `knowledge_entities` / `envelope_derived_records` — where a
+new derived kind is an enum value plus a registration trigger and never a
+new foreign key (hard rule 12). **No second inbox, envelope system,
+provenance layer, normalizer or pipeline exists.**
+
+### Per-field provenance is the one genuinely new thing
+
+No existing table could say "this exact text is bytes 9452–10643 of the
+source". `curated_fields` can. Every stored text is `VERBATIM_SOURCE` —
+findable in the original at the span it names — or `TRANSFORMED`, naming
+the deterministic rule that changed it. `ck_field_transformation_declared`
+allows no third state.
+
+That is the whole point. "The model did not invent anything" was a
+subjective acceptance criterion, and D48 is what subjective criteria buy.
+Now: a field not present in its claimed span cannot be stored, so **no
+invented mechanism** and **no claim stronger than the source** are
+assertions a machine makes on every write. A field the source did not
+supply is absent; `mechanism` does not exist as a column here at all.
+
+### The grammar is a registry that must justify itself
+
+`curated_grammar_rules`. Every rule records the construct, an example, why
+that construct is REUSABLE across sections, and which other section
+families should use it. `ck_rule_justified` refuses an empty
+justification.
+
+**9 of 17 rules were needed for the acceptance section, and 11 of its 42
+blocks are `REVIEW_REQUIRED`.** That is the design working. A construct
+that appears in one section and is not on the practitioner's list of
+expected constructs does not get a rule — "Video 1 needs this to pass" is
+not a reason, and a parser fitted to its fixture is not a parser. Unknown
+structure keeps its heading, its full text and its byte range, so the gap
+can be closed deliberately later.
+
+A subsection whose enclosing block is not a strategy or a principle is
+`REVIEW_REQUIRED` too, rather than being attached to whatever came before
+it. Guessing an owner is the same class of inference the parser exists to
+avoid.
+
+### Two defects the acceptance criteria found
+
+**Case sensitivity.** The rules were written `Decision`, the document
+writes `Client decision logic`, and Strategies 1 and 4 silently lost their
+decision logic — the exact failure this work exists to prevent, reproduced
+by the thing built to prevent it. Every rule now compiles
+case-insensitively: capitalisation carries no meaning in headings and the
+next section will not be consistent about it.
+
+**A DEDUPED envelope carried `content_hash = NULL`.** `open_envelope()`
+returned before the line that set it, so the row that existed *because* of
+a hash match could not be located by that hash — dedup status and
+persisted dedup identity disagreed. `uq_envelope_hash` excludes rows with
+`duplicate_of` set, so the unique index was never what prevented this.
+Fixed in the shared inbox path and asserted in both directions.
+
+### What a PASS means, and what it does not
+
+It means the existing Knowledge Inbox can faithfully preserve curated
+practitioner knowledge. It does **not** mean concept normalization is
+solved (GATE 2: 0 of 8 phrases resolved against 269 seeded concepts, run
+`read_only=True` so nothing entered the ontology), that retrieval works
+(GATE 3, untested), or that K10 is fixed (it is closed, D48).
+
+Those gates stay separate. Blurring them is how a preservation result
+becomes a claim about retrieval.
+
+### Open: `evidence_records` cannot say who verified
+
+It has no `verification_actor` and no `verification_status`, so D49 state
+B — practitioner-verified evidence — has nowhere to live without misusing
+a generic flag. The acceptance section contains no such passage, so
+nothing was forced and the count is legitimately zero. **This must be
+closed before a section containing one is imported.** Reported rather than
+worked around, as D49 requires.
