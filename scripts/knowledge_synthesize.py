@@ -114,7 +114,16 @@ def queue(conn, limit: int) -> list[tuple]:
 
 
 def claim_phrases(claim: tuple) -> list[str]:
-    return [p for p in (claim[3], claim[4]) if (p or "").strip()]
+    """The claim's concept-shaped phrases. `target` only -- NOT `mechanism`.
+
+    claim[3] is `target` and claim[4] is `mechanism`, and this used to send
+    both. `mechanism` is specified as a proposition (§R11, §39), so sending
+    it to a concept resolver asked for the same junk PROPOSED concepts K09
+    was creating one layer earlier -- and this caller is not read_only, so it
+    created them (D51). The mechanism text is untouched on the claim row;
+    it simply stops being treated as the name of a concept.
+    """
+    return [p for p in (claim[3],) if (p or "").strip()]
 
 
 def candidates(conn, claim: tuple) -> list[dict]:
@@ -129,6 +138,11 @@ def candidates(conn, claim: tuple) -> list[dict]:
 
     concept_ids: list[str] = []
     for phrase in claim_phrases(claim):
+        # No allowed_types: `target` is the only field reaching here and the
+        # phrase list is already narrowed to it, but the CANDIDATE search is
+        # a recall step -- refusing a type-crossing candidate would narrow
+        # which existing strategies the model gets to compare against, which
+        # is not what the guard is for. It guards what gets RESOLVED.
         res = normalize.resolve(conn, phrase, context="K11 synthesis candidates")
         concept_ids.extend(res.concept_ids)
 
@@ -231,6 +245,12 @@ def link_concepts(conn, strategy_id: str, concepts: list) -> tuple[int, list[str
         role = (entry.get("role") or "TARGETS").strip().upper()
         if role not in LINK_ROLES:
             role = "TARGETS"
+        # allowed_types stays None ON PURPOSE. `role` here is the MODEL's
+        # assertion about how the concept relates to the strategy (TARGETS,
+        # MECHANISM, POPULATION...), not the caller's structural knowledge of
+        # what kind of thing the phrase is -- and a relation is not a type. A
+        # guard fed a model's guess would be checking the model against
+        # itself. Unknown, and left unknown (D51).
         res = normalize.resolve(conn, phrase, context="K11 strategy concept")
         if not res.concept_ids:
             unresolved.append(phrase)

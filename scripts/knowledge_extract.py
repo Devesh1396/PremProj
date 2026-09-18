@@ -217,26 +217,61 @@ def write_claims(conn, envelope_id, item_id, cards: list[dict]) -> list[str]:
     return written
 
 
+# Which Claim Card fields name a CONCEPT, and what kind each structurally is.
+#
+# `mechanism` IS NOT HERE, and its absence is the point. §R11 specifies it as
+# "the mechanism the source proposes" -- a PROPOSITION, and the engine
+# complies: all seven in the D47 run were full sentences, six over ninety
+# characters. Sending a sentence to a concept resolver produced one junk
+# PROPOSED concept per claim and nine of the twelve partial matches the
+# diagnosis found, and no threshold fixes it because the input is the wrong
+# shape (D51).
+#
+# Removing it from NORMALIZATION does not remove it from the CLAIM: `claims`
+# still stores it and `write_claims()` above still writes it. That the seven
+# mechanisms in that run were fabricated by the model is a separate, recorded
+# defect (D49) and is not fixed, hidden or quietly deleted by this.
+#
+# The types come from §R11's own definitions -- `target` is "the measured or
+# claimed outcome", `intervention` is "what is being done or taken" -- so
+# they are read off the CARD's structure, never off the phrase's wording.
+CONCEPT_FIELDS = {
+    "target": normalize.TARGET_TYPES,
+    "intervention": normalize.INTERVENTION_TYPES,
+}
+
+
 def normalize_claim_concepts(conn, cards: list[dict]) -> tuple[int, int, int]:
     """§17's CONCEPT NORMALIZATION step. Returns (seen, known, new).
 
-    The phrases a claim is ABOUT -- its target, its intervention and its
-    mechanism -- go through the same tiers as any other phrase. Nothing
-    here is special-cased for knowledge ingestion, which is the point: one
-    ontology, one resolver.
+    The phrases a claim is ABOUT -- its target and its intervention -- go
+    through the same tiers as any other phrase. Nothing here is
+    special-cased for knowledge ingestion, which is the point: one ontology,
+    one resolver.
     """
     phrases: list[str] = []
+    fields: dict[str, set[str]] = {}
     for card in cards:
         if not isinstance(card, dict):
             continue
-        for key in ("target", "intervention", "mechanism"):
+        for key in CONCEPT_FIELDS:
             value = (card.get(key) or "").strip()
-            if value and value not in phrases:
+            if not value:
+                continue
+            if value not in fields:
                 phrases.append(value)
+                fields[value] = set()
+            fields[value].add(key)
 
     known = new = 0
     for phrase in phrases:
-        res = normalize.resolve(conn, phrase, context="K09 claim extraction")
+        seen_in = fields[phrase]
+        # One phrase under two different roles means the CARD is ambiguous
+        # about what it is, so the caller no longer structurally knows and
+        # must not pretend to. Unknown, not a guess (D51).
+        allowed = CONCEPT_FIELDS[next(iter(seen_in))] if len(seen_in) == 1 else None
+        res = normalize.resolve(conn, phrase, context="K09 claim extraction",
+                                allowed_types=allowed)
         if res.concept_ids:
             known += 1
         else:

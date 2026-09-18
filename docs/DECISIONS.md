@@ -3311,11 +3311,129 @@ at all. Shortening the prompt to make the resolver's life easier would
 damage an authoritative specification to paper over a caller's mistake
 (hard rule 1).
 
-### Status
+### Status — BUILT AND MEASURED 2026-09-18
 
-**Diagnosed, NOT fixed.** GATE 1 (preservation, D50) came first by
-instruction; this is GATE 2. Until it is fixed the 20-video pilot stays
-closed — the blocker is the ontology, not the cost: twenty sources at this
-resolution rate would add roughly a thousand proposals and several hundred
-sentence-shaped PROPOSED concepts to a library that is meant to be the
-answer key.
+Every recommendation above is implemented. Rows:
+`docs/evidence/gate2_semantic_tier.md`, measured on a clean 269-concept K1
+seed with all 269 embedded, for $0.000106.
+
+**The tier contract was the load-bearing change, not the query.** Tiers
+returned `(ids, confidence)` and `resolve()` cached, aliased and returned
+exactly those ids — one list doing two jobs. Returning a top-3 from that
+contract would have resolved a phrase to three concepts the moment no
+confusable pair objected: the failure `confusable_with()` exists to prevent,
+arriving through the mechanism meant to prevent it. `TierResult` separates
+`candidates` (what the safety checks read) from `selected` (the only thing
+that may be cached, aliased or returned), and a regression test proves a
+three-candidate tier resolves to one concept with no pair objecting.
+
+**Selection is the top-1 and nothing else.** Trigram's tie rule —
+everything within 0.01 joins the answer — does not transfer: cosine scores
+are dense, and `postprandial walking` gives `post-meal movement` 0.833 and
+`postprandial glucose` 0.828, an INTERVENTION and a PHYSIOLOGY five
+thousandths apart. The first version carried the tie rule over and would
+have resolved that phrase to both.
+
+**Each tier carries its own threshold.** `TIER_THRESHOLD` maps the tier that
+answered to the number it is judged against; exact tiers map to `None`,
+because an alias hit is an identity and not a confidence. Semantic is 0.82
+with a floor of 0.78 below which it says nothing, so a genuinely new concept
+— `1-deoxynojirimycin` at 0.613 — stays free to AUTO_CREATE rather than
+becoming a LOGGED near-match with no concept created.
+
+**A weak tier answer no longer ends the chain.** It used to: a trigram
+near-match at 0.778 returned LOGGED and the semantic tier was never reached,
+so `Postprandial glucose spike` — which cosine puts on `postprandial
+glucose` — was logged as an ambiguity by a tier that had matched the wrong
+word. The near-match is remembered and becomes the outcome only if nothing
+later does better.
+
+**The semantic tier attaches NO alias, and the reason is worth keeping.** A
+confirmed alias is an identity rule the alias tier reads at 1.0 forever,
+bypassing every guard and every later tier on the strength of one cosine
+score; the first version confirmed one at 0.8211, a thousandth over the
+threshold, onto a SEEDED concept, where it outlived the suite that created
+it. Writing it UNCONFIRMED does not fix it either: `_tier_trigram` takes
+`max(similarity(a.alias_norm, ...))` over `concept_aliases` **without
+filtering on `confirmed`**, so an unconfirmed row still returns 1.0 there.
+That missing filter is pre-existing, also governs aliases the LLM tier
+writes, and is reported rather than changed. Nothing is lost by refusing:
+`normalization_cache` is what stops a repeat phrase costing a second call.
+
+**The type guard applies to the similarity tiers only**, and it refuses
+rather than shopping — if the top candidate is the wrong kind of thing the
+tier answers nothing, because picking the second-best BECAUSE it matches the
+expected type is manufacturing the answer the caller asked for. Applied to
+the exact tiers it refused `postprandial glucose` against the concept named
+`postprandial glucose`.
+
+**`mechanism` no longer reaches a concept resolver from anywhere.**
+`knowledge_extract.normalize_claim_concepts`, `knowledge_synthesize.claim_phrases`
+and `evaluate.py`'s layer B answer key all sent it. It is unchanged on the
+claim, and a regression test asserts both halves: no concept and no proposal
+from the sentence, and the sentence still stored verbatim on the claim row.
+That the D47 mechanisms were fabricated is D49's defect and is neither fixed
+nor hidden by this.
+
+**`resolve()` is no longer free.** Every phrase the cheap tiers cannot
+answer costs one embedding call through `embedding.embed()` — the one
+boundary (D38), never a second client. It degrades to a NAMED skip with no
+pgvector, no `MODEL_EMBEDDING`, no `LLM_API_KEY`, or nothing embedded (V3),
+which is what the VPS runs: the tier is inert there by configuration, and
+enabling it is a spending decision.
+
+### What the measurement says, and what it does not
+
+**0.82 is PROVISIONAL, and confirmed rather than chosen** — fixed in code
+from the independent measurement above, and scored against an answer key
+committed in `dd95388` before the tier existed. On the 56 D47 phrases: 33
+RIGHT, 4 PARTIAL, 9 PARTIAL_MISS, 4 REFUSED_CONFUSABLE, 2 MISSED, 4 WRONG.
+Below 0.80 WRONG grows faster than RIGHT.
+
+What would falsify it: a phrase set that is not failure-selected (these are
+the phrases D47 FAILED on, so the sweep says what a threshold recovers and
+nothing about what it breaks among phrases that already worked); a second
+seeded domain, since metabolic health is vocabulary-coherent and its cosine
+floor is 0.613 rather than near zero; a library much larger than 269
+concepts; any change of embedding model.
+
+**Three of the four WRONG are decided by margins of 0.0112, 0.0036 and
+0.0006**, all picking `meal-related glucose dynamics` over `postprandial
+glucose`. A selection decided by six ten-thousandths is not a judgement, and
+**a margin rule is the obvious next change and is deliberately NOT made
+here** — a margin sized to fix exactly those three rows is fitted to three
+rows. The answer key is not edited for them either.
+
+**The type guard fired zero times on the phrases whose type is actually
+known.** Only `target` is recoverable from the stored claims; the other 43
+came from the Claim Card `intervention` field or from K11, which the claim
+row does not distinguish. Assuming they were interventions refuses 12, of
+which ELEVEN are correct resolutions it would have destroyed
+(`postprandial blood glucose concentration → postprandial glucose` at 0.9545
+among them) and one is a merge the key forbids. That is the measured form of
+"a type guard without a trustworthy source type is not a guard", and it is
+why `allowed_types=None` imposes no constraint rather than defaulting to
+something. The guard's correctness is shown by the regression test, where
+the caller's knowledge is real, and NOT by this corpus.
+
+**The measurement must run on a clean K1 seed.** `test_concept_layer` and
+`test_knowledge_layer` insert SEEDED concepts under the K1 seed's own
+canonical keys, so after `run_all.sh` the ontology is 275 differently-named
+concepts and the same sweep scores 17 WRONG. Raised, not chased.
+
+**A one-character typo in a 26-character phrase scores 0.833 on trigram**,
+and `ALIAS_THRESHOLD` is 0.92 — so on realistic clinical vocabulary the
+trigram tier can near-match and essentially cannot resolve. A second
+threshold decision, with its own measurement to do. It is why
+`test_normalization`'s "the confirmed spelling is learned as an alias" check
+had never once executed: it sat behind `if r.decision == "RESOLVED"` and
+that branch was unreachable.
+
+### Still not done
+
+This is GATE 2 and only GATE 2. `retrieval.by_concept()` reads `strategies`,
+`strategy_concepts` and `implementation_patterns` and does not reference
+`curated_strategies`; the six curated Video 1 strategies are no more
+retrievable than before. That bridge is GATE 3.
+
+The 20-video pilot stays closed. The blocker was never cost.

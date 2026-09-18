@@ -218,12 +218,18 @@ def extract_answer_key(conn, item_id: str, content_hash: str) -> int:
         if not text:
             continue
         concept_ids: list[str] = []
-        for key in ("target", "intervention", "mechanism"):
+        # The same two fields K09 normalizes, and for the same reason:
+        # `mechanism` is a proposition, so an answer key built from it would
+        # be measuring retrieval against sentences nothing should ever have
+        # resolved (D51). read_only already stopped it polluting the
+        # ontology; it did not stop it polluting the answer key.
+        for key, allowed in KE.CONCEPT_FIELDS.items():
             phrase = (card.get(key) or "").strip()
             if not phrase:
                 continue
             res = normalize.resolve(conn, phrase,
                                     context="layer B answer key",
+                                    allowed_types=allowed,
                                     read_only=True)
             for cid in res.concept_ids:
                 if cid not in concept_ids:

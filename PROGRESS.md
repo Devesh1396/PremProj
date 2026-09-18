@@ -248,6 +248,79 @@ harness*.
 
 ---
 
+## GATE 2 — the semantic tier is BUILT and measured — 2026-09-18
+
+Every row: `docs/evidence/gate2_semantic_tier.md`. D51 records the design
+decisions and what would falsify the threshold. Measured on a clean
+269-concept K1 seed, all 269 embedded, **$0.000106**.
+
+`normalize._tier_semantic()` was `return [], 0.0` unconditionally. It is now
+a real pgvector query through `embedding.embed()` — the one boundary (D38) —
+with its own threshold **0.82** (floor 0.78, top-3 candidates), never the
+trigram constant.
+
+**56 D47 phrases: 33 RIGHT, 4 PARTIAL, 9 PARTIAL_MISS, 4 REFUSED_CONFUSABLE,
+2 MISSED, 4 WRONG**, scored against `testing/fixtures/normalization/d47_answer_key.json`
+— committed in `dd95388`, **before the tier existed**, so no verdict was
+written after seeing a score.
+
+**Four changes, and the query is the least interesting one.**
+
+1. **`TierResult` separates candidates from selection.** The old contract
+   returned one list that `resolve()` cached, aliased AND returned, so a
+   top-3 tier would have resolved a phrase to three concepts whenever no
+   confusable pair objected. A regression test proves three candidates
+   become one resolution with nothing objecting.
+2. **Selection is top-1 only** — trigram's 0.01 tie rule does not transfer.
+   `postprandial walking` puts an INTERVENTION and a PHYSIOLOGY five
+   thousandths apart, and the tie rule would have merged them.
+3. **A weak tier answer no longer ends the chain.** A trigram near-match at
+   0.778 used to return LOGGED and the semantic tier was never reached.
+4. **`mechanism` reaches no concept resolver** — K09, K11 and layer B all
+   sent it. Still stored verbatim on the claim; a test asserts both halves.
+
+**Four caveats that matter more than the score.**
+
+- **Three of the four WRONG are decided by margins of 0.0112, 0.0036 and
+  0.0006.** A margin rule is the obvious next change and is deliberately NOT
+  made — sized to fix those three rows it would be fitted to three rows.
+- **The type guard fired zero times where the type is actually known.** Only
+  `target` is recoverable from the stored claims. Assuming the other 43
+  phrases were interventions refuses 12, of which **eleven are correct
+  resolutions it would have destroyed**. That is why `allowed_types=None`
+  imposes nothing rather than defaulting.
+- **Dataset B constrains the mechanism, not the threshold.** The structural
+  suite passes at every candidate threshold from 0.65 to 0.92, because its
+  fixture vectors sit at 1.000/0.906/0.839 by construction. Building one
+  that discriminated would mean writing both halves of the comparison (V2).
+- **This is not GATE 3.** `retrieval.by_concept()` still does not read
+  `curated_strategies`. The six Video 1 strategies are no more retrievable
+  than before.
+
+**Two things found while doing it, both raised rather than changed.**
+`_tier_trigram` reads `concept_aliases` **without filtering on `confirmed`**,
+so an "unconfirmed" alias row still returns similarity 1.0 there — which is
+why the semantic tier writes no alias at all. And a one-character typo in a
+26-character phrase scores **0.833** on trigram against an `ALIAS_THRESHOLD`
+of 0.92, so the trigram tier can near-match and essentially cannot resolve
+on realistic clinical vocabulary.
+
+**A test that had never once run.** `test_normalization`'s "the confirmed
+spelling is learned as an alias" sat behind `if r.decision == "RESOLVED"`
+and that branch was unreachable for exactly the reason above. It only
+started executing when the semantic tier began resolving the phrase, and
+then failed. Replaced with assertions that call `_tier_trigram` directly.
+
+**The sweep must run on a clean K1 seed.** `test_concept_layer` and
+`test_knowledge_layer` insert SEEDED concepts under the K1 seed's own
+canonical keys, so after `run_all.sh` the ontology is 275 differently-named
+concepts and the same sweep scores 17 WRONG. The first run of this
+measurement was taken on that database. Reproduction steps are at the top of
+the evidence file.
+
+`bash testing/run_all.sh` → ALL SUITES PASSED, exit 0, twice consecutively.
+`bash testing/run_bare.sh` → ALL SUITES PASSED, exit 0.
+
 ## GATE 1 — curated preservation PASSES — 2026-09-18
 
 Every row: `docs/evidence/curated_gate1.md`. Migrations `032`/`033`,

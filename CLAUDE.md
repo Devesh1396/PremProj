@@ -1005,45 +1005,112 @@ Collapsing anything into `SYSTEM_VERIFIED` is the D48 failure with a new
 label. A separate independent evidence audit may exist later as its own
 workflow; **it is not part of curated import.**
 
-**Still do not begin the 20-video pilot.** The blocker is concept
-normalization, not cost: 71 proposals and **one** resolution against a
-seed that holds the right concepts. 51 PROPOSED concepts were created
-instead, and 4 of 6 strategies ended with no canonical concept and an
-OPEN gap. Twenty sources would bury the ontology.
+**Still do not begin the 20-video pilot.** D47's run produced 71 proposals
+and **one** resolution against a seed that holds the right concepts; 51
+PROPOSED concepts were created instead, and 4 of 6 strategies ended with no
+canonical concept and an OPEN gap. **That blocker is now addressed — see
+GATE 2 below — and the pilot is still closed**, because a repaired
+normalizer has not been run over a source end to end and K10 remains broken
+(D48).
 
-**`normalize._tier_semantic()` IS A STUB, and that is the real blocker
-(D51; diagnosis: `docs/evidence/normalization_diagnosis.md`, $0.000301).** Its
-last line is `return [], 0.0` unconditionally, after two guards that both
-pass; its comment says "neither is true until K14" and K14 has been built
-since step 17. Proven live with pgvector 0.6.0 and all 269 concepts
-embedded for real: `resolve()` still returns **0 of 71**. Embedding the
-library buys zero resolutions until the tier is written. An earlier note
-here blamed `llm=None` in `normalize_claim_concepts()`; that is a real
-gap but it is NOT the cause, and the LLM tier is worth about **2 calls in
-56** once the semantic tier exists.
+## GATE 2 PASSED — the semantic tier is built and measured (2026-09-18, D51)
 
-**Trigram cannot be rescued by a threshold, and the two tiers cannot
-share one.** `postprandial walking` is 20 characters and trigram's best
-is `postprandial glucose` at 0.448 — the wrong word; cosine gives
-`post-meal movement` at 0.833. It is synonymy, not length. The measured
-cosine knee is **0.82** (23 admitted, 16 right, 6 partial, 1 wrong);
-`ALIAS_THRESHOLD` 0.92 is a trigram number and would admit 1 of 56.
-`CREATE_THRESHOLD` 0.72 is not a second decision point — it is the
-`HAVING` gate inside `_tier_trigram`, so a weak match never leaves the
-query.
+`docs/evidence/gate2_semantic_tier.md` has every row.
+`normalize._tier_semantic()` was `return [], 0.0` unconditionally; it is now
+a real pgvector query through `embedding.embed()` — the ONE embedding
+boundary (D38), never a second client — with **its own threshold 0.82**
+(floor 0.78, top-3 candidates), never the trigram constant. **56 D47
+phrases: 33 RIGHT, 4 PARTIAL, 9 PARTIAL_MISS, 4 REFUSED_CONFUSABLE, 2
+MISSED, 4 WRONG**, for $0.000106.
 
-**Most wrong merges cross a `concept_type` boundary** — a TIME WINDOW, a
-DRUG CLASS, a MOLECULE and a MECHANISM all mapped to a BIOMARKER — and
-the resolver never consults that column. **And the tier must return a
-candidate SET**: `confusable_with()` fires only on a span, and the one
-wrong merge at 0.80 has both halves of a do-not-merge pair in its top-3,
-so a top-1 would silently defeat a guard that already works.
+**THE ANSWER KEY WAS COMMITTED BEFORE THE TIER EXISTED** (`dd95388`,
+`testing/fixtures/normalization/d47_answer_key.json`). That ordering is the
+only thing that stops a threshold being fitted to the sample, and the sample
+is failure-selected — these are the phrases D47 FAILED on, so the sweep says
+what a threshold recovers and nothing about what it breaks.
 
-**The long phrases are NOT an extraction-prompt bug.** All seven
-`mechanism` values exceed 60 characters because §39 specifies `mechanism`
-as "the mechanism the source proposes" — a proposition, and the engine
-complied. The bug is that `normalize_claim_concepts()` sends `mechanism`
-to a concept resolver at all. **Do not touch `prompts/` for this.**
+**A CANDIDATE IS NOT A RESOLUTION.** Tiers returned `(ids, confidence)` and
+`resolve()` cached, aliased AND returned exactly those ids — one list doing
+two jobs. A top-3 tier on that contract would have resolved a phrase to
+three concepts the moment no confusable pair objected: the failure
+`confusable_with()` exists to prevent, arriving through the mechanism meant
+to prevent it. `TierResult.candidates` is what the safety checks read;
+`TierResult.selected` is the only thing that may be cached, aliased or
+returned.
+
+**Selection is the TOP-1 and nothing else.** Trigram's 0.01 tie rule does
+not transfer — cosine scores are dense, and `postprandial walking` puts
+`post-meal movement` (INTERVENTION) and `postprandial glucose` (PHYSIOLOGY)
+five thousandths apart. Two near-equal cosines mean the query sits BETWEEN
+two concepts, which is an ambiguity, not a statement that they are the same.
+
+**Each tier owns its threshold** (`TIER_THRESHOLD`); exact tiers map to
+`None`, because an alias hit is an identity and not a confidence. Below the
+semantic FLOOR the tier says nothing at all, so a genuinely new concept —
+`1-deoxynojirimycin` at 0.613 — stays free to AUTO_CREATE instead of
+becoming a LOGGED near-match with no concept created.
+
+**A weak tier answer no longer ends the chain.** A trigram near-match at
+0.778 used to return LOGGED and the semantic tier was never reached.
+
+**THE SEMANTIC TIER ATTACHES NO ALIAS.** A confirmed alias is an identity
+rule the alias tier reads at 1.0 forever, bypassing every guard on the
+strength of one cosine score; the first version confirmed one at 0.8211 onto
+a SEEDED concept. Unconfirmed does not fix it: **`_tier_trigram` reads
+`concept_aliases` without filtering on `confirmed`**, so the row still
+returns 1.0 there. That missing filter is pre-existing and reported, not
+changed. `normalization_cache` — not the alias table — is what stops a
+repeat phrase costing a second call.
+
+**The type guard applies to the SIMILARITY tiers only, and refuses rather
+than shopping.** Applied to the exact tiers it refused `postprandial
+glucose` against the concept named `postprandial glucose`. If the top
+candidate is the wrong kind of thing the tier answers nothing — picking the
+second-best BECAUSE it matches the expected type manufactures the answer the
+caller asked for.
+
+**`allowed_types=None` MEANS UNKNOWN AND IMPOSES NOTHING.** Only a caller
+that structurally knows may supply a type: §R11 defines `target` as "the
+measured or claimed outcome" and `intervention` as "what is being done or
+taken", so K09 reading those fields knows without inspecting a word. K11's
+`role` is the MODEL's assertion and is not used. **Measured: assuming the 43
+unknown-provenance phrases were interventions refuses 12, of which ELEVEN
+are correct resolutions it would have destroyed.** A type guard without a
+trustworthy source type is not a guard.
+
+**`mechanism` reaches NO concept resolver** — `knowledge_extract`,
+`knowledge_synthesize.claim_phrases` and `evaluate.py`'s layer B answer key
+all sent it. It is unchanged on the claim, and a test asserts both halves.
+That the D47 mechanisms were fabricated is D49's defect and is neither fixed
+nor hidden by this.
+
+**`resolve()` IS NO LONGER FREE.** Every phrase the cheap tiers cannot
+answer costs one embedding call. It degrades to a NAMED skip with no
+pgvector, no `MODEL_EMBEDDING`, no `LLM_API_KEY` or nothing embedded (V3) —
+the tier is inert on the VPS by configuration, and enabling it is a spending
+decision.
+
+**Three of the four WRONG are decided by margins of 0.0112, 0.0036 and
+0.0006.** A margin rule is the obvious next change and is deliberately NOT
+made: sized to fix those three rows it would be fitted to three rows.
+
+**The sweep must run on a CLEAN K1 SEED.** `test_concept_layer` and
+`test_knowledge_layer` insert SEEDED concepts under the K1 seed's own
+canonical keys, so after `run_all.sh` the ontology is 275 differently-named
+concepts and the same sweep scores 17 WRONG.
+
+**DO NOT TOUCH `prompts/` FOR A LONG PHRASE.** §39 specifies `mechanism`
+as "the mechanism the source proposes" — a proposition — and the engine
+complied; every one of the D47 mechanisms exceeds 60 characters because the
+specification asks for a sentence. The bug was always the CALLER sending it
+to a concept resolver, and that is fixed. Shortening an authoritative
+specification to make a resolver's life easier would be hard rule 1 in
+reverse.
+
+**Still not GATE 3.** `retrieval.by_concept()` reads `strategies`,
+`strategy_concepts` and `implementation_patterns` and does not reference
+`curated_strategies`. The six curated Video 1 strategies are no more
+retrievable than before. **The 20-video pilot stays closed.**
 
 **The first live call to any real API in this build FAILED, and the
 failure was informative.** The actor answers HTTP 201 from a SUCCEEDED
