@@ -248,6 +248,64 @@ harness*.
 
 ---
 
+## A CURATED source through K07–K09 — 2026-09-18
+
+Every row: `docs/evidence/curated_source_run.md`. ~300 hand-curated lines,
+six strategy cards, registered as a new source kind `PRACTITIONER_CURATED`
+(an INSERT, hard rule 13). K07 → K08 → K09 + normalization. **K10 not run**
+(D48). One live call, **$0.0438**. 36 chunks, 7 claims, 20 proposals.
+
+**The answer to "does it handle curated knowledge better?" is WORSE.**
+
+**K09 FABRICATES THE `mechanism` FIELD — D48's failure class, one layer
+earlier.** §R11: `mechanism` is "the mechanism **the source** proposes",
+`claim_text` is "in the source's own terms, **not a paraphrase that
+improves it**", and "**never fill a field the source did not supply**". The
+source contains no physiology at all. All 7 mechanisms are model recall:
+GLUT4, incretin, disaccharidase, gastric emptying, beta-cell, acetic acid,
+euglycemia, self-efficacy — **each occurs ZERO times in the source.**
+
+The clinical audit cleared K09 by checking claim TEXT against the
+transcript. It did not check `mechanism`. **The "architecture is sound,
+K10 is the broken part" conclusion needs narrowing**: the same
+model-recall-as-source-fact defect is in K09, and 8 of the 19 new PROPOSED
+concepts are fabricated mechanism sentences, so it reaches the ontology.
+
+**The decision logic did not survive, and Strategy 6 vanished.** Six
+strategies produced five claims; *"Preserve agency and reduce unnecessary
+deprivation"* produced none — and its `Decision intelligence` subsection is
+the largest chunk in the document (1,191 chars), holding the whole
+bottleneck-routing table. No claim carries a "when to reach for this"
+condition anywhere. The tiering signal is not in the database in any form.
+
+**Conditional heuristics became unconditional effect claims.** The source
+says do NOT manufacture a vinegar protocol because it lacks dose, selection
+and limitations; K09 wrote "acts as a low-friction tool to reduce
+postprandial glucose spikes", `INTERVENTION_EFFECT` 0.900. Five claims are
+`INTERVENTION_EFFECT` and one `SAFETY`, and `RESEARCH_TYPES = ("SAFETY",
+"INTERVENTION_EFFECT")` — so **6 of 7 would go to K10**, manufacturing
+citations for claims the practitioner explicitly declined to make.
+
+**What went right, and it is not small.** Provenance is materially BETTER
+than the transcript case: every claim carries a heading path from the
+document's own structure, and unlike a timestamp range it cannot point at
+the wrong place. All 7 have a provenance edge. Chunking held perfectly — 36
+chunks, each addressable as `Strategy N > Client decision logic`. **The
+decision logic is locatable in the chunk store; it did not survive
+extraction.** The input to a fix is already there.
+
+**Normalization: 0 of 20 resolved** against 269 seeded concepts — 19
+AUTO_CREATE, 1 LOGGED. One trigram near-miss, "Postprandial glucose
+disposal" → `POSTPRANDIAL_GLUCOSE` at 0.750, below threshold. Confirms the
+`_tier_semantic()` stub blocker on content unlike the transcript.
+
+**A curated source needs a DIFFERENT ingestion path.** It is already the
+output of the operation K09 performs, done by a human with clinical
+judgement. The structure is machine-readable (`Strategy N — Name` + fixed
+subsections) and wants a **deterministic reader**, not a model re-extracting
+claims from prose that is no longer prose. **Do not put the other seventeen
+sections through this path.**
+
 ## The first real source through the complete loop — 2026-09-11
 
 > ## ⛔ AUDITED BY A PRACTISING NUTRITIONIST, 2026-09-18 — THE EVIDENCE LAYER FAILED
