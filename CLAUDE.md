@@ -859,9 +859,13 @@ once. A model asked for citations returns citation-shaped text, and
 nothing downstream tells that from a retrieved record.
 
 - **The 16 evidence rows are INVALIDATED. Do not patch them.**
-- **Do not run K10 until retrieval is fail-closed** — an evidence record
-  must be unwritable without a fetch that succeeded.
+- **Do not run K10 until retrieval is fail-closed AND independently
+  audited** — an evidence record must be unwritable without a fetch that
+  succeeded, and the repaired layer must be checked by someone other than
+  the thing that wrote it. Fail-closed alone only guarantees a fetch
+  happened, not that the record matches what was fetched.
 - **The 20-video pilot stays closed.**
+- **Practitioner-verified evidence is never sent back through K10** (D49).
 
 **Fixing retrieval is NOT sufficient.** `evidence_records` stores
 DIRECTION and has **no DIRECTNESS field**, so a correctly retrieved
@@ -878,9 +882,78 @@ file that "full provenance closes" is false.
 triage verdict, K10's `evidence_confidence`, K11's verdict. A judgement
 thrown away cannot be audited later.
 
-**K07, K08, K09 and the strategy-card structure are NOT implicated** — six
-of seven claims were legitimate checkable assertions and one correctly
-qualified the source. The architecture is sound; K10 is the broken part.
+**PRESENCE OF A SOURCE LOCATION IS NOT PROVENANCE.** Every stored range
+looked right and six of seven did not contain the statement. So provenance
+must be **mechanically validated** from now on:
+
+```
+stored object -> stored source range -> ACTUAL source text
+```
+
+and the check is that the range **contains the text being attributed to
+it**. That is a test the machine can run on every write; "a location field
+is populated" is not, and populated-but-wrong is the shape that passes
+review.
+
+**What survived the audit:** the Knowledge Inbox and source-envelope
+model, chunking, heading-path provenance for structured documents, the
+strategy-card architecture, claim extraction **for RAW sources**, source
+roles and types, implementation patterns, and the rights / registry /
+dedup concepts. Six of seven claims from the transcript were legitimate
+checkable assertions and one correctly qualified the source.
+
+**BUT "K09 is not implicated" WAS TOO BROAD — see the next block.** It
+held for a raw transcript, which is what the audit examined. It does not
+hold for curated input, and it does not hold for the `mechanism` field on
+either.
+
+## ⛔ K09 IS THE WRONG EXTRACTOR FOR CURATED KNOWLEDGE (measured 2026-09-18, D49)
+
+Run on a hand-curated practitioner document — six strategies, explicit
+`Client decision logic` subsections, already distilled and deduplicated by
+a human. Rows: `docs/evidence/curated_source_run.md`. **A confirmed
+failure mode, not a hypothetical concern.**
+
+- **6 strategies became 5 claims. Strategy 6 disappeared entirely** — and
+  its `Decision intelligence` subsection is the largest chunk in the
+  document, holding the whole bottleneck-routing table.
+- **`Client decision logic` is not preserved as a first-class field
+  anywhere.** No claim carries a "when to reach for this" condition. The
+  tiering signal is not in the database in any form.
+- **K09 INVENTS THE `mechanism` FIELD FROM MODEL KNOWLEDGE.** §R11 says
+  `mechanism` is "the mechanism **the source** proposes" and "**never fill
+  a field the source did not supply**". The document contains no
+  physiology at all; all seven mechanisms were fabricated. GLUT4,
+  incretin, disaccharidase, gastric emptying, beta-cell, acetic acid,
+  euglycemia, self-efficacy — **each occurs ZERO times in the source.**
+  This is D48's failure class one layer earlier, and it reaches the
+  ontology: 8 of 19 new PROPOSED concepts are fabricated mechanism
+  sentences.
+- **Text that deliberately withheld an evidence claim was rewritten into a
+  stronger one.** The source says do not manufacture a vinegar protocol
+  because dose, selection and limitations are absent; K09 wrote "acts as a
+  low-friction tool to reduce postprandial glucose spikes",
+  `INTERVENTION_EFFECT` 0.900. Five claims are `INTERVENTION_EFFECT` and
+  one `SAFETY`, so under `RESEARCH_TYPES` **six of seven would go to K10.**
+
+**K09 is useful for RAW material. K09 must NOT automatically re-distill
+practitioner knowledge that is already curated.** Curated sources need
+**deterministic structural extraction**, and it goes **INSIDE the existing
+Knowledge Inbox path** — not a second ingestion path (D37).
+
+## THE THREE KNOWLEDGE STATES — NEVER COLLAPSE THEM (D49)
+
+| state | what it is | what must happen |
+|---|---|---|
+| **A — PRACTITIONER INTELLIGENCE** | strategies, decision logic, when useful / when not, implementation, alternatives, sequencing, bottleneck routing, adaptability, coaching logic | Store and use as practitioner knowledge. **It does NOT need re-researching in order to be stored and used.** It is professional knowledge, not a claim awaiting evidence. |
+| **B — PRACTITIONER-VERIFIED EVIDENCE** | passages where the practitioner says "I checked the underlying published report", followed by study details | Preserve the verification: `verification_actor = PRACTITIONER`, `verification_status = PRACTITIONER_VERIFIED`. **Never** send through K10 on curated import, **never** make the practitioner verify it twice, **never** downgrade it because automated K10 did not verify it, and **never** silently convert it to `SYSTEM_VERIFIED`. |
+| **C — SOURCE CLAIM, NOT PERSONALLY VERIFIED** | "X reduced glucose by 32%" where the practitioner did not check the paper | `verification_status = SOURCE_CLAIM_UNVERIFIED`. Not established evidence. Eligible for automated research **later**, once that layer is repaired. |
+
+Collapsing A into C sends professional judgement to a broken evidence
+layer. Collapsing B into C throws away work a human already did.
+Collapsing anything into `SYSTEM_VERIFIED` is the D48 failure with a new
+label. A separate independent evidence audit may exist later as its own
+workflow; **it is not part of curated import.**
 
 **Still do not begin the 20-video pilot.** The blocker is concept
 normalization, not cost: 71 proposals and **one** resolution against a

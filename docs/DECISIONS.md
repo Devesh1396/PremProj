@@ -3018,9 +3018,121 @@ output, and each is exactly what a later reviewer needs.
 
 ### What is NOT implicated
 
-K07, K08, K09 and the strategy-card structure. Six of seven claims were
-legitimate checkable assertions, and in one place the system correctly
-qualified the source beyond what the video said. **The architecture is
-sound; K10 is the broken part.** The 16 existing evidence rows are
-invalidated and must not be patched — a fabricated record corrected by hand
-is still a record nothing fetched.
+The Knowledge Inbox and source-envelope model, chunking, heading-path
+provenance for structured documents, the strategy-card architecture, claim
+extraction **for raw sources**, source roles and types, implementation
+patterns, and the rights / registry / dedup concepts. Six of seven claims
+were legitimate checkable assertions, and in one place the system correctly
+qualified the source beyond what the video said. The 16 existing evidence
+rows are invalidated and must not be patched — a fabricated record
+corrected by hand is still a record nothing fetched.
+
+**NARROWED 2026-09-18.** This section originally read "K07, K08, **K09**
+and the strategy-card structure", and that was too broad in two ways, both
+found by running a curated source (D49):
+
+1. It held for a **raw transcript**, which is the only thing this audit
+   examined. It does not hold for already-curated input.
+2. The audit checked claim **text**. It did not check the `mechanism`
+   field, which is fabricated from model knowledge on at least one source —
+   the same defect as K10's, one layer earlier.
+
+"The architecture is sound; K10 is the broken part" stands as a statement
+about the *architecture*. It is not a clean bill of health for K09.
+
+### Fail-closed is necessary and not sufficient
+
+K10 stays closed until retrieval is fail-closed **and independently
+audited**. Fail-closed proves a fetch happened; it does not prove the
+stored record matches what came back, and every failure mode in this audit
+is a mismatch between a record and a reality. The layer that writes the
+record cannot be the layer that certifies it.
+
+---
+
+## D49 — Curated practitioner knowledge is a different kind of input, and there are three knowledge states
+**SETTLED 2026-09-18** — measured run: `docs/evidence/curated_source_run.md`; D10, D35, D37, D48
+
+D48 closed K10. This closes the assumption underneath it — that one
+extractor fits every source — and it was measured, not reasoned.
+
+### K09 is the wrong extractor for already-curated knowledge
+
+A hand-curated practitioner document went through K07 → K08 → K09. Six
+strategies with explicit `Client decision logic` subsections, already
+distilled and deduplicated by a human. What came out:
+
+- **Six strategies became five claims. Strategy 6 disappeared** — and its
+  `Decision intelligence` subsection is the largest chunk in the document,
+  holding the entire bottleneck-routing table.
+- **`Client decision logic` survived nowhere as a first-class field.** No
+  claim carries a "when to reach for this" condition. The `context` field
+  received *implementation* context instead. The tiering signal — the
+  stated point of the document — is not in the database in any form.
+- **`mechanism` was fabricated in 7 cases out of 7.** §R11 says `mechanism`
+  is "the mechanism **the source** proposes" and "never fill a field the
+  source did not supply". The document contains no physiology. GLUT4,
+  incretin, disaccharidase, gastric emptying, beta-cell, acetic acid,
+  euglycemia and self-efficacy each occur **zero** times in it. 8 of the 19
+  new PROPOSED concepts are fabricated mechanism sentences, so it reaches
+  the ontology.
+- **Deliberate non-claims were rewritten into claims.** The source refuses
+  to define a vinegar protocol because dose, selection and limitations are
+  absent; K09 emitted an `INTERVENTION_EFFECT` at 0.900. Under
+  `RESEARCH_TYPES` six of seven would have gone to K10.
+
+The cause is structural, not a prompt defect. **The document is already the
+output of the operation K09 performs**, carried out by a human with
+clinical judgement. Asking a model to re-extract claims from it cannot
+improve it; it can only re-derive a worse version and discard the layer the
+human added.
+
+**Curated sources need deterministic structural extraction**, mapping
+`Strategy N — Name` and its fixed subsections onto fields — and it lives
+**inside the existing Knowledge Inbox path**. Not a second ingestion path:
+D37's reasoning is unchanged, and a second path is a second normalizer, a
+second dedup rule and a second place to forget §52.
+
+What already works in its favour: chunking held perfectly, 36 chunks, each
+addressable as `Strategy N > Client decision logic`. **The decision logic is
+sitting in the chunk store right now.** It did not survive extraction, which
+means the input to the fix already exists.
+
+Heading-path provenance is also materially better than timestamps: a
+timestamp range can point at the wrong second and six of seven did (D48); a
+heading path is derived from the document's own structure and cannot.
+
+### The three knowledge states, which must never be collapsed
+
+| | state | rule |
+|---|---|---|
+| **A** | **Practitioner intelligence** — strategies, decision logic, when useful and when not, implementation, alternatives, sequencing, bottleneck routing, adaptability, coaching logic | Store and use as practitioner knowledge. **It does not need re-researching in order to be stored and used.** It is professional knowledge, not a claim awaiting evidence. |
+| **B** | **Practitioner-verified evidence** — passages where the practitioner states they checked the underlying published report, with study details | Preserve the verification as its own fact: `verification_actor = PRACTITIONER`, `verification_status = PRACTITIONER_VERIFIED`. Never sent through K10 on curated import; never re-verified by the practitioner; never downgraded because automated K10 did not confirm it; **never silently converted to `SYSTEM_VERIFIED`.** |
+| **C** | **Source claim, not personally verified** — "X reduced glucose by 32%" where the practitioner did not check the paper | `verification_status = SOURCE_CLAIM_UNVERIFIED`. Not established evidence. Eligible for automated research **later**, once that layer is repaired and independently audited. |
+
+Each collapse is a distinct harm:
+
+- **A into C** sends professional judgement to an evidence layer that is
+  closed for fabricating citations.
+- **B into C** throws away verification work a human already did, and asks
+  them to do it again.
+- **Anything into `SYSTEM_VERIFIED`** is D48 with a new label — a claim
+  presented as machine-checked that nothing checked.
+
+An independent automated evidence audit may exist later as **its own
+workflow**. It is not part of curated import, and curated import must not
+wait on it.
+
+### Presence of a source location is not provenance
+
+D48 found six of seven stored ranges did not contain the statement they
+cited, and **every one of them had a populated location field**. So the
+requirement is now mechanical:
+
+```
+stored object  ->  stored source range  ->  ACTUAL source text
+```
+
+and the assertion is that the range **contains** the text attributed to it.
+That is checkable on every write. "A location field is populated" is not,
+and populated-but-wrong is precisely the shape that passes review.

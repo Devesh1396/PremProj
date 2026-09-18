@@ -299,12 +299,28 @@ AUTO_CREATE, 1 LOGGED. One trigram near-miss, "Postprandial glucose
 disposal" → `POSTPRANDIAL_GLUCOSE` at 0.750, below threshold. Confirms the
 `_tier_semantic()` stub blocker on content unlike the transcript.
 
-**A curated source needs a DIFFERENT ingestion path.** It is already the
-output of the operation K09 performs, done by a human with clinical
-judgement. The structure is machine-readable (`Strategy N — Name` + fixed
-subsections) and wants a **deterministic reader**, not a model re-extracting
-claims from prose that is no longer prose. **Do not put the other seventeen
-sections through this path.**
+**A curated source needs DETERMINISTIC STRUCTURAL EXTRACTION, inside the
+EXISTING Knowledge Inbox path.** It is already the output of the operation
+K09 performs, done by a human with clinical judgement. The structure is
+machine-readable (`Strategy N — Name` + fixed subsections) and wants a
+deterministic reader mapping headings onto fields — not a model
+re-extracting claims from prose that is no longer prose, and **not a second
+ingestion path** (D37: one normalizer, one dedup rule, one place rights are
+handled). **Do not put the other seventeen sections through this path.**
+
+**THE THREE KNOWLEDGE STATES, WHICH MUST NEVER BE COLLAPSED (D49).** This
+run is why the distinction is load-bearing rather than tidy:
+
+| state | example in this source | rule |
+|---|---|---|
+| **A — practitioner intelligence** | the six strategies, `Client decision logic`, bottleneck routing, adaptability | store and use as practitioner knowledge; **does not need re-researching to be stored and used** |
+| **B — practitioner-verified evidence** | passages saying "I checked the underlying published report" plus study details | `verification_actor = PRACTITIONER`, `verification_status = PRACTITIONER_VERIFIED`; never through K10 on import, never re-verified by the practitioner, never downgraded because K10 did not confirm it, never silently made `SYSTEM_VERIFIED` |
+| **C — source claim, not personally verified** | "X reduced glucose by 32%" that the practitioner did not check | `verification_status = SOURCE_CLAIM_UNVERIFIED`; not established evidence; eligible for automated research **later** |
+
+Collapsing A into C sends professional judgement to a broken evidence
+layer. Collapsing B into C discards work a human already did. An
+independent automated evidence audit may exist later as its own workflow;
+**it is not part of curated import.**
 
 ## The first real source through the complete loop — 2026-09-11
 
@@ -360,13 +376,25 @@ sections through this path.**
 > ### Consequences, in force now
 >
 > - **The 16 existing evidence rows are INVALIDATED. Do not patch them.**
-> - **Do not run K10 on anything until retrieval is fail-closed** — until
->   an evidence record cannot be written without a fetch that succeeded.
+> - **Do not run K10 on anything until retrieval is fail-closed AND
+>   independently audited** — an evidence record must be unwritable without
+>   a fetch that succeeded, and the repaired layer must then be checked by
+>   something other than itself. Fail-closed proves a fetch happened, not
+>   that the stored record matches what came back.
 > - **The 20-video pilot stays closed.**
-> - K07, K08, K09 and the strategy-card structure are NOT implicated. Six
->   of seven claims were legitimate checkable assertions and in one place
->   the system correctly qualified the source. **The architecture is sound;
->   K10 is the broken part.**
+> - **Practitioner-verified evidence is never sent back through K10** (D49).
+> - **Provenance must be MECHANICALLY VALIDATED from now on**: stored
+>   object → stored source range → actual source text, and the range must
+>   *contain* the text attributed to it. Every one of the six wrong ranges
+>   had a populated location field. Presence of a location is not
+>   provenance.
+> - K07, K08, the strategy-card structure and claim extraction **for RAW
+>   sources** are not implicated — six of seven transcript claims were
+>   legitimate checkable assertions and one correctly qualified the source.
+>   **But "K09 is not implicated" was too broad**: it held for a raw
+>   transcript, which is what this audit examined. It does not hold for
+>   curated input, and it does not hold for the `mechanism` field on either
+>   — see *A CURATED source through K07–K09* above (D49).
 >
 > Everything below this box is the pre-audit record, kept unedited except
 > where a sentence is now known to be false and is marked inline. Read it
