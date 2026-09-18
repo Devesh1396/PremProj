@@ -235,8 +235,17 @@ def main() -> int:
            values ('Example Journal','JOURNAL','{EVIDENCE}','journal:example') returning source_id"""
     ).fetchone()[0]
 
+    # Scoped to the two rows this block just created. It used to be an
+    # exact set over the WHOLE table, which held only while nothing else
+    # in the database had ever carried the EVIDENCE role -- and K10
+    # legitimately registers one ('Independent evidence (K10)') the first
+    # time it records an identifiable study, in production as well as in
+    # test_knowledge_factory. An assertion that depends on the rest of the
+    # database being empty is not testing what it says it is.
     ev_sources = {r[0] for r in conn.execute(
-        "select source_name from knowledge_sources where 'EVIDENCE' = any(source_roles)")}
+        "select source_name from knowledge_sources "
+        " where 'EVIDENCE' = any(source_roles) and source_id = any(%s::uuid[])",
+        ([str(podcast), str(journal)],))}
     check("podcast excluded from evidence-role sources",
           ev_sources == {"Example Journal"}, str(ev_sources))
 

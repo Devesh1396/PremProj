@@ -78,6 +78,15 @@ def clear(conn) -> None:
         (PREFIX + "%", "KFTEST_%"))
     conn.execute(
         "delete from strategies where name like %s", ("SENT-E7-SYNTHESIS-%",))
+    # Evidence written while researching the fixture claims. This was
+    # missing, so every run of this suite left its studies in the library
+    # permanently -- invisible until something started asserting over
+    # evidence_records, and then indistinguishable from a live run's.
+    # Deleted BEFORE the claims: evidence_records.claim_id is ON DELETE
+    # SET NULL, so dropping the claims first would orphan these rows and
+    # take the only handle on them with it.
+    conn.execute("delete from evidence_records where citation like %s",
+                 (PREFIX + "%",))
     conn.execute("delete from claims where claim_text like %s", (PREFIX + "%",))
 
 
@@ -566,6 +575,122 @@ def main() -> int:
         (trivial,)).fetchone()[0]
     check("...and is recorded AS a finding, so the claim does not loop",
           finding is not None and "No independent evidence" in finding, str(finding))
+
+    # A study that CAN be identified. Every fixture above returns a record
+    # with no doi, pmid or url, so study_item() returned at its first
+    # branch and the lookup below it had never executed in any suite --
+    # which is how it reached a live run still carrying three bare
+    # parameters that Postgres refuses to type (IndeterminateDatatype).
+    # This drives the branch that actually touches the database.
+    identified = json.dumps([{
+        "citation": PREFIX + "Smith 2021, a trial with an identifier",
+        "design": "RCT", "relationship": "SUPPORTS",
+        "doi": "10.1234/" + PREFIX.lower() + "identified",
+        "pmid": "34567890",
+        "url": "https://example.org/" + PREFIX.lower() + "trial",
+        "results_summary": "it worked"}])
+    identified_claim = conn.execute(
+        "insert into claims (item_id, claim_text, claim_type) "
+        "values (%s,%s,'INTERVENTION_EFFECT') returning claim_id",
+        (claim[5], PREFIX + "a claim whose evidence is identifiable")).fetchone()[0]
+    row = conn.execute(
+        "select claim_id, claim_text, claim_type, target, mechanism, context, "
+        "       extraction_confidence from claims where claim_id=%s",
+        (identified_claim,)).fetchone()
+    RE.select_provider = lambda: (
+        evidence_provider(identified, '{"evidence_confidence": "MODERATE"}'),
+        "fixture")
+    try:
+        out_id = KR.research_one(conn, row)
+    finally:
+        RE.select_provider = original
+    check("an identifiable study is written", out_id["evidence"] == 1, str(out_id))
+    item = conn.execute(
+        "select si.item_id, si.doi, si.pmid, si.url, si.source_id "
+        "  from evidence_records e join source_items si on si.item_id = e.item_id "
+        " where e.citation = %s", (PREFIX + "Smith 2021, a trial with an identifier",)
+    ).fetchone()
+    check("...and DOES get a source_items row, carrying its identifiers",
+          item is not None and item[1] and item[2] and item[3], str(item))
+
+    # The same study found twice is one row, not two -- which is the whole
+    # reason the lookup exists.
+    second = conn.execute(
+        "insert into claims (item_id, claim_text, claim_type) "
+        "values (%s,%s,'INTERVENTION_EFFECT') returning claim_id",
+        (claim[5], PREFIX + "a second claim citing the same trial")).fetchone()[0]
+    row2 = conn.execute(
+        "select claim_id, claim_text, claim_type, target, mechanism, context, "
+        "       extraction_confidence from claims where claim_id=%s",
+        (second,)).fetchone()
+    RE.select_provider = lambda: (
+        evidence_provider(identified, '{"evidence_confidence": "MODERATE"}'),
+        "fixture")
+    try:
+        KR.research_one(conn, row2)
+    finally:
+        RE.select_provider = original
+    items_now = conn.execute(
+        "select count(*) from source_items where doi = %s",
+        ("10.1234/" + PREFIX.lower() + "identified",)).fetchone()[0]
+    check("...and the same study cited twice is ONE source_items row",
+          items_now == 1, f"{items_now} rows")
+
+    # D10 still holds for an identified study: it belongs to K10's own
+    # evidence source, never to the envelope that made the claim.
+    ev_source = conn.execute(
+        "select base_identifier from knowledge_sources where source_id=%s",
+        (item[4],)).fetchone()[0]
+    check("...filed under K10's independent-evidence source, not the video",
+          ev_source == "k10:independent-evidence", str(ev_source))
+
+    # Evidence belongs to the CLAIM it was researched for (migration 031).
+    # Two claims, two DIFFERENT studies, researched one after the other --
+    # the fixture has to be able to tell the right answer from the wrong
+    # one, and a single-claim fixture cannot: "written after this claim"
+    # and "written for this claim" agree whenever there is only one (V2).
+    other_study = json.dumps([{
+        "citation": PREFIX + "Jones 2019, a DIFFERENT trial",
+        "design": "RCT", "relationship": "SUPPORTS",
+        "doi": "10.1234/" + PREFIX.lower() + "other",
+        "results_summary": "something else entirely"}])
+    later = conn.execute(
+        "insert into claims (item_id, claim_text, claim_type) "
+        "values (%s,%s,'INTERVENTION_EFFECT') returning claim_id",
+        (claim[5], PREFIX + "a later claim with its own evidence")).fetchone()[0]
+    row3 = conn.execute(
+        "select claim_id, claim_text, claim_type, target, mechanism, context, "
+        "       extraction_confidence from claims where claim_id=%s",
+        (later,)).fetchone()
+    RE.select_provider = lambda: (
+        evidence_provider(other_study, '{"evidence_confidence": "MODERATE"}'),
+        "fixture")
+    try:
+        KR.research_one(conn, row3)
+    finally:
+        RE.select_provider = original
+
+    first_ev = KS.evidence_for(conn, str(identified_claim))
+    later_ev = KS.evidence_for(conn, str(later))
+    first_cites = {conn.execute(
+        "select citation from evidence_records where evidence_id=%s",
+        (e,)).fetchone()[0] for e in first_ev}
+    later_cites = {conn.execute(
+        "select citation from evidence_records where evidence_id=%s",
+        (e,)).fetchone()[0] for e in later_ev}
+    # "only these" rather than "fewer": a time window would give the EARLIER
+    # claim the later claim's study, so that is the direction to assert.
+    check("a claim's evidence is ONLY what was researched for it",
+          first_cites == {PREFIX + "Smith 2021, a trial with an identifier"},
+          str(first_cites))
+    check("...and a later claim's study is not attributed to the earlier one",
+          later_cites == {PREFIX + "Jones 2019, a DIFFERENT trial"},
+          str(later_cites))
+    check("...and every record K10 wrote names the claim it was found for",
+          conn.execute(
+              "select count(*) from evidence_records "
+              " where citation like %s and claim_id is null",
+              (PREFIX + "%",)).fetchone()[0] == 0)
 
     # ==================================================================
     # K11 — strategy synthesis (D36)

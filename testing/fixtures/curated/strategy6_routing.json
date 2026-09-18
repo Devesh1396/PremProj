@@ -1,0 +1,12 @@
+{
+  "_note": "The Strategy 6 acceptance span, fixed BEFORE the importer ran (D49 section 10). The test asserts the stored client_decision_logic field CONTAINS this exact text. It is located by heading, so it survives the document being edited above it; the offsets are recorded for the record.",
+  "source_file": "testing/fixtures/curated/t2d_video1.md",
+  "source_sha256": "87a893e8cade99bee31b19b476e70dd364d7df04aec4adfe35346efecc4e3b41",
+  "strategy_ordinal_in_source": 6,
+  "strategy_heading": "Strategy 6 — Preserve agency and reduce unnecessary deprivation",
+  "expected_heading_path": "T2D / Insulin Resistance — Engine 7 Practitioner Intelligence > Strategy 6 — Preserve agency and reduce unnecessary deprivation > Decision intelligence",
+  "expected_field": "client_decision_logic",
+  "expected_source_start": 9452,
+  "expected_source_end": 10643,
+  "expected_verbatim_text": "The important value is **not \"give everybody the same four hacks.\"**\n\nUse the options according to the client's actual bottleneck.\n\n**High-carb breakfast**\\\n→ breakfast restructuring may be useful.\n\n**Diet-change resistance**\\\n→ meal-linked movement may be an easier first intervention.\n\n**Client overwhelmed**\\\n→ start with one or two high-value changes rather than rebuilding the entire lifestyle immediately.\n\n**Client already follows a strategy well**\\\n→ don't prescribe it again merely because it is in the library; find the next limiting factor.\n\n**Preferred strategy is not practical**\\\n→ choose another leverage option serving a similar objective.\n\n**Client cannot walk comfortably**\\\n→ don't abandon the movement lever automatically; consider another appropriate muscular-activity implementation as our library develops.\n\n**Client does not respond despite good adherence**\\\n→ reassess the assumed bottleneck rather than endlessly increasing the same intervention.\n\n**Several options are possible**\\\n→ prioritize based on likely importance + feasibility + client readiness.\n\nThis is the reasoning Engine 7 should enable, while E1/E3 ultimately decide what fits the individual client."
+}

@@ -76,9 +76,18 @@ def pending(conn, limit: int | None = None) -> list[tuple]:
         """select e.envelope_id, e.source_title, e.source_kind, e.source_role::text,
                   e.rights::text, e.content_hash, e.source_version
              from source_envelopes e
+             join source_kinds k on k.source_kind = e.source_kind
             where e.status = 'NORMALIZED'
               and e.send_to_e7
               and e.duplicate_of is null
+              -- EXTRACTOR DISPATCH (D49). The only architectural change a
+              -- curated source required. A source a human has already
+              -- distilled must not be re-distilled by a model: measured,
+              -- that lost a whole strategy, dropped every decision-logic
+              -- block and fabricated all seven mechanisms. The predicate
+              -- is the REGISTRY, never a list of kinds in this file, so
+              -- routing a new kind stays an INSERT (hard rule 13).
+              and k.extractor = 'K09_MODEL'
             order by e.ingested_at""").fetchall()
     return rows[:limit] if limit else rows
 
@@ -324,10 +333,25 @@ def extract_one(conn, envelope: tuple) -> dict:
 
 
 def status(conn) -> None:
+    # Counted through the SAME dispatch predicate `pending()` uses. A
+    # status line that counts every NORMALIZED envelope reports a curated
+    # source as "waiting for K09" forever -- for a queue K09 will never
+    # take it from, which reads as a stuck pipeline.
     waiting = conn.execute(
-        "select count(*) from source_envelopes where status='NORMALIZED' "
-        "  and send_to_e7 and duplicate_of is null").fetchone()[0]
+        """select count(*) from source_envelopes e
+             join source_kinds k on k.source_kind = e.source_kind
+            where e.status='NORMALIZED' and e.send_to_e7
+              and e.duplicate_of is null and k.extractor = 'K09_MODEL'"""
+    ).fetchone()[0]
+    elsewhere = conn.execute(
+        """select k.extractor, count(*) from source_envelopes e
+             join source_kinds k on k.source_kind = e.source_kind
+            where e.status='NORMALIZED' and e.send_to_e7
+              and e.duplicate_of is null and k.extractor <> 'K09_MODEL'
+            group by 1 order by 1""").fetchall()
     print(f"\nWAITING FOR K09   {waiting} envelope(s) at NORMALIZED")
+    for extractor, n in elsewhere:
+        print(f"  (not K09: {n} envelope(s) dispatched to {extractor})")
     rows = conn.execute(
         "select classification::text, count(*), sum(claims_extracted) "
         "  from source_delta_analyses group by 1 order by 2 desc").fetchall()
