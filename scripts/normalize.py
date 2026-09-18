@@ -489,6 +489,34 @@ def cache_is_safe(conn, row, allowed_types: frozenset[str] | set[str] | None
     """
     concept_ids = [str(c) for c in (row[0] or [])]
     candidate_ids = [str(c) for c in (row[3] or [])] if row[3] is not None else None
+    cached_revision = row[5]
+
+    # THE ONTOLOGY MOVED, SO THE ANSWER MAY HAVE.
+    #
+    # Everything else here re-runs a guard over the STORED candidate set,
+    # and that cannot see what was never a candidate. A concept added after
+    # this row was written was not in the set, so no amount of re-checking
+    # the set surfaces it -- and the entry quietly gets more wrong as the
+    # library grows, which for a continuously growing ontology is every
+    # entry eventually.
+    #
+    # The case that settles it is a CONFIRMED ALIAS. The alias tier runs
+    # first and is exact, so it is the most authoritative mapping there is;
+    # a cache serving an older concept over one is not a stale score, it is
+    # overriding a deliberate human decision.
+    #
+    # Nothing is re-embedded on a bump -- the row is simply not served, and
+    # is rewritten when the phrase is next resolved. See migration 036 for
+    # the trigger set and what a bump costs.
+    live_revision = conn.execute("select current_ontology_revision()").fetchone()[0]
+    if cached_revision is None:
+        return (False,
+                "the row predates migration 036 and records no ontology revision, "
+                "so there is no way to tell whether the library has moved under it")
+    if cached_revision != live_revision:
+        return (False,
+                f"it was resolved against ontology revision {cached_revision} and "
+                f"the library is now at {live_revision}")
 
     if candidate_ids is None:
         return (False,
@@ -618,7 +646,7 @@ def resolve(conn, phrase: str, context: str | None = None,
     if use_cache and not read_only:
         cached = conn.execute(
             """select concept_ids, method, confidence, candidate_ids,
-                      resolved_under_types
+                      resolved_under_types, ontology_revision
                  from normalization_cache where phrase_norm=%s""",
             (phrase_norm,)).fetchone()
         if cached:
@@ -709,11 +737,17 @@ def resolve(conn, phrase: str, context: str | None = None,
             if read_only:
                 return Resolution(phrase, tier.selected, method, tier.confidence,
                                   "RESOLVED", "read-only")
-            _cache(conn, phrase_norm, tier.selected, method, tier.confidence,
-                   candidate_ids=tier.candidate_ids, allowed_types=allowed_types)
+            # THE ALIAS IS WRITTEN FIRST, AND THAT ORDER MATTERS NOW.
+            # A confirmed alias advances the ontology revision (036), so
+            # caching before attaching would stamp the row with the OLD
+            # revision and the very next read would miss on a bump this
+            # same call caused. Correct either way -- a miss is safe -- but
+            # one ordering throws away the entry it just wrote.
             if method == "trigram":
                 _attach_alias(conn, tier.selected[0], phrase, phrase_norm,
                               method, tier.confidence, threshold)
+            _cache(conn, phrase_norm, tier.selected, method, tier.confidence,
+                   candidate_ids=tier.candidate_ids, allowed_types=allowed_types)
             # THE SEMANTIC TIER ATTACHES NO ALIAS, and that is deliberate.
             #
             # A confirmed alias is read by the alias tier at confidence 1.0
@@ -789,9 +823,10 @@ def resolve(conn, phrase: str, context: str | None = None,
                 refused = f"refused on concept_type: {llm_reject[1]}"
                 refused_candidate = llm_reject[0]
             else:
+                # Alias first, then cache, for the reason above.
+                _attach_alias(conn, ids[0], phrase, phrase_norm, "llm", confidence)
                 _cache(conn, phrase_norm, ids, "llm", confidence,
                        candidate_ids=ids, allowed_types=allowed_types)
-                _attach_alias(conn, ids[0], phrase, phrase_norm, "llm", confidence)
                 return Resolution(phrase, ids, "llm", confidence, "RESOLVED")
         if refused is None and confidence >= CREATE_THRESHOLD and ids:
             return _escalate(conn, phrase, phrase_norm, ids, confidence, "llm",
@@ -826,14 +861,16 @@ def _cache(conn, phrase_norm: str, ids: list[str], method: str, confidence: floa
     conn.execute(
         """insert into normalization_cache
              (phrase_norm, concept_ids, method, confidence, candidate_ids,
-              resolved_under_types)
-           values (%s,%s::uuid[],%s,%s,%s::uuid[],%s)
+              resolved_under_types, ontology_revision)
+           values (%s,%s::uuid[],%s,%s,%s::uuid[],%s,
+                   current_ontology_revision())
            on conflict (phrase_norm) do update
              set concept_ids = excluded.concept_ids,
                  method = excluded.method,
                  confidence = excluded.confidence,
                  candidate_ids = excluded.candidate_ids,
                  resolved_under_types = excluded.resolved_under_types,
+                 ontology_revision = excluded.ontology_revision,
                  hit_count = normalization_cache.hit_count + 1,
                  last_used = now()""",
         (phrase_norm, ids, db_method(method), confidence,

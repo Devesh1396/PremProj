@@ -582,6 +582,213 @@ def gate2_review(conn, check, concept) -> None:
               (PFX + "CACHE_%",)).fetchone()[0] == 0)
 
 
+
+def gate2_epoch(conn, check, concept) -> None:
+    """The cache must not outlive the ontology it was resolved against.
+
+    `034` re-runs the guards over the STORED candidate set, which cannot
+    see what was never a candidate. A concept added afterwards -- or, worse,
+    a confirmed alias for that exact phrase -- is invisible to any check
+    over the old candidates, so every entry decays as the library grows.
+    """
+    print("\nGATE 2 epoch: the cache is bound to the ontology revision it resolved against")
+
+    if not preflight.have_capability(conn, "vector"):
+        return
+    if not preflight.have_env(
+            "MODEL_EMBEDDING",
+            "the semantic tier cannot be exercised at all, so the ontology-revision "
+            "checks below do not run"):
+        return
+
+    dims = conn.execute("select embedding_dim()").fetchone()[0]
+    pinned = conn.execute(
+        "select embedding_model from concepts where embedding is not null "
+        "limit 1").fetchone()
+    model = pinned[0] if pinned else "c3test-fixture-embedding"
+
+    def embed_concept(key, name, angle, ctype="PHYSIOLOGY", status="SEEDED"):
+        cid = concept(key, name, ctype, status)
+        conn.execute(
+            """update concepts set embedding = %s::vector, embedding_model = %s,
+                      embedding_dim = %s, embedding_source_hash = %s
+                where concept_id = %s""",
+            (str(unit(angle, dims)), model, dims, key.lower(), cid))
+        return cid
+
+    def revision():
+        return conn.execute("select current_ontology_revision()").fetchone()[0]
+
+    calls = []
+
+    def counted(_model, _text, d):
+        """The injected transport, counting itself.
+
+        This is how "no second provider call" is ASSERTED rather than
+        assumed: the count is the number of times the real tier reached its
+        transport, and the tier, the cache and resolve() are all the
+        production ones.
+        """
+        calls.append(_text)
+        return unit(0.0, d)
+
+    def cache_row(phrase):
+        return conn.execute(
+            """select array_length(concept_ids,1), ontology_revision,
+                      array_length(candidate_ids,1)
+                 from normalization_cache where phrase_norm = norm_phrase(%s)""",
+            (phrase,)).fetchone()
+
+    phrase = "c3test a phrase whose best answer will change"
+    for key in ("EPOCH_A", "EPOCH_B", "EPOCH_C"):
+        conn.execute("delete from concepts where canonical_key=%s", (PFX + key,))
+    conn.execute("delete from concept_aliases where alias_text=%s", (phrase,))
+    conn.execute("delete from normalization_cache where phrase_norm=norm_phrase(%s)",
+                 (phrase,))
+    conn.execute("delete from concept_proposals where raw_phrase=%s", (phrase,))
+
+    # ------------------------------------------------------------------
+    # A. a NEW concept that is a better answer
+    # ------------------------------------------------------------------
+    a = embed_concept("EPOCH_A", "c3test epoch answer one", 10.0)   # cos 0.985
+    rev0 = revision()
+    r1 = NZ.resolve(conn, phrase, llm=None, embed_call=counted)
+    check("the phrase resolves to the only concept there is",
+          r1.decision == "RESOLVED" and r1.concept_ids == [a], repr(r1))
+    before = cache_row(phrase)
+    check("...and the cache row records the revision it was resolved against",
+          before is not None and before[1] == revision(), str(before))
+    check("...which is the live one", before[1] == rev0, f"{before[1]} vs {rev0}")
+    n_after_first = len(calls)
+
+    # C (taken here, because it needs the UNCHANGED ontology): a second
+    # resolution with nothing changed is served from cache and pays nothing.
+    r_again = NZ.resolve(conn, phrase, llm=None, embed_call=counted)
+    check("WITH NO ONTOLOGY CHANGE the second resolution is served from cache",
+          r_again.method == "cache" and r_again.concept_ids == [a], repr(r_again))
+    check("...and makes NO second provider call",
+          len(calls) == n_after_first, f"{len(calls)} call(s), was {n_after_first}")
+
+    # Now the ontology grows. B is nearer the query than A.
+    b = embed_concept("EPOCH_B", "c3test epoch answer two", 0.0)    # cos 1.000
+    rev1 = revision()
+    check("adding a LIVE concept advances the ontology revision",
+          rev1 > rev0, f"{rev0} -> {rev1}")
+    check("...and the cached row still carries the OLD revision, untouched",
+          cache_row(phrase)[1] == rev0, str(cache_row(phrase)))
+
+    # Captured BEFORE the second resolution rewrites it. This is the proof
+    # that 034's mechanism could not have covered this case: B is not in the
+    # stored set, so no re-check over that set could ever have found it.
+    stale_candidates = [str(x) for x in conn.execute(
+        "select candidate_ids from normalization_cache "
+        " where phrase_norm = norm_phrase(%s)", (phrase,)).fetchone()[0]]
+    check("the new concept is absent from the stored candidate set, so "
+          "re-checking that set could never surface it",
+          b not in stale_candidates, str(stale_candidates))
+
+    r2 = NZ.resolve(conn, phrase, llm=None, embed_call=counted)
+    check("A NEW CONCEPT INVALIDATES THE HIT: the old answer is not returned",
+          r2.method != "cache", repr(r2))
+    check("...and the live resolver returns what the ontology now implies",
+          r2.concept_ids == [b], repr(r2))
+    after = cache_row(phrase)
+    check("...and the row is REWRITTEN at the current revision, not deleted",
+          after is not None and after[1] == rev1, str(after))
+
+    # ------------------------------------------------------------------
+    # B. a CONFIRMED ALIAS is the most authoritative mapping there is
+    # ------------------------------------------------------------------
+    c = concept("EPOCH_C", "c3test epoch the human's answer")
+    rev2 = revision()
+    conn.execute(
+        """insert into concept_aliases (concept_id, alias_text, method, confidence, confirmed)
+           values (%s,%s,'DETERMINISTIC',1.0,true)""", (c, phrase))
+    rev3 = revision()
+    check("confirming an alias advances the revision", rev3 > rev2,
+          f"{rev2} -> {rev3}")
+
+    n_before_alias = len(calls)
+    r3 = NZ.resolve(conn, phrase, llm=boom, embed_call=counted)
+    check("THE OLD CACHE DOES NOT OUTRANK A NEWLY CONFIRMED ALIAS",
+          r3.concept_ids == [c], repr(r3))
+    check("...and it is the alias tier that answers, exactly and first",
+          r3.method == "alias" and r3.confidence == 1.0, repr(r3))
+    check("...so the semantic tier is never reached and nothing is embedded",
+          len(calls) == n_before_alias, f"{len(calls)} vs {n_before_alias}")
+
+    # ------------------------------------------------------------------
+    # D. what must NOT move the counter
+    # ------------------------------------------------------------------
+    print("\nchanges that cannot affect a resolution do not advance the revision")
+
+    quiet = revision()
+    conn.execute("update concepts set retrieval_hits = retrieval_hits + 1, "
+                 "last_retrieved = now() where concept_id = %s", (a,))
+    check("retrieval telemetry does not bump -- every search would "
+          "otherwise invalidate the whole cache",
+          revision() == quiet, f"{quiet} -> {revision()}")
+
+    conn.execute("update concepts set definition = 'c3test edited definition' "
+                 "where concept_id = %s", (a,))
+    check("a definition edit does not bump: no tier reads it, and the "
+          "re-embed that would change an answer bumps on `embedding`",
+          revision() == quiet, f"{quiet} -> {revision()}")
+
+    conn.execute(
+        """insert into concepts (canonical_key, canonical_name, concept_type,
+                                 status, origin_method)
+           values (%s,'c3test epoch a proposal','PHYSIOLOGY','PROPOSED','DETERMINISTIC')""",
+        (PFX + "EPOCH_PROPOSED",))
+    check("a PROPOSED concept does not bump -- K09 creates dozens per source "
+          "and no tier can see one",
+          revision() == quiet, f"{quiet} -> {revision()}")
+
+    conn.execute(
+        """insert into concept_aliases (concept_id, alias_text, method, confidence, confirmed)
+           values (%s,'c3test an unconfirmed alias','SEMANTIC',0.83,false)""", (a,))
+    check("an UNCONFIRMED alias does not bump: proven inert in both tiers",
+          revision() == quiet, f"{quiet} -> {revision()}")
+
+    conn.execute(
+        """insert into concept_relations (from_concept, to_concept, relation_type, note)
+           values (%s,%s,'RELATED_TO','c3test epoch')
+           on conflict do nothing""", (a, c))
+    check("a relation that is not CONFUSABLE_DO_NOT_MERGE does not bump: "
+          "confusable_with() is the only reader of that table",
+          revision() == quiet, f"{quiet} -> {revision()}")
+
+    check("...and the cache survived all five untouched",
+          cache_row(phrase) is not None)
+
+    # The counter DOES move for the things that matter.
+    conn.execute("update concepts set status='ACTIVE' where canonical_key=%s",
+                 (PFX + "EPOCH_PROPOSED",))
+    check("promoting that proposal to ACTIVE DOES bump -- it just became "
+          "reachable", revision() > quiet, f"{quiet} -> {revision()}")
+
+    moved = revision()
+    conn.execute(
+        """insert into concept_relations (from_concept, to_concept, relation_type, note)
+           values (%s,%s,'CONFUSABLE_DO_NOT_MERGE','c3test epoch')
+           on conflict do nothing""", (a, b))
+    check("recording a do-not-merge pair DOES bump", revision() > moved,
+          f"{moved} -> {revision()}")
+
+    conn.execute(
+        """delete from concept_relations where note='c3test epoch'""")
+    conn.execute("delete from concept_aliases where alias_text in (%s,%s)",
+                 (phrase, "c3test an unconfirmed alias"))
+    conn.execute("delete from normalization_cache where phrase_norm=norm_phrase(%s)",
+                 (phrase,))
+    conn.execute("delete from concept_proposals where raw_phrase=%s", (phrase,))
+    for key in ("EPOCH_A", "EPOCH_B", "EPOCH_C", "EPOCH_PROPOSED"):
+        conn.execute("delete from concepts where canonical_key=%s", (PFX + key,))
+    check("the epoch fixtures do not outlive the block",
+          conn.execute("select count(*) from concepts where canonical_key like %s",
+                       (PFX + "EPOCH_%",)).fetchone()[0] == 0)
+
+
 def main() -> int:
     conn = psycopg.connect(os.environ["DATABASE_URL"], autocommit=True)
 
@@ -801,6 +1008,7 @@ def main() -> int:
 
     gate2(conn, check, concept)
     gate2_review(conn, check, concept)
+    gate2_epoch(conn, check, concept)
 
     print("\nan Engine 1 Pass A phrase list resolves end to end")
     results = NZ.resolve_all(conn, [

@@ -1107,6 +1107,12 @@ decision.
 0.0006.** A margin rule is the obvious next change and is deliberately NOT
 made: sized to fix those three rows it would be fitted to three rows.
 
+**CALIBRATION IS NOT SOLVED.** 0.82 is PROVISIONAL, and the
+production-relevant 49-phrase set still carries **4 known WRONG
+resolutions**. The safety work since (`034`–`036`) makes the resolver
+harder to bypass; it does not move a single number in the sweep, and
+nothing in it should be read as settling the threshold.
+
 **The sweep must run on a CLEAN K1 SEED.** `test_concept_layer` and
 `test_knowledge_layer` insert SEEDED concepts under the K1 seed's own
 canonical keys, so after `run_all.sh` the ontology is 275 differently-named
@@ -1156,6 +1162,43 @@ measurement did not find them.
    the query scored 1.0 and resolved the phrase through the back door.
    "Unconfirmed" meant nothing. Now filtered in both tiers, with the suite
    asserting both directions.
+
+**THE CACHE IS BOUND TO AN ONTOLOGY REVISION (migration `036`).** `034`
+re-runs the guards over the STORED candidate set, and that cannot see what
+was never a candidate: **a concept added later was not in the set, so no
+re-check of the set can surface it**, and every entry decays as the library
+grows. The case that settles it is a CONFIRMED ALIAS — the alias tier runs
+first and is exact, so a cache serving an older concept over one is
+overriding a deliberate human decision, not a stale score.
+
+`ontology_revision` is one counter; a cache row records the revision it was
+resolved against and a read at a different revision is a MISS. **Nothing is
+re-embedded on a bump** — the row is overwritten when the phrase is next
+actually resolved, so invalidation is LAZY.
+
+**THE TRIGGER SET IS COLUMN-SCOPED, AND THAT IS NOT FUSSINESS.**
+`retrieval.py` writes `retrieval_hits` on EVERY retrieval read, so a
+trigger on any write to `concepts` would have every search invalidate the
+whole cache — the opposite of D2. Bumps: a live concept inserted or
+deleted; a live concept's `status` crossing the SEEDED/ACTIVE boundary, or
+its `canonical_name`, `canonical_key`, `concept_type`, `embedding` or
+`merged_into` changing; a CONFIRMED alias appearing, vanishing or changing;
+a `CONFUSABLE_DO_NOT_MERGE` relation changing. Does NOT bump: telemetry,
+`definition` (no tier reads it — the re-embed bumps on `embedding`),
+embedding provenance columns, `parent_concept_id`, a PROPOSED / MERGED /
+DEPRECATED concept, an UNCONFIRMED alias, and any other relation type.
+Transition tables, not `UPDATE OF col`, so `set status = status` does not
+bump.
+
+**MEASURED, so the cost is not discovered in Wave 1.** A global counter
+invalidates 100% of the cache, and the realized bill is one embedding per
+phrase ACTUALLY RE-ASKED: mean **$0.0000017** a call, so a full re-walk of
+the D47 source's 56 phrases is **$0.000094** and a 100,000-phrase library
+is ~$0.17. And the counter barely moves where it would hurt: **0 bumps**
+across a full K09 ingestion and **0** across a curated import, because the
+common write is a PROPOSED concept. Per-concept-neighbourhood scoping was
+rejected — a new concept has no prior relationship to any stored
+neighbourhood, which is the bug itself.
 
 **Still not GATE 3.** `retrieval.by_concept()` reads `strategies`,
 `strategy_concepts` and `implementation_patterns` and does not reference

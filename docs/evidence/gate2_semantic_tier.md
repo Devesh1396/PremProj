@@ -517,3 +517,129 @@ set are all of them.
 is a narrower view of the same measurement, not a new one, and choosing a
 threshold from it after seeing it would be the fitting this whole exercise
 is structured to avoid.
+
+---
+
+## 10. The cache is bound to the ontology revision (migration `036`)
+
+§8.1 made the cache re-run its guards over the **stored** candidate set.
+That closes a stale confusable pair and a wrong caller type, and it cannot
+close the opposite shape: **a concept that did not exist when the row was
+written was never a candidate**, so re-checking the stored set can never
+surface it. For a system whose design is a continuously growing ontology,
+that means every cache entry decays as the library grows.
+
+The case that settles it is not the stale score. It is the **confirmed
+alias**: the alias tier runs first and is exact, so a confirmed alias is
+the most authoritative mapping in the chain. Reverting the fix reproduces
+it exactly —
+
+```
+FAIL  THE OLD CACHE DOES NOT OUTRANK A NEWLY CONFIRMED ALIAS
+      <RESOLVED cache conf=0.98 n=1 'c3test a phrase whose best answer will change'>
+```
+
+— the cache serving a 0.98 cosine guess over a mapping a human had just
+confirmed. That is not a stale score, it is overriding a deliberate human
+decision.
+
+`ontology_revision` is one row with one counter. A cache row records the
+revision it was resolved against; a read at a different revision is a MISS
+and the ordinary tiers run. **Nothing is re-embedded on a bump** — the row
+is not deleted, it is overwritten when the phrase is next actually
+resolved, which keeps the existing cache model and makes invalidation lazy.
+
+### The trigger set, stated rather than assumed
+
+Derived by walking every tier and asking what it reads.
+
+**Advances the revision:**
+
+| table | when |
+|---|---|
+| `concepts` | INSERT or DELETE of a row with `status IN ('SEEDED','ACTIVE')` |
+| `concepts` | UPDATE crossing the SEEDED/ACTIVE boundary, or changing `canonical_name`, `canonical_key`, `concept_type`, `embedding` or `merged_into` on a live row |
+| `concept_aliases` | a **confirmed** alias inserted, deleted, un/re-confirmed, or its text or concept changed |
+| `concept_relations` | a `CONFUSABLE_DO_NOT_MERGE` relation inserted, deleted, or either end changed |
+
+**Does not, and why it cannot affect a resolution:**
+
+| | why |
+|---|---|
+| `concepts.retrieval_hits` / `last_retrieved` | telemetry — and **this is the decisive one**: `retrieval.py` writes it on every retrieval read, so a trigger on any write to `concepts` would have every search invalidate the whole cache. That is the opposite of D2, and it is why the trigger set is column-scoped rather than table-scoped. |
+| `concepts.definition` | feeds `search_text`, which feeds the FTS index and the embedding TEXT. No tier reads it. A definition edited and not re-embedded has changed no answer; the re-embed writes `embedding` and bumps. |
+| `concepts.embedding_model` / `embedding_dim` / `embedding_source_hash` | provenance for the vector, never compared, and only ever written alongside `embedding`. |
+| `concepts.parent_concept_id` | read by the normalization TEST generator (sibling pairs), never by the resolver. |
+| `origin_method`, `origin_detail`, timestamps | provenance. |
+| a concept at `PROPOSED` / `MERGED` / `DEPRECATED` | no tier selects it. **This is the common ingestion write** — `_propose_new` creates PROPOSED concepts by the dozen. Promotion INTO SEEDED/ACTIVE does bump. |
+| an **unconfirmed** alias | proven inert in both tiers by §8.3. A record for a human, not an input. |
+| `concept_aliases.method` / `confidence` | recorded, never matched on. |
+| any other `relation_type` | `confusable_with()` is the resolver's only reader of that table. |
+
+Transition tables rather than `UPDATE OF col`: `UPDATE OF` fires when a
+statement *mentions* a column, even setting it to its existing value. The
+triggers compare old and new values, so `set status = status` does not bump.
+
+### What it costs, measured
+
+**A global counter invalidates 100% of the cache on any qualifying change.**
+That is accepted deliberately. It is affordable because invalidation is
+lazy — the bill is *one embedding per distinct phrase actually used after
+the change*, not one per cached row.
+
+```
+mean embedding call, measured over 67 real calls   $0.0000017
+D47 phrases that reach the semantic tier           56 of 56
+  -> a full re-walk of that source's vocabulary    $0.000094
+a 1,000-phrase library, fully re-walked            ~$0.0017
+a 100,000-phrase library, fully re-walked          ~$0.17
+```
+
+The last row is the honest worst case and it is still not the real cost,
+because nothing re-walks a library — phrases are re-resolved when they are
+asked for.
+
+**And the counter barely moves during the work that matters:**
+
+```
+test_knowledge_factory  (a full K09 ingestion)   revision 140 -> 140   0 bumps
+test_curated            (a curated import)       revision 140 -> 140   0 bumps
+seed_ontology           (re-run, all reused)     revision 140 -> 142   2 bumps
+```
+
+Zero bumps across an entire source going through ingestion, because the
+common write is a PROPOSED concept and no tier can see one. Bumps come from
+deliberate acts: seeding, promoting a proposal, confirming an alias,
+recording a do-not-merge pair, re-embedding a batch.
+
+### Why global, and not something cleverer
+
+**Per-concept-neighbourhood scoping cannot address the case that motivated
+this.** A NEW concept has no prior relationship to any stored
+neighbourhood — that is the bug, not an implementation detail of it. Making
+it work would mean storing every cached phrase's **query vector** (1536
+floats per row) and comparing each new concept against all of them on every
+ontology change, to save calls costing fractions of a cent.
+
+One narrowing genuinely is cheap, and is recorded rather than built: a
+newly confirmed alias could invalidate only the rows whose `phrase_norm`
+equals its `alias_norm`, because that tier is exact. It is not built
+because it would leave two invalidation rules to keep in agreement, and the
+one it would replace is not expensive. If the numbers ever change, that is
+the first thing to reach for.
+
+### Ordering
+
+The alias is now attached **before** the cache row is written. A confirmed
+alias advances the revision, so caching first would stamp the row with the
+old revision and the next read would miss on a bump that same call caused.
+Correct either way — a miss is safe — but one ordering throws away the
+entry it just wrote.
+
+### What this does not change
+
+**The threshold is untouched and the sweep is untouched.** 0.82 remains
+PROVISIONAL, the committed answer key is unedited, no margin rule was
+added, and the production-relevant 49-phrase set still carries **4 known
+WRONG resolutions**. This work makes the resolver safer; it does not make
+the calibration settled, and nothing here should be read as saying it does.

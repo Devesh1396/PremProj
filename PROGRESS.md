@@ -248,6 +248,48 @@ harness*.
 
 ---
 
+## GATE 2 review 2 — the cache is bound to the ontology revision — 2026-09-18
+
+Migration `036`. Detail in `docs/evidence/gate2_semantic_tier.md` §10, and
+in D51. **No number in the sweep moves.**
+
+`034` re-runs the guards over the STORED candidate set, which cannot see
+what was never a candidate — a concept added later was not in the set, so
+no re-check of it can surface it, and every entry decays as the library
+grows. The case that settles it is a **confirmed alias**: the alias tier is
+first and exact, so an old cache row outranking one is overriding a human
+decision. Reverting the fix reproduces it: `RESOLVED cache conf=0.98` in
+place of the mapping just confirmed.
+
+One counter, `ontology_revision`; a cache row records the revision it was
+resolved against, and a read at a different revision is a MISS. Nothing is
+re-embedded on a bump — the row is rewritten when the phrase is next
+resolved, so invalidation is LAZY.
+
+**The trigger set is column-scoped and that is load-bearing:**
+`retrieval.py` writes `retrieval_hits` on every retrieval read, so bumping
+on any write to `concepts` would have every search invalidate the whole
+cache. Bumps: live concept insert/delete, the SEEDED/ACTIVE boundary,
+`canonical_name` / `canonical_key` / `concept_type` / `embedding` /
+`merged_into`, a CONFIRMED alias, a `CONFUSABLE_DO_NOT_MERGE` relation.
+Does not: telemetry, `definition`, embedding provenance columns,
+`parent_concept_id`, a PROPOSED concept, an UNCONFIRMED alias, any other
+relation type. Transition tables, not `UPDATE OF col`.
+
+**Cost, measured:** global invalidation is 100% of the cache, realized as
+one embedding per phrase actually re-asked — mean **$0.0000017** a call, so
+the D47 source's 56 phrases re-walk for **$0.000094** and a 100,000-phrase
+library for ~$0.17. And it barely fires where it would hurt: **0 bumps**
+through a full K09 ingestion, **0** through a curated import, 2 on a K1
+re-seed. Per-concept-neighbourhood scoping rejected — a new concept has no
+prior relationship to any stored neighbourhood, which is the bug.
+
+**Calibration is still not solved.** 0.82 is PROVISIONAL, the answer key is
+unedited, no margin rule was added, and the production-relevant 49 still
+carry 4 known WRONG resolutions.
+
+`run_all.sh` twice and `run_bare.sh`, exit codes read explicitly.
+
 ## GATE 2 review — three bypass paths closed — 2026-09-18
 
 Migrations `034`/`035`. Detail in `docs/evidence/gate2_semantic_tier.md` §8

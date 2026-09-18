@@ -3488,6 +3488,75 @@ by reverting: the trigram tier returns 1.0 off a `confirmed = false` row.
 This is the hole that made the semantic tier's no-alias rule necessary, and
 closing it is what makes an unconfirmed row genuinely inert.
 
+### The cache is bound to an ontology revision — migration `036`
+
+`034` re-runs the guards over the STORED candidate set, and there is a
+shape it structurally cannot reach: **a concept that did not exist when the
+row was written was never a candidate**, so no re-check of that set can
+surface it. For a continuously growing ontology that means every cache
+entry decays, and the cache gets quietly more wrong the more the library
+learns.
+
+The case that settles it is not a stale score. A **confirmed alias** is the
+most authoritative mapping in the chain — the alias tier runs first and is
+exact — so a cache serving an older concept over a newly confirmed one is
+overriding a deliberate human decision. Reverting the fix reproduces
+exactly that: `RESOLVED cache conf=0.98` in place of a mapping a human had
+just confirmed.
+
+`ontology_revision` is one row with one counter. A cache row records the
+revision it was resolved against; a read at a different revision is a MISS.
+**Nothing is re-embedded on a bump** — the row is not deleted, it is
+overwritten when the phrase is next actually resolved, so invalidation is
+LAZY, which is the property that makes one global counter affordable.
+
+**The trigger set is column-scoped, and that is load-bearing.**
+`retrieval.py` writes `retrieval_hits` on every retrieval read, so a
+trigger on any write to `concepts` would have every search invalidate the
+entire cache — the exact opposite of what D2 exists for. What bumps: a live
+concept inserted or deleted; a live concept crossing the SEEDED/ACTIVE
+boundary or changing `canonical_name`, `canonical_key`, `concept_type`,
+`embedding` or `merged_into`; a CONFIRMED alias appearing, vanishing or
+changing; a `CONFUSABLE_DO_NOT_MERGE` relation changing. What does not, and
+why it cannot affect a resolution: telemetry; `definition`, which no tier
+reads and whose re-embed bumps on `embedding` instead; the embedding
+provenance columns; `parent_concept_id`, read only by the normalization
+test generator; a PROPOSED / MERGED / DEPRECATED concept, which no tier
+selects; an UNCONFIRMED alias, proven inert in both tiers by the previous
+review; and any other `relation_type`. Transition tables rather than
+`UPDATE OF col`, so a statement that merely mentions a column does not bump.
+
+**The cost, measured now rather than in Wave 1.** A global counter
+invalidates 100% of the cache on any qualifying change. The realized bill
+is one embedding per phrase ACTUALLY RE-ASKED: mean **$0.0000017** per call
+over 67 real calls, so a full re-walk of the D47 source's 56 phrases is
+**$0.000094**, a 1,000-phrase library ~$0.0017 and a 100,000-phrase library
+~$0.17 — and nothing re-walks a library, so even that overstates it. The
+counter barely moves where it would hurt: **0 bumps** across a full K09
+ingestion run, **0** across a curated import, 2 on a full K1 re-seed.
+
+**Per-concept-neighbourhood scoping was considered and rejected**, because
+a new concept has no prior relationship to any stored neighbourhood — that
+is the bug, not an implementation detail of it. Making it work needs every
+cached phrase's query vector stored (1536 floats a row) and a comparison
+pass per ontology change, to save fractions of a cent. One narrowing is
+genuinely cheap and is recorded rather than built: a newly confirmed alias
+could invalidate only the rows whose `phrase_norm` equals its `alias_norm`,
+because that tier is exact. Not built, because two invalidation rules would
+have to be kept in agreement and the one they replace is not expensive.
+
+**Ordering changed with it**: the alias is attached BEFORE the cache row is
+written, because a confirmed alias advances the revision and caching first
+would stamp the row with a revision this same call then invalidated.
+
+### Calibration is not solved, and this did not solve it
+
+`034`–`036` make the resolver harder to bypass. **They move no number in
+the sweep** — it is byte-identical throughout. 0.82 remains PROVISIONAL,
+the committed answer key is unedited, no margin rule was added, and the
+production-relevant 49-phrase set still carries **4 known WRONG
+resolutions**. Safer is not calibrated.
+
 ### Preservation and normalization are separate guarantees
 
 GATE 1's deterministic PARSE is still zero-provider and the code enforces
