@@ -2522,6 +2522,59 @@ retries, control-block parse success, and the prompt hash of each E1 pass.
 A repair retry shows as two provider attempts and one retry, with the
 failed attempt's tokens included in the run total.
 
+## GATE 3 REVIEW ROUND 4 — the contract key needed a pipeline (2026-09-19, D52d)
+
+`b5b2477`, 0.82, the retrieval weights, the first-run MISS, the `038`/`039`
+architecture, K10's state and source coverage are untouched.
+
+**`(engine, mode, pass)` DOES NOT DETERMINE THE PAYLOAD.** Measured by
+driving both pipelines for real: `client_new.py:571` and
+`client_followup.py:393` BOTH call `engine="E6", mode="REBUILD"`, for the
+same stated reason, and hand it completely different things —
+CLIENT_NEW's six blocks versus the follow-up's thirteen, including
+`FOLLOWUP_ANSWERS`, `CURRENT_STATE`, `LIVE_INTERVENTIONS`, `E4_HANDOFF`
+and `E6_DELTA`. `E2/SINGLE` and `E3/SINGLE` collide identically once
+Engine 4 routes `MULTIPLE`. So D52c's declaration would have read as the
+governing contract for a follow-up invocation, and a future checker would
+have reported the follow-up payload as violating a contract that was never
+about it.
+
+**DECLARING NOTHING IS A POSITION AND HAD TO BE EXPRESSIBLE.** D52c said
+the follow-up contract is "deliberately not declared", and with a
+three-part key that could not be said: a line already existed for those
+triples, written for the other pipeline. The key is now
+`PIPELINE ENGINE/MODE/PASS` — `RUNTIME_INPUT_CONTRACT CLIENT_NEW
+E6/REBUILD = …` — and the absence of a `CLIENT_FOLLOWUP` line now means
+what it says.
+
+**ONE PARSER.** `testing/runtime_contract.py`, read by
+`test_client_new.py` (CLIENT_NEW's invocations must match exactly, both
+directions) and `test_followup.py` (the follow-up's must NOT silently fall
+under them). Two copies of the regex would be two definitions of the
+contract.
+
+**THE REGRESSION DRIVES THE REAL COLLISION**, with
+`ROUTING_RECOMMENDATION: MULTIPLE` so E1/E2/E3 actually run rather than
+the E2/E3 half being assumed. It asserts the follow-up invokes all three
+colliding triples, has no declaration of its own, that **a pipeline-blind
+lookup would have collapsed all three onto CLIENT_NEW's contract and
+reported false violations**, and that CLIENT_NEW's `E6/REBUILD`
+declaration is not the follow-up's payload.
+
+**Teeth: reverting the key to three parts turns BOTH suites red** —
+`test_client_new` loses all seven declarations, `test_followup` loses the
+collapse and mismatch checks.
+
+CLIENT_FOLLOWUP's contract is still deliberately undeclared. Engine 1's
+prose describing `RETRIEVED_KNOWLEDGE` on the follow-up's `pass = SINGLE`
+run stays, and the regression asserts that block really does arrive — but
+prose about one block is not a complete declaration and is not presented
+as one.
+
+Verified 2026-09-19, exit codes captured and checked, never behind a pipe:
+`test_gate3_acceptance` 0 on a clean rebuild, `run_all.sh` 0 twice,
+`run_bare.sh` 0, and all three CI jobs on the PR.
+
 ## GATE 3 REVIEW ROUND 3 — the contract named the wrong mode (2026-09-19, D52c)
 
 `b5b2477`, 0.82, the retrieval weights, the first-run MISS, K10's state,

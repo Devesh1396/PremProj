@@ -1485,6 +1485,41 @@ and completing it means settling the whole follow-up contract, which is a
 pre-existing cleanup recorded rather than guessed at. E7's seven
 knowledge-clock modes are undeclared for the same reason.
 
+### GATE 3 REVIEW ROUND 4 — the contract key needed a pipeline (D52d)
+
+**`(engine, mode, pass)` DOES NOT DETERMINE THE PAYLOAD.** `client_new.py:571`
+and `client_followup.py:393` BOTH call `engine="E6", mode="REBUILD"`, for the
+same stated reason, and hand it completely different things — CLIENT_NEW's six
+blocks against the follow-up's thirteen (`FOLLOWUP_ANSWERS`, `CURRENT_STATE`,
+`LIVE_INTERVENTIONS`, `E4_HANDOFF`, `E6_DELTA`, …). `E2/SINGLE` and
+`E3/SINGLE` collide the same way once Engine 4 routes `MULTIPLE`. D52c's
+declaration would have read as the governing contract for a follow-up
+invocation, and a checker would have reported that payload as violating a
+contract that was never about it.
+
+**DECLARING NOTHING IS A POSITION AND HAD TO BE EXPRESSIBLE.** D52c said the
+follow-up contract was "deliberately not declared" and the syntax could not
+say it — a line already existed for those triples, written for the other
+pipeline. The key is now **`PIPELINE ENGINE/MODE/PASS`**, and the absence of a
+`CLIENT_FOLLOWUP` line now means what it says.
+
+**ONE PARSER** — `testing/runtime_contract.py`, read by `test_client_new.py`
+(CLIENT_NEW's invocations must match exactly, both directions) and
+`test_followup.py` (the follow-up's must NOT silently fall under them). Two
+copies of the regex would be two definitions of the contract.
+
+**THE REGRESSION DRIVES THE REAL COLLISION**, routing `MULTIPLE` so E1/E2/E3
+actually run rather than the E2/E3 half being assumed, and asserts that **a
+pipeline-blind lookup would have collapsed all three onto CLIENT_NEW's
+contract and reported false violations**. Reverting the key to three parts
+turns BOTH suites red.
+
+**CLIENT_FOLLOWUP's contract is still deliberately undeclared.** Completing it
+means settling every block that path sends, which is a separate cleanup. E1's
+prose about `RETRIEVED_KNOWLEDGE` on the follow-up's `pass = SINGLE` run stays
+and the regression asserts the block arrives — but prose about one block is
+not a complete declaration and is not presented as one.
+
 **The first live call to any real API in this build FAILED, and the
 failure was informative.** The actor answers HTTP 201 from a SUCCEEDED
 run and reports item-level failure in an `error` field nothing read; a

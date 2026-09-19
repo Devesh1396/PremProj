@@ -95,13 +95,19 @@ and you are not given the knowledge library it chose from.
 The lines below are a **machine-checkable declaration**, not decoration.
 `testing/test_client_new.py` drives the real CLIENT_NEW pipeline, reads the
 mode and pass each run actually recorded in `engine_runs`, and asserts the
-blocks sent are EXACTLY the blocks declared for that invocation. A contract
-that names the wrong mode fails there — which is how the first version of
-this section, written for `UPDATE` when the runtime invokes `REBUILD`, was
-caught.
+blocks sent are EXACTLY the blocks declared for that invocation.
+
+**THE KEY IS `PIPELINE ENGINE/MODE/PASS`, and the pipeline is not
+decoration either.** `(engine, mode, pass)` does NOT determine the payload:
+CLIENT_NEW and CLIENT_FOLLOWUP both invoke `E2/SINGLE`, `E3/SINGLE` and
+`E6/REBUILD`, with different blocks each time — the follow-up's
+`E6/REBUILD` carries `FOLLOWUP_ANSWERS`, `CURRENT_STATE`,
+`LIVE_INTERVENTIONS`, `E4_HANDOFF` and `E6_DELTA`, none of which exist on
+the new-client path. A declaration without a pipeline scope would be read
+as governing both.
 
 ```
-RUNTIME_INPUT_CONTRACT E3/SINGLE = CASE_VERSION, CANONICAL_STATE, E1_HANDOFF, E2_HANDOFF
+RUNTIME_INPUT_CONTRACT CLIENT_NEW E3/SINGLE = CASE_VERSION, CANONICAL_STATE, E1_HANDOFF, E2_HANDOFF
 ```
 
 ---

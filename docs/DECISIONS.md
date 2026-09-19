@@ -4203,3 +4203,95 @@ no statement about a path it never runs.
 
 Engine 7's seven knowledge-clock modes are undeclared for the same reason —
 they are driven by the Knowledge Factory scripts, not a client pipeline.
+
+
+## D52d — `(engine, mode, pass)` does not determine the payload
+
+**Decided 2026-09-19.** The last structural correction on the GATE 3 branch.
+`b5b2477`, 0.82, the retrieval weights, the first-run MISS, the `038`/`039`
+architecture, K10's closed state and source coverage are all untouched.
+
+### The declaration key was ambiguous, and the ambiguity was live
+
+D52c introduced `RUNTIME_INPUT_CONTRACT E6/REBUILD = …` keyed on
+`(engine, mode, pass)`. That triple does not identify an input shape,
+because **both client pipelines invoke the same triples with different
+payloads**. Measured by driving each pipeline for real:
+
+```
+CLIENT_NEW       E6/REBUILD/SINGLE
+  CASE_VERSION, CANONICAL_STATE, NORMALIZED_CONCEPTS,
+  E1_HANDOFF, E2_HANDOFF, E3_HANDOFF
+
+CLIENT_FOLLOWUP  E6/REBUILD/SINGLE
+  CASE_VERSION, CLIENT_ID, CURRENT_STATE, REVIEW_PERIOD,
+  FOLLOWUP_ANSWERS, FOLLOWUP_STRUCTURED, LIVE_INTERVENTIONS,
+  PRACTICE_EXPERIENCE, E4_HANDOFF, E6_DELTA,
+  E1_HANDOFF, E2_HANDOFF, E3_HANDOFF
+```
+
+`client_new.py:571` and `client_followup.py:393` both call `engine="E6",
+mode="REBUILD"`, for the same stated reason — a delta's fields describe
+changes and do not map onto the state's fields — and hand it completely
+different things. `E2/SINGLE` and `E3/SINGLE` collide identically once
+Engine 4 routes `MULTIPLE`.
+
+So CLIENT_NEW's declaration would have read as the governing contract for a
+follow-up invocation, and a future follow-up checker would have reported the
+follow-up payload as violating a contract that was never about it.
+
+### Declaring nothing is a POSITION, and it has to be expressible
+
+D52c said the follow-up contract is "deliberately not declared". With a
+three-part key that statement could not be made: a line already existed for
+`E6/REBUILD`, `E2/SINGLE` and `E3/SINGLE`, written for the other pipeline.
+The prose claimed an absence the syntax could not represent.
+
+The key is now `PIPELINE ENGINE/MODE/PASS`:
+
+```
+RUNTIME_INPUT_CONTRACT CLIENT_NEW E6/REBUILD = CASE_VERSION, CANONICAL_STATE, …
+```
+
+There is no `CLIENT_FOLLOWUP` line, and now that means exactly what it says.
+Completing one would mean settling every block that path sends —
+`E4_HANDOFF`, `E6_DELTA`, `LIVE_INTERVENTIONS`, `FOLLOWUP_ANSWERS`,
+`FOLLOWUP_STRUCTURED`, `CURRENT_STATE`, `REVIEW_PERIOD`, `CLIENT_ID` — which
+is a separate, intentional cleanup, not something to guess at while closing
+GATE 3.
+
+### One parser, and the regression drives the real collision
+
+`testing/runtime_contract.py` is the single implementation, read by
+`test_client_new.py` (CLIENT_NEW's invocations must match their declarations
+exactly, both directions) and by `test_followup.py` (the follow-up's must
+NOT silently fall under them). Two copies of the regex would be two
+definitions of the contract, which is what a declaration exists to prevent.
+
+The collision regression drives the **real** follow-up pipeline with
+`ROUTING_RECOMMENDATION: MULTIPLE`, so E1, E2 and E3 actually run and the
+E2/E3 half of the collision is genuinely invoked rather than assumed. It
+asserts four things: the follow-up invokes all three colliding triples; it
+has no declaration of its own; **a pipeline-blind lookup would have
+collapsed all three onto CLIENT_NEW's contract and reported false
+violations**; and CLIENT_NEW's `E6/REBUILD` declaration is not the
+follow-up's payload.
+
+**Teeth proven by reverting the key to three parts**, which turns both
+suites red:
+
+```
+test_client_new   FAIL  all 7 CLIENT_NEW invocation(s) match their declared contract
+                        ['CLIENT_NEW E1/SINGLE/A: NO declaration', … all 7 …]
+test_followup     FAIL  a PIPELINE-BLIND key would have collapsed all three …
+                  FAIL  CLIENT_NEW's E6/REBUILD declaration is NOT the follow-up's payload
+```
+
+### What this does not do
+
+It does not define CLIENT_FOLLOWUP's contract, and the regression makes no
+claim about a path it does not declare. Engine 1's prose describing
+`RETRIEVED_KNOWLEDGE` on the follow-up's `pass = SINGLE` run stays — the
+follow-up E1 genuinely carries that block, and the regression asserts it —
+but prose describing one block is not a complete declaration and is not
+presented as one.

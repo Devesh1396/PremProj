@@ -30,6 +30,7 @@ import psycopg
 import client_new as CN
 import intake as IN
 import run_engine as RE
+import runtime_contract as RC
 import synthetic_intake as SI
 
 FAILS: list[str] = []
@@ -154,44 +155,30 @@ def main() -> int:
     # Before trusting a check, ask what it would still pass on. This one
     # fails if a block arrives undeclared, if a declaration promises a block
     # that never arrives, or if either is attached to the wrong mode.
-    DECL = re.compile(
-        r"^RUNTIME_INPUT_CONTRACT\s+(?P<engine>E\d)/(?P<mode>[A-Z_]+)"
-        r"(?:/(?P<pass>[A-Z]+))?\s*=\s*(?P<blocks>.+)$", re.M)
-
-    def declarations(engine: str) -> dict:
-        row = conn.execute(
-            "select content from engine_prompts "
-            " where engine=%s::engine_id and active", (engine,)).fetchone()
-        out = {}
-        if row is None:
-            return out
-        for m in DECL.finditer(row[0]):
-            key = (m.group("engine"), m.group("mode"), m.group("pass") or "SINGLE")
-            out[key] = {b.strip() for b in m.group("blocks").split(",") if b.strip()}
-        return out
-
-    # `INTAKE_PAYLOAD` is the one sentinel: Engine 6's INIT run receives the
-    # converted intake submission, whose fields are named by the intake
-    # schema and not by a prompt. It expands to what `intake.to_e6_input()`
-    # itself produces -- never a hand-written list, which would go stale the
-    # moment the intake schema changed.
+    # The parser is `testing/runtime_contract.py` -- ONE implementation,
+    # also read by `test_followup.py`, which asserts the follow-up's
+    # invocations do NOT silently fall under these declarations. Two copies
+    # of the regex would be two definitions of the contract.
+    #
+    # THE KEY CARRIES THE PIPELINE, and that is not decoration: CLIENT_NEW
+    # and CLIENT_FOLLOWUP both invoke E2/SINGLE, E3/SINGLE and E6/REBUILD
+    # with different payloads (D52d). A three-part key would read this
+    # declaration as governing both.
     intake_keys = set(IN.to_e6_input(conn, submission).keys())
 
     mismatches: list[str] = []
     for key in sorted(sent_keys):
         engine = key[0]
-        declared = declarations(engine).get(key)
+        declared = RC.declarations(conn, engine).get(("CLIENT_NEW",) + key)
         if declared is None:
-            mismatches.append(f"{'/'.join(key)}: NO declaration in the prompt")
+            mismatches.append(f"CLIENT_NEW {'/'.join(key)}: NO declaration")
             continue
-        if "INTAKE_PAYLOAD" in declared:
-            declared = (declared - {"INTAKE_PAYLOAD"}) | intake_keys
-        missing = sorted(sent_keys[key] - declared)
-        extra = sorted(declared - sent_keys[key])
+        missing, extra = RC.compare(sent_keys[key],
+                                    RC.expand(declared, intake_keys))
         if missing:
-            mismatches.append(f"{'/'.join(key)}: sent but NOT declared {missing}")
+            mismatches.append(f"CLIENT_NEW {'/'.join(key)}: sent but NOT declared {missing}")
         if extra:
-            mismatches.append(f"{'/'.join(key)}: declared but NOT sent {extra}")
+            mismatches.append(f"CLIENT_NEW {'/'.join(key)}: declared but NOT sent {extra}")
     check(f"all {len(sent_keys)} CLIENT_NEW invocation(s) match their "
           "declared runtime input contract exactly", not mismatches,
           str(mismatches))

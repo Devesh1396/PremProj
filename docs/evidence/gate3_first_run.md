@@ -764,3 +764,97 @@ regression drives CLIENT_NEW and makes no claim about a path it never runs.
   bash testing/run_all.sh  (re-run, idempotent)     0    ALL SUITES PASSED
   bash testing/run_bare.sh (no optional extension)  0    ALL SUITES PASSED
 ```
+
+---
+
+## 14. REVIEW ROUND 4 (D52d) — the contract key needed a pipeline
+
+**Sections 1–9 unchanged. The first run is still a MISS, 6 of 8.**
+
+### R10 — the same engine/mode/pass, two pipelines, two payloads
+
+D52c keyed the declaration on `(engine, mode, pass)`. Measured by driving
+both pipelines for real, that triple does not identify an input shape:
+
+```
+CLIENT_NEW       E6/REBUILD/SINGLE
+  CASE_VERSION, CANONICAL_STATE, NORMALIZED_CONCEPTS,
+  E1_HANDOFF, E2_HANDOFF, E3_HANDOFF
+
+CLIENT_FOLLOWUP  E6/REBUILD/SINGLE
+  CASE_VERSION, CLIENT_ID, CURRENT_STATE, REVIEW_PERIOD,
+  FOLLOWUP_ANSWERS, FOLLOWUP_STRUCTURED, LIVE_INTERVENTIONS,
+  PRACTICE_EXPERIENCE, E4_HANDOFF, E6_DELTA,
+  E1_HANDOFF, E2_HANDOFF, E3_HANDOFF
+```
+
+`client_new.py:571` and `client_followup.py:393` both call `engine="E6",
+mode="REBUILD"` for the same stated reason. The full follow-up capture, with
+Engine 4 routing `MULTIPLE` so E1/E2/E3 actually run:
+
+```
+E6/UPDATE/SINGLE   CASE_VERSION, CLIENT_ID, CURRENT_STATE, FOLLOWUP_ANSWERS,
+                   FOLLOWUP_STRUCTURED, LIVE_INTERVENTIONS,
+                   PRACTICE_EXPERIENCE, REVIEW_PERIOD
+E4/SINGLE/SINGLE   … + E6_DELTA
+E1/SINGLE/SINGLE   … + E4_HANDOFF, RETRIEVED_KNOWLEDGE
+E2/SINGLE/SINGLE   … + E1_HANDOFF
+E3/SINGLE/SINGLE   … + E2_HANDOFF
+E6/REBUILD/SINGLE  … + E3_HANDOFF
+```
+
+`E2/SINGLE`, `E3/SINGLE` and `E6/REBUILD` all collide with CLIENT_NEW's.
+
+### R11 — an absence the syntax could not express
+
+D52c's prose said the follow-up contract is "deliberately not declared". With
+a three-part key that could not be stated: a line already existed for each of
+those triples, written for the other pipeline. The key is now
+`PIPELINE ENGINE/MODE/PASS`, and the absence of a `CLIENT_FOLLOWUP` line now
+means what it says.
+
+```
+  PASS  the follow-up routed to E1, E2 and E3
+  PASS  CLIENT_FOLLOWUP invokes the same engine/mode/pass CLIENT_NEW does
+  PASS  the follow-up has NO declaration of its own -- deliberately
+        undeclared, and the pipeline scope is what makes that sayable
+  PASS  ...and a PIPELINE-BLIND key would have collapsed all three onto
+        CLIENT_NEW's contract and reported false violations
+  PASS  CLIENT_NEW's E6/REBUILD declaration exists and is NOT the
+        follow-up's payload
+  PASS  ...and the follow-up E1 really does carry RETRIEVED_KNOWLEDGE,
+        the block GATE 3 added to this path
+```
+
+**Teeth: reverting `runtime_contract.py` to the three-part key turns BOTH
+suites red.**
+
+```
+test_client_new
+  FAIL  all 7 CLIENT_NEW invocation(s) match their declared contract
+        ['CLIENT_NEW E1/SINGLE/A: NO declaration',
+         'CLIENT_NEW E1/SINGLE/B: NO declaration',
+         'CLIENT_NEW E2/SINGLE/SINGLE: NO declaration',
+         'CLIENT_NEW E3/SINGLE/SINGLE: NO declaration',
+         'CLIENT_NEW E6/INIT/SINGLE: NO declaration',
+         'CLIENT_NEW E6/REBUILD/SINGLE: NO declaration',
+         'CLIENT_NEW E7/CASE/SINGLE: NO declaration']
+
+test_followup
+  FAIL  ...and a PIPELINE-BLIND key would have collapsed all three …
+  FAIL  CLIENT_NEW's E6/REBUILD declaration exists and is NOT the
+        follow-up's payload
+```
+
+`testing/runtime_contract.py` is the single parser both suites read. The
+collision regression drives the real follow-up pipeline — it does not
+construct the colliding payload by hand.
+
+### Verification, exit codes captured and checked, never behind a pipe
+
+```
+  rebuild + test_gate3_acceptance (live provider)   0
+  bash testing/run_all.sh                           0    ALL SUITES PASSED
+  bash testing/run_all.sh  (re-run, idempotent)     0    ALL SUITES PASSED
+  bash testing/run_bare.sh (no optional extension)  0    ALL SUITES PASSED
+```
