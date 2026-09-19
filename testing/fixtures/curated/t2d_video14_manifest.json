@@ -1,0 +1,11 @@
+{
+  "gate": "GATE 4",
+  "source_file": "testing/fixtures/curated/t2d_video14.md",
+  "source_sha256": "03b6577d6190dfa53f1f13ea35b0957581fed2fc5dd5764a54841948fffd6bfd",
+  "source_bytes": 20364,
+  "frozen_at": "2026-09-19",
+  "extract_of": "Prem's canonical T2D_V_1.docx",
+  "extract_start": "T2D / Insulin Resistance — Engine 7 Update / Video 14: Insulin Expert: Stop Eating THIS to Fix Blood Sugar in 90 Days",
+  "extract_stop": "immediately after Video 14's One-Sentence Engine 7 Takeaway",
+  "note": "A GATE 4 test extract. It does NOT replace the canonical 524-page parent source. Verbatim: not rewritten, cleaned, normalized, shortened, reordered or improved. Any change to this file invalidates every GATE 4 result recorded against it, which is what the hash is for."
+}
