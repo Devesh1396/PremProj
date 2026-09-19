@@ -156,7 +156,8 @@ def units_from(conn, rules: list[Rule], field_name: str, text: str,
     return found, refused
 
 
-def card_units(conn, rules: list[Rule], card) -> tuple[list[Unit], list[dict]]:
+def card_units(conn, rules: list[Rule], card, *,
+               name_is_a_name: bool = True) -> tuple[list[Unit], list[dict]]:
     """Every unit of one `curated_parser.ParsedCard`.
 
     The card NAME is a unit by construction -- the heading grammar already
@@ -167,7 +168,29 @@ def card_units(conn, rules: list[Rule], card) -> tuple[list[Unit], list[dict]]:
     refused: list[dict] = []
 
     name_rule = next((r for r in rules if r.unit_kind == "CARD_NAME"), None)
-    if name_rule is not None and card.name_start is not None:
+    if name_rule is not None and card.name_start is not None \
+            and not name_is_a_name:
+        # GATE 4. A CURATED OBJECT'S HEADING IS A TITLE, NOT A NAME.
+        #
+        # `Strategy 1 — Breakfast restructuring` gives a name. `ADD —
+        # Rapid Improvement Is Possible, but Timeline ≠ Biological
+        # Guarantee` gives a sentence, and sending it to the resolver is
+        # the mechanism mistake in a new costume (D51): a long clause
+        # cannot resolve, and any score it did earn would be noise. So the
+        # exemption below is withdrawn for objects and the ordinary
+        # grammatical test decides. Four of Video 14's eleven headings are
+        # refused by it, and refused LOUDLY -- they appear in `refused`
+        # with the reason, not dropped.
+        ok, why = is_name_shaped(conn, card.name)
+        if not ok:
+            refused.append({"kind": "CARD_NAME", "field": CARD_NAME_FIELD,
+                            "phrase": card.name, "reason": why,
+                            "source_start": card.name_start,
+                            "source_end": card.name_end})
+        else:
+            found.append(Unit(name_rule.rule_id, "CARD_NAME", CARD_NAME_FIELD,
+                              card.name, card.name_start, card.name_end))
+    elif name_rule is not None and card.name_start is not None:
         # The span comes from the PARSER, which cut the name out of the
         # heading. It is never re-derived by searching the document for
         # the string: a name that occurs twice would point the trace at
@@ -371,11 +394,18 @@ def semantic_recomputation_authoritative(conn, embed_call=None) -> tuple[bool, s
     return True, ""
 
 
-def prior_links(conn, curated_id: str) -> list[dict]:
+# The two owner columns a link may hang off. GATE 4 added the second; the
+# callers name which one they are, so neither is inferred from the id.
+OWNER_COLUMNS = ("curated_id", "object_id")
+
+
+def prior_links(conn, curated_id: str, owner_col: str = "curated_id") -> list[dict]:
+    if owner_col not in OWNER_COLUMNS:
+        raise ValueError(f"unknown owner column {owner_col!r}")
     rows = conn.execute(
-        """select link_id::text, concept_id::text, source_phrase,
+        f"""select link_id::text, concept_id::text, source_phrase,
                   source_start, source_end, field_name, rule_id
-             from curated_strategy_concepts where curated_id=%s
+             from curated_strategy_concepts where {owner_col}=%s
             order by source_start""", (curated_id,)).fetchall()
     keys = ("link_id", "concept_id", "source_phrase", "source_start",
             "source_end", "field_name", "rule_id")
@@ -384,7 +414,8 @@ def prior_links(conn, curated_id: str) -> list[dict]:
 
 def store_units(conn, curated_id: str, source_text: str,
                 resolved: list[dict], *, authoritative: bool,
-                authority_reason: str = "") -> dict:
+                authority_reason: str = "",
+                owner_col: str = "curated_id") -> dict:
     """Write this card's links, or refuse to and say why.
 
     Verification happens BEFORE anything is deleted, so a source whose
@@ -402,7 +433,9 @@ def store_units(conn, curated_id: str, source_text: str,
             "concept unit(s) do not match the source span they claim, so "
             "nothing was stored:\n  " + "\n  ".join(problems))
 
-    existing = prior_links(conn, curated_id)
+    if owner_col not in OWNER_COLUMNS:
+        raise ValueError(f"unknown owner column {owner_col!r}")
+    existing = prior_links(conn, curated_id, owner_col)
 
     if not authoritative and existing:
         stale = [l for l in existing
@@ -410,7 +443,7 @@ def store_units(conn, curated_id: str, source_text: str,
                  != l["source_phrase"]]
         if stale:
             conn.execute(
-                "delete from curated_strategy_concepts where curated_id=%s",
+                f"delete from curated_strategy_concepts where {owner_col}=%s",
                 (curated_id,))
             return {"status": FAILED_CLOSED, "written": 0,
                     "retained": 0, "removed": len(existing),
@@ -429,17 +462,18 @@ def store_units(conn, curated_id: str, source_text: str,
                     "not evidence that they no longer resolve. "
                     f"{len(existing)} existing link(s) preserved unchanged.")}
 
-    conn.execute("delete from curated_strategy_concepts where curated_id=%s",
-                 (curated_id,))
+    conn.execute(
+        f"delete from curated_strategy_concepts where {owner_col}=%s",
+        (curated_id,))
     written = 0
     for r in keep:
         u = r["unit"]
         conn.execute(
-            """insert into curated_strategy_concepts
-                 (curated_id, concept_id, rule_id, field_name, source_phrase,
+            f"""insert into curated_strategy_concepts
+                 ({owner_col}, concept_id, rule_id, field_name, source_phrase,
                   source_start, source_end, resolution_tier, resolution_score)
                values (%s,%s,%s,%s,%s,%s,%s,%s,%s)
-               on conflict (curated_id, concept_id, source_start, source_end)
+               on conflict ({owner_col}, concept_id, source_start, source_end)
                do nothing""",
             (curated_id, r["concept_id"], u.rule_id, u.field_name, u.phrase,
              u.source_start, u.source_end, r["tier"], r["score"]))

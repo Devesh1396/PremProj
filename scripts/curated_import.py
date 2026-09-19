@@ -90,7 +90,9 @@ def source_text(raw_location: str) -> str:
 # ---------------------------------------------------------------------
 
 def attach_concepts(conn, envelope_id: str, text: str,
-                    cards: list[CP.ParsedCard], embed_call=None) -> dict:
+                    cards: list[CP.ParsedCard],
+                    objects: list[CP.ParsedObject] | None = None,
+                    embed_call=None) -> dict:
     """Extract deterministic units, resolve them, link what resolved.
 
     GATE 1 stored the practitioner's words with their byte ranges and
@@ -107,6 +109,14 @@ def attach_concepts(conn, envelope_id: str, text: str,
     ids = dict(conn.execute(
         "select ordinal, curated_id::text from curated_strategies where envelope_id=%s",
         (envelope_id,)).fetchall())
+    # GATE 4. A curated object's units resolve through the SAME resolver,
+    # read_only, with the same span verification. The first complete run
+    # reported `units 0` for eleven objects because this loop did not
+    # exist -- a new knowledge object nothing can reach by concept is the
+    # D52a failure with a new table.
+    object_ids = dict(conn.execute(
+        "select ordinal, object_id::text from curated_objects where envelope_id=%s",
+        (envelope_id,)).fetchall())
 
     # AUTHORITY IS DECIDED ONCE, FOR THE WHOLE IMPORT, BEFORE ANY CARD IS
     # TOUCHED (D52a). A capability that could flip halfway would leave one
@@ -116,17 +126,24 @@ def attach_concepts(conn, envelope_id: str, text: str,
     report = {"units": [], "refused": [], "links": 0, "unlinked_fields": [],
               "rules_fired": {}, "authoritative": authoritative,
               "authority_reason": why, "attachment": {}}
-    for card in cards:
-        if card.kind != "STRATEGY":
-            continue
-        curated_id = ids.get(card.ordinal)
+    # (owner_column, id-map, iterable). A curated object exposes the same
+    # `name` / `name_start` / `name_end` / `fields` surface a card does, so
+    # `card_units` needs no variant -- which is the point of giving the
+    # object the same shape rather than a parallel one.
+    work = [("curated_id", ids, [c for c in cards if c.kind == "STRATEGY"]),
+            ("object_id", object_ids, list(objects or []))]
+
+    for owner_col, id_map, items in work:
+      for card in items:
+        curated_id = id_map.get(card.ordinal)
         if curated_id is None:
             continue
-        units, refused = CC.card_units(conn, rules, card)
+        units, refused = CC.card_units(
+            conn, rules, card, name_is_a_name=(owner_col == "curated_id"))
         resolved = CC.resolve_units(conn, units, embed_call=embed_call)
         outcome = CC.store_units(conn, curated_id, text, resolved,
                                  authoritative=authoritative,
-                                 authority_reason=why)
+                                 authority_reason=why, owner_col=owner_col)
         report["attachment"][card.ordinal] = outcome
         # The count reported is what the card now HOLDS, not what this run
         # wrote: a preserved link set is still links, and reporting 0 for a
@@ -145,7 +162,7 @@ def attach_concepts(conn, envelope_id: str, text: str,
         for r in resolved:
             u = r["unit"]
             report["units"].append({
-                "ordinal": card.ordinal, "card": card.name,
+                "owner": owner_col, "ordinal": card.ordinal, "card": card.name,
                 "rule_id": u.rule_id, "field": u.field_name,
                 "source_phrase": u.phrase,
                 "source_start": u.source_start, "source_end": u.source_end,
@@ -382,7 +399,7 @@ def import_one(conn, envelope: tuple, embed_call=None) -> dict:
                    verifications)
     review = [b for b in blocks if b.status == "REVIEW_REQUIRED"]
     concepts = attach_concepts(conn, str(envelope_id), text, cards,
-                               embed_call=embed_call)
+                               objects, embed_call=embed_call)
 
     return {
         "envelope_id": str(envelope_id), "title": title, "kind": kind,
