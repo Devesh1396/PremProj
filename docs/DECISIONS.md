@@ -3311,11 +3311,336 @@ at all. Shortening the prompt to make the resolver's life easier would
 damage an authoritative specification to paper over a caller's mistake
 (hard rule 1).
 
-### Status
+### Status — BUILT AND MEASURED 2026-09-18
 
-**Diagnosed, NOT fixed.** GATE 1 (preservation, D50) came first by
-instruction; this is GATE 2. Until it is fixed the 20-video pilot stays
-closed — the blocker is the ontology, not the cost: twenty sources at this
-resolution rate would add roughly a thousand proposals and several hundred
-sentence-shaped PROPOSED concepts to a library that is meant to be the
-answer key.
+Every recommendation above is implemented. Rows:
+`docs/evidence/gate2_semantic_tier.md`, measured on a clean 269-concept K1
+seed with all 269 embedded, for $0.000106.
+
+**The tier contract was the load-bearing change, not the query.** Tiers
+returned `(ids, confidence)` and `resolve()` cached, aliased and returned
+exactly those ids — one list doing two jobs. Returning a top-3 from that
+contract would have resolved a phrase to three concepts the moment no
+confusable pair objected: the failure `confusable_with()` exists to prevent,
+arriving through the mechanism meant to prevent it. `TierResult` separates
+`candidates` (what the safety checks read) from `selected` (the only thing
+that may be cached, aliased or returned), and a regression test proves a
+three-candidate tier resolves to one concept with no pair objecting.
+
+**Selection is the top-1 and nothing else.** Trigram's tie rule —
+everything within 0.01 joins the answer — does not transfer: cosine scores
+are dense, and `postprandial walking` gives `post-meal movement` 0.833 and
+`postprandial glucose` 0.828, an INTERVENTION and a PHYSIOLOGY five
+thousandths apart. The first version carried the tie rule over and would
+have resolved that phrase to both.
+
+**Each tier carries its own threshold.** `TIER_THRESHOLD` maps the tier that
+answered to the number it is judged against; exact tiers map to `None`,
+because an alias hit is an identity and not a confidence. Semantic is 0.82
+with a floor of 0.78 below which it says nothing, so a genuinely new concept
+— `1-deoxynojirimycin` at 0.613 — stays free to AUTO_CREATE rather than
+becoming a LOGGED near-match with no concept created.
+
+**A weak tier answer no longer ends the chain.** It used to: a trigram
+near-match at 0.778 returned LOGGED and the semantic tier was never reached,
+so `Postprandial glucose spike` — which cosine puts on `postprandial
+glucose` — was logged as an ambiguity by a tier that had matched the wrong
+word. The near-match is remembered and becomes the outcome only if nothing
+later does better.
+
+**The semantic tier attaches NO alias, and the reason is worth keeping.** A
+confirmed alias is an identity rule the alias tier reads at 1.0 forever,
+bypassing every guard and every later tier on the strength of one cosine
+score; the first version confirmed one at 0.8211, a thousandth over the
+threshold, onto a SEEDED concept, where it outlived the suite that created
+it. Writing it UNCONFIRMED does not fix it either: `_tier_trigram` takes
+`max(similarity(a.alias_norm, ...))` over `concept_aliases` **without
+filtering on `confirmed`**, so an unconfirmed row still returns 1.0 there.
+That missing filter is pre-existing, also governs aliases the LLM tier
+writes, and is reported rather than changed. Nothing is lost by refusing:
+`normalization_cache` is what stops a repeat phrase costing a second call.
+
+**The type guard applies to the similarity tiers only**, and it refuses
+rather than shopping — if the top candidate is the wrong kind of thing the
+tier answers nothing, because picking the second-best BECAUSE it matches the
+expected type is manufacturing the answer the caller asked for. Applied to
+the exact tiers it refused `postprandial glucose` against the concept named
+`postprandial glucose`.
+
+**`mechanism` no longer reaches a concept resolver from anywhere.**
+`knowledge_extract.normalize_claim_concepts`, `knowledge_synthesize.claim_phrases`
+and `evaluate.py`'s layer B answer key all sent it. It is unchanged on the
+claim, and a regression test asserts both halves: no concept and no proposal
+from the sentence, and the sentence still stored verbatim on the claim row.
+That the D47 mechanisms were fabricated is D49's defect and is neither fixed
+nor hidden by this.
+
+**`resolve()` is no longer free.** Every phrase the cheap tiers cannot
+answer costs one embedding call through `embedding.embed()` — the one
+boundary (D38), never a second client. It degrades to a NAMED skip with no
+pgvector, no `MODEL_EMBEDDING`, no `LLM_API_KEY`, or nothing embedded (V3),
+which is what the VPS runs: the tier is inert there by configuration, and
+enabling it is a spending decision.
+
+### What the measurement says, and what it does not
+
+**0.82 is PROVISIONAL, and confirmed rather than chosen** — fixed in code
+from the independent measurement above, and scored against an answer key
+committed in `dd95388` before the tier existed. On the 56 D47 phrases: 33
+RIGHT, 4 PARTIAL, 9 PARTIAL_MISS, 4 REFUSED_CONFUSABLE, 2 MISSED, 4 WRONG.
+Below 0.80 WRONG grows faster than RIGHT.
+
+What would falsify it: a phrase set that is not failure-selected (these are
+the phrases D47 FAILED on, so the sweep says what a threshold recovers and
+nothing about what it breaks among phrases that already worked); a second
+seeded domain, since metabolic health is vocabulary-coherent and its cosine
+floor is 0.613 rather than near zero; a library much larger than 269
+concepts; any change of embedding model.
+
+**Three of the four WRONG are decided by margins of 0.0112, 0.0036 and
+0.0006**, all picking `meal-related glucose dynamics` over `postprandial
+glucose`. A selection decided by six ten-thousandths is not a judgement, and
+**a margin rule is the obvious next change and is deliberately NOT made
+here** — a margin sized to fix exactly those three rows is fitted to three
+rows. The answer key is not edited for them either.
+
+**The type guard fired zero times on the phrases whose type is actually
+known.** Only `target` is recoverable from the stored claims; the other 43
+came from the Claim Card `intervention` field or from K11, which the claim
+row does not distinguish. Assuming they were interventions refuses 12, of
+which ELEVEN are correct resolutions it would have destroyed
+(`postprandial blood glucose concentration → postprandial glucose` at 0.9545
+among them) and one is a merge the key forbids. That is the measured form of
+"a type guard without a trustworthy source type is not a guard", and it is
+why `allowed_types=None` imposes no constraint rather than defaulting to
+something. The guard's correctness is shown by the regression test, where
+the caller's knowledge is real, and NOT by this corpus.
+
+**The measurement must run on a clean K1 seed.** `test_concept_layer` and
+`test_knowledge_layer` insert SEEDED concepts under the K1 seed's own
+canonical keys, so after `run_all.sh` the ontology is 275 differently-named
+concepts and the same sweep scores 17 WRONG. Raised, not chased.
+
+**A one-character typo in a 26-character phrase scores 0.833 on trigram**,
+and `ALIAS_THRESHOLD` is 0.92 — so on realistic clinical vocabulary the
+trigram tier can near-match and essentially cannot resolve. A second
+threshold decision, with its own measurement to do. It is why
+`test_normalization`'s "the confirmed spelling is learned as an alias" check
+had never once executed: it sat behind `if r.decision == "RESOLVED"` and
+that branch was unreachable.
+
+### Reviewed, and three bypass paths closed — migrations `034`/`035`
+
+An independent review of the branch found three places where a guard
+existed and a path around it did not. Each is proven by reverting the fix
+and watching the suite go red, and **none of them moves a number in the
+sweep**: it is byte-identical before and after, phrase for phrase. They
+were bypasses, not scoring errors, which is why a green measurement did not
+find them.
+
+**1. The cache answered what the resolver would refuse.**
+`normalization_cache` is keyed on `phrase_norm` alone and `resolve()`
+returned a hit BEFORE `allowed_types`, the type rejection, the candidate
+set and `confusable_with()`. Two distinct holes, and the second is the one
+that could not be fixed by re-checking the answer: a semantic resolution is
+the top-1 of a SET and the confusable guard fires on the SET, so a
+do-not-merge pair added after caching is invisible to any check over one
+concept. `034` stores `candidate_ids`; `cache_is_safe()` re-runs both
+guards on every read; a failed check is a MISS and the tiers resolve
+properly, rather than the row being deleted — deleting would make the cache
+depend on who asked last.
+
+**`resolved_under_types` is provenance and not the check.** NULL means the
+type was unknown at write time, which is NOT "valid for every type"; what
+has to hold is that the cached concept is a kind of thing the READER
+allows, and that is what is tested. One property makes reading a row
+written under a narrower set safe: the type guard refuses and never shops,
+so a cached answer is always the tier's own top-1. A row written before
+`034` carries no candidate set and is refused rather than trusted, because
+"we cannot check this" is not "we checked this".
+
+**2. A structurally known intervention became a PROPOSED PHYSIOLOGY.**
+`_propose_new(..., "PHYSIOLOGY")` was a literal at the end of the chain, so
+`soleus push-up` out of a Claim Card `intervention` field became a PROPOSED
+PHYSIOLOGY concept and undid the type work above it. There is no honest
+narrow type to write — §R11 says "what is being done or taken" and does not
+say EXERCISE rather than FOOD rather than BEHAVIOUR — and
+`concepts.concept_type` is NOT NULL with no UNKNOWN in the enum. So a
+phrase typed only to a SET gets a `concept_proposals` row carrying that set
+(`allowed_types`) with decision `NEEDS_TYPE` and **no concept at all**. A
+set of exactly one is knowledge, not uncertainty, and is used.
+
+Nothing downstream is worse off: a strategy with no canonical concept is
+already an OPEN gap rather than a link to a PROPOSED one (D8), and a
+PROPOSED concept is not retrievable — it was junk in the ontology, not a
+working answer. `v_concept_needs_type` (`035`) is a READ, not a queue:
+nothing blocks on emptying it and these rows are not counted against D8's
+escalation cap, so hard rule 3 is not breached. **And one attempt now
+leaves one row** — the rejection branch used to write LOGGED and then fall
+through to AUTO_CREATE, two rows about one attempt saying opposite things.
+
+**3. An unconfirmed alias resolved through the trigram tier.**
+`_tier_alias` filters `a.confirmed`; `_tier_trigram` joined
+`concept_aliases` without it, so an unconfirmed alias equal to the query
+contributed similarity 1.0 — the alias tier refusing the row while the tier
+underneath used it as an exact match. "Unconfirmed" meant nothing. Measured
+by reverting: the trigram tier returns 1.0 off a `confirmed = false` row.
+This is the hole that made the semantic tier's no-alias rule necessary, and
+closing it is what makes an unconfirmed row genuinely inert.
+
+### The cache is bound to an ontology revision — migration `036`
+
+`034` re-runs the guards over the STORED candidate set, and there is a
+shape it structurally cannot reach: **a concept that did not exist when the
+row was written was never a candidate**, so no re-check of that set can
+surface it. For a continuously growing ontology that means every cache
+entry decays, and the cache gets quietly more wrong the more the library
+learns.
+
+The case that settles it is not a stale score. A **confirmed alias** is the
+most authoritative mapping in the chain — the alias tier runs first and is
+exact — so a cache serving an older concept over a newly confirmed one is
+overriding a deliberate human decision. Reverting the fix reproduces
+exactly that: `RESOLVED cache conf=0.98` in place of a mapping a human had
+just confirmed.
+
+`ontology_revision` is one row with one counter. A cache row records the
+revision it was resolved against; a read at a different revision is a MISS.
+**Nothing is re-embedded on a bump** — the row is not deleted, it is
+overwritten when the phrase is next actually resolved, so invalidation is
+LAZY, which is the property that makes one global counter affordable.
+
+**The trigger set is column-scoped, and that is load-bearing.**
+`retrieval.py` writes `retrieval_hits` on every retrieval read, so a
+trigger on any write to `concepts` would have every search invalidate the
+entire cache — the exact opposite of what D2 exists for. What bumps: a live
+concept inserted or deleted; a live concept crossing the SEEDED/ACTIVE
+boundary or changing `canonical_name`, `canonical_key`, `concept_type`,
+`embedding` or `merged_into`; a CONFIRMED alias appearing, vanishing or
+changing; a `CONFUSABLE_DO_NOT_MERGE` relation changing. What does not, and
+why it cannot affect a resolution: telemetry; `definition`, which no tier
+reads and whose re-embed bumps on `embedding` instead; the embedding
+provenance columns; `parent_concept_id`, read only by the normalization
+test generator; a PROPOSED / MERGED / DEPRECATED concept, which no tier
+selects; an UNCONFIRMED alias, proven inert in both tiers by the previous
+review; and any other `relation_type`. Transition tables rather than
+`UPDATE OF col`, so a statement that merely mentions a column does not bump.
+
+**The cost, measured now rather than in Wave 1.** A global counter
+invalidates 100% of the cache on any qualifying change. The realized bill
+is one embedding per phrase ACTUALLY RE-ASKED: mean **$0.0000017** per call
+over 67 real calls, so a full re-walk of the D47 source's 56 phrases is
+**$0.000094**, a 1,000-phrase library ~$0.0017 and a 100,000-phrase library
+~$0.17 — and nothing re-walks a library, so even that overstates it. The
+counter barely moves where it would hurt: **0 bumps** across a full K09
+ingestion run, **0** across a curated import, 2 on a full K1 re-seed.
+
+**Per-concept-neighbourhood scoping was considered and rejected**, because
+a new concept has no prior relationship to any stored neighbourhood — that
+is the bug, not an implementation detail of it. Making it work needs every
+cached phrase's query vector stored (1536 floats a row) and a comparison
+pass per ontology change, to save fractions of a cent. One narrowing is
+genuinely cheap and is recorded rather than built: a newly confirmed alias
+could invalidate only the rows whose `phrase_norm` equals its `alias_norm`,
+because that tier is exact. Not built, because two invalidation rules would
+have to be kept in agreement and the one they replace is not expensive.
+
+**Ordering changed with it**: the alias is attached BEFORE the cache row is
+written, because a confirmed alias advances the revision and caching first
+would stamp the row with a revision this same call then invalidated.
+
+### Two holes in `036`, found by review — migration `037`
+
+`036` is append-only and is not edited; `037` replaces its functions. Each
+fix is proven by reverting it and watching the suite go red, and neither
+moves a number in the sweep.
+
+**1. The comment said `embedding` bumps. The code never compared it.**
+`036` documented a live concept's `embedding` changing as revision-advancing
+and `trg_ontology_concepts_upd()` compared everything except that. Not
+theoretical: `embed_library.py` updates the vector of an EXISTING row
+whenever its text changed, and `_tier_semantic` ranks on exactly that
+vector, so a re-embedded concept could become the better answer with the
+revision unmoved and the stale row still served. Reverting reproduces it —
+`revision 427 -> 427`, the cache serving the old concept, zero embedding
+calls.
+
+**The branch is decided at MIGRATION time.** `concepts.embedding` exists
+only where pgvector was present when `002` ran, so the function cannot
+reference it unconditionally — and the obvious alternative, asking
+`has_capability('vector')` inside the trigger, puts a table read on the
+path of every concept UPDATE including the `retrieval_hits` write that
+fires on every retrieval. `037` inspects `pg_attribute` once and compiles
+one function or the other, announcing which. Verified on both floors.
+
+**A deployment that gains pgvector later gets nothing, consistently.**
+`002` creates the column and the capability row together and no later
+migration adds either, so a database built without pgvector does not use
+vectors at all even if the extension appears afterwards. Turning it on is a
+future migration that adds the column, updates the capability AND rebuilds
+this function — and that obligation is a TEST, not a comment:
+`test_normalization.py` asserts the trigger body mentions `embedding` if
+and only if the column exists, on every floor, so adding one without the
+other turns the suite red.
+
+**2. "The trigger is the only thing that should ever move it" was not
+enforced.** `036` said exactly that and created `bump_ontology_revision()`
+SECURITY DEFINER with no REVOKE; PostgreSQL grants EXECUTE to PUBLIC by
+default, so any role could invalidate the whole normalization cache on
+demand — every phrase in the library made to cost a provider call again.
+
+**Granting `phi_runtime` EXECUTE would have recreated the hole**: the
+runtime is exactly the role that writes confirmed aliases, so it is exactly
+the role that must be able to CAUSE a bump without being able to ASK for
+one. The shape that works: the trigger functions become SECURITY DEFINER
+and own the privilege, and EXECUTE on the bump is revoked from PUBLIC.
+PostgreSQL checks EXECUTE on a trigger function when the TRIGGER IS
+CREATED, not each time it fires, so revoking it does not stop the triggers.
+`search_path` is pinned to `public, pg_temp` on every one and every
+reference is schema-qualified; neither alone is load-bearing.
+
+**Left broader than documented, deliberately:** the relation trigger bumps
+on any UPDATE to a `CONFUSABLE_DO_NOT_MERGE` row, including a note-only
+edit. It invalidates more cache than necessary and fails in the safe
+direction; narrowing it is a change with its own measurement to do.
+
+### Calibration is not solved, and this did not solve it
+
+`034`–`036` make the resolver harder to bypass. **They move no number in
+the sweep** — it is byte-identical throughout. 0.82 remains PROVISIONAL,
+the committed answer key is unedited, no margin rule was added, and the
+production-relevant 49-phrase set still carries **4 known WRONG
+resolutions**. Safer is not calibrated.
+
+### Preservation and normalization are separate guarantees
+
+GATE 1's deterministic PARSE is still zero-provider and the code enforces
+it. **Curated concept normalization is not**, and since this work it
+reaches the semantic tier: measured on Video 1, **8 embedding calls,
+$0.000017**, one per strategy name, when `MODEL_EMBEDDING` and
+`LLM_API_KEY` are configured. `test_curated.py` measures zero only because
+it clears `LLM_API_KEY`. D50's "0 provider calls" is true of the parse and
+must not be restated for a curated import as a whole.
+
+GATE 1's "0 of 8 phrases resolved" is now **1 of 8** — `Meal-linked
+postprandial movement` → `POST_MEAL_MOVEMENT` at cosine 0.869, still
+`read_only=True`, so still nothing entered the ontology.
+
+### The production-relevant subset, reported apart from the history
+
+The committed answer key is unchanged and the headline stays the full
+historical 56. But the seven `mechanism` phrases are no longer sent to the
+resolver at all, so on the 49 that are: **33 RIGHT, 4 REFUSED_CONFUSABLE, 6
+PARTIAL_MISS, 2 MISSED, 4 WRONG**. Excluding mechanism removes **no RIGHT
+and no WRONG** — all seven were PARTIAL or PARTIAL_MISS, which is the
+expected shape for a proposition. **0.82 is not re-derived from the subset
+and is not retuned.**
+
+### Still not done
+
+This is GATE 2 and only GATE 2. `retrieval.by_concept()` reads `strategies`,
+`strategy_concepts` and `implementation_patterns` and does not reference
+`curated_strategies`; the six curated Video 1 strategies are no more
+retrievable than before. That bridge is GATE 3.
+
+The 20-video pilot stays closed. The blocker was never cost.

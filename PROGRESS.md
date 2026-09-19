@@ -248,6 +248,204 @@ harness*.
 
 ---
 
+## GATE 2 review 3 — two holes in 036 — 2026-09-19
+
+Migration `037` (append-only; `036` is not edited). Detail in
+`docs/evidence/gate2_semantic_tier.md` §11, decisions in D51. Both proven by
+reverting the fix; neither moves a number in the sweep.
+
+**1. `036` documented that a live concept's `embedding` changing bumps the
+revision, and the trigger never compared it.** `embed_library.py` updates
+the vector of an EXISTING row whenever its text changed, so a re-embedded
+concept could become the better semantic answer with the revision unmoved
+and the stale row still served. Reverting reproduces it exactly: revision
+`427 -> 427`, `RESOLVED cache`, zero embedding calls.
+
+The branch is decided at MIGRATION time — `pg_attribute` inspected once,
+one function or the other compiled, which one announced — because
+`concepts.embedding` exists only where pgvector was present at `002`, and
+checking the capability inside the trigger would put a table read on the
+path of every `retrieval_hits` write. A deployment that gains pgvector
+later gets nothing consistently (`002` creates column and capability
+together; no later migration adds either), and the obligation on a future
+migration that DOES add them is a **test**, not a comment: the trigger body
+must mention `embedding` iff the column exists, asserted on every floor.
+
+**2. `036` said the trigger was the only thing that could move the counter
+and did not REVOKE.** `bump_ontology_revision()` was SECURITY DEFINER and
+PUBLIC-executable — any role could invalidate the entire cache on demand.
+Granting `phi_runtime` EXECUTE would have recreated the hole, since the
+runtime is the role that writes confirmed aliases; instead the trigger
+functions became SECURITY DEFINER and own the privilege, and EXECUTE on the
+bump is revoked from PUBLIC. `search_path` pinned, references qualified.
+
+```
+phi_runtime direct bump  : REFUSED -- permission denied
+revision unchanged       : 567 -> 567
+phi_runtime may READ it  : 567
+a CONFIRMED alias by phi_runtime : 569 -> 570   <- the trigger bumped as owner
+```
+
+Raised, not fixed: the relation trigger bumps on a note-only edit to a
+confusable row. Broader than documented, safe direction.
+
+`run_all.sh` twice and `run_bare.sh`, exit codes read explicitly. On the
+bare floor `has_column`, `trigger_compares` and the capability are all
+false together.
+
+## GATE 2 review 2 — the cache is bound to the ontology revision — 2026-09-18
+
+Migration `036`. Detail in `docs/evidence/gate2_semantic_tier.md` §10, and
+in D51. **No number in the sweep moves.**
+
+`034` re-runs the guards over the STORED candidate set, which cannot see
+what was never a candidate — a concept added later was not in the set, so
+no re-check of it can surface it, and every entry decays as the library
+grows. The case that settles it is a **confirmed alias**: the alias tier is
+first and exact, so an old cache row outranking one is overriding a human
+decision. Reverting the fix reproduces it: `RESOLVED cache conf=0.98` in
+place of the mapping just confirmed.
+
+One counter, `ontology_revision`; a cache row records the revision it was
+resolved against, and a read at a different revision is a MISS. Nothing is
+re-embedded on a bump — the row is rewritten when the phrase is next
+resolved, so invalidation is LAZY.
+
+**The trigger set is column-scoped and that is load-bearing:**
+`retrieval.py` writes `retrieval_hits` on every retrieval read, so bumping
+on any write to `concepts` would have every search invalidate the whole
+cache. Bumps: live concept insert/delete, the SEEDED/ACTIVE boundary,
+`canonical_name` / `canonical_key` / `concept_type` / `embedding` /
+`merged_into`, a CONFIRMED alias, a `CONFUSABLE_DO_NOT_MERGE` relation.
+Does not: telemetry, `definition`, embedding provenance columns,
+`parent_concept_id`, a PROPOSED concept, an UNCONFIRMED alias, any other
+relation type. Transition tables, not `UPDATE OF col`.
+
+**Cost, measured:** global invalidation is 100% of the cache, realized as
+one embedding per phrase actually re-asked — mean **$0.0000017** a call, so
+the D47 source's 56 phrases re-walk for **$0.000094** and a 100,000-phrase
+library for ~$0.17. And it barely fires where it would hurt: **0 bumps**
+through a full K09 ingestion, **0** through a curated import, 2 on a K1
+re-seed. Per-concept-neighbourhood scoping rejected — a new concept has no
+prior relationship to any stored neighbourhood, which is the bug.
+
+**Calibration is still not solved.** 0.82 is PROVISIONAL, the answer key is
+unedited, no margin rule was added, and the production-relevant 49 still
+carry 4 known WRONG resolutions.
+
+`run_all.sh` twice and `run_bare.sh`, exit codes read explicitly.
+
+## GATE 2 review — three bypass paths closed — 2026-09-18
+
+Migrations `034`/`035`. Detail in `docs/evidence/gate2_semantic_tier.md` §8
+and §9, decisions in D51. **The sweep is byte-identical before and after**,
+phrase for phrase and verdict for verdict — these were bypasses, not
+scoring errors, which is why a green measurement did not find them. Each
+fix was verified by reverting it and watching the suite go red.
+
+1. **The cache answered what the resolver would refuse.** Keyed on
+   `phrase_norm` alone and read before `allowed_types`, the type guard, the
+   candidate set and `confusable_with()`. A pair added AFTER caching could
+   never invalidate the row, because the objection lives in the CANDIDATES
+   and a one-concept answer spans nothing. `034` stores `candidate_ids` and
+   `resolved_under_types`; `cache_is_safe()` re-runs both guards per read.
+   NULL `resolved_under_types` means *unknown at write time*, not *valid for
+   all types* — the check is the cached concept's own type against the
+   reader's set.
+2. **`soleus push-up` from an `intervention` field became a PROPOSED
+   PHYSIOLOGY.** Now a `NEEDS_TYPE` proposal carrying `allowed_types` and
+   **no concept**; a set of exactly one is used. One attempt leaves one row
+   (it used to write LOGGED then AUTO_CREATE, disagreeing with itself).
+3. **An unconfirmed alias scored 1.0 in the trigram tier**, which
+   `_tier_alias` would have refused. Filtered in both tiers now.
+
+**Preservation and normalization are separate guarantees.** GATE 1's parse
+is still zero-provider and the code enforces it; curated NORMALIZATION now
+reaches the semantic tier — measured on Video 1: **8 embedding calls,
+$0.000017**. `test_curated.py` measures zero only because it clears
+`LLM_API_KEY`. GATE 1's "0 of 8 phrases resolved" is now **1 of 8**
+(`Meal-linked postprandial movement` → `POST_MEAL_MOVEMENT`, 0.869), still
+`read_only=True`.
+
+**Production-relevant subset (49 phrases, mechanism excluded):** 33 RIGHT,
+4 REFUSED_CONFUSABLE, 6 PARTIAL_MISS, 2 MISSED, 4 WRONG. Excluding
+mechanism removes no RIGHT and no WRONG. 0.82 not retuned.
+
+`run_all.sh` twice and `run_bare.sh`, exit codes read explicitly.
+
+## GATE 2 — the semantic tier is BUILT and measured — 2026-09-18
+
+Every row: `docs/evidence/gate2_semantic_tier.md`. D51 records the design
+decisions and what would falsify the threshold. Measured on a clean
+269-concept K1 seed, all 269 embedded, **$0.000106**.
+
+`normalize._tier_semantic()` was `return [], 0.0` unconditionally. It is now
+a real pgvector query through `embedding.embed()` — the one boundary (D38) —
+with its own threshold **0.82** (floor 0.78, top-3 candidates), never the
+trigram constant.
+
+**56 D47 phrases: 33 RIGHT, 4 PARTIAL, 9 PARTIAL_MISS, 4 REFUSED_CONFUSABLE,
+2 MISSED, 4 WRONG**, scored against `testing/fixtures/normalization/d47_answer_key.json`
+— committed in `dd95388`, **before the tier existed**, so no verdict was
+written after seeing a score.
+
+**Four changes, and the query is the least interesting one.**
+
+1. **`TierResult` separates candidates from selection.** The old contract
+   returned one list that `resolve()` cached, aliased AND returned, so a
+   top-3 tier would have resolved a phrase to three concepts whenever no
+   confusable pair objected. A regression test proves three candidates
+   become one resolution with nothing objecting.
+2. **Selection is top-1 only** — trigram's 0.01 tie rule does not transfer.
+   `postprandial walking` puts an INTERVENTION and a PHYSIOLOGY five
+   thousandths apart, and the tie rule would have merged them.
+3. **A weak tier answer no longer ends the chain.** A trigram near-match at
+   0.778 used to return LOGGED and the semantic tier was never reached.
+4. **`mechanism` reaches no concept resolver** — K09, K11 and layer B all
+   sent it. Still stored verbatim on the claim; a test asserts both halves.
+
+**Four caveats that matter more than the score.**
+
+- **Three of the four WRONG are decided by margins of 0.0112, 0.0036 and
+  0.0006.** A margin rule is the obvious next change and is deliberately NOT
+  made — sized to fix those three rows it would be fitted to three rows.
+- **The type guard fired zero times where the type is actually known.** Only
+  `target` is recoverable from the stored claims. Assuming the other 43
+  phrases were interventions refuses 12, of which **eleven are correct
+  resolutions it would have destroyed**. That is why `allowed_types=None`
+  imposes nothing rather than defaulting.
+- **Dataset B constrains the mechanism, not the threshold.** The structural
+  suite passes at every candidate threshold from 0.65 to 0.92, because its
+  fixture vectors sit at 1.000/0.906/0.839 by construction. Building one
+  that discriminated would mean writing both halves of the comparison (V2).
+- **This is not GATE 3.** `retrieval.by_concept()` still does not read
+  `curated_strategies`. The six Video 1 strategies are no more retrievable
+  than before.
+
+**Two things found while doing it, both raised rather than changed.**
+`_tier_trigram` reads `concept_aliases` **without filtering on `confirmed`**,
+so an "unconfirmed" alias row still returns similarity 1.0 there — which is
+why the semantic tier writes no alias at all. And a one-character typo in a
+26-character phrase scores **0.833** on trigram against an `ALIAS_THRESHOLD`
+of 0.92, so the trigram tier can near-match and essentially cannot resolve
+on realistic clinical vocabulary.
+
+**A test that had never once run.** `test_normalization`'s "the confirmed
+spelling is learned as an alias" sat behind `if r.decision == "RESOLVED"`
+and that branch was unreachable for exactly the reason above. It only
+started executing when the semantic tier began resolving the phrase, and
+then failed. Replaced with assertions that call `_tier_trigram` directly.
+
+**The sweep must run on a clean K1 seed.** `test_concept_layer` and
+`test_knowledge_layer` insert SEEDED concepts under the K1 seed's own
+canonical keys, so after `run_all.sh` the ontology is 275 differently-named
+concepts and the same sweep scores 17 WRONG. The first run of this
+measurement was taken on that database. Reproduction steps are at the top of
+the evidence file.
+
+`bash testing/run_all.sh` → ALL SUITES PASSED, exit 0, twice consecutively.
+`bash testing/run_bare.sh` → ALL SUITES PASSED, exit 0.
+
 ## GATE 1 — curated preservation PASSES — 2026-09-18
 
 Every row: `docs/evidence/curated_gate1.md`. Migrations `032`/`033`,
