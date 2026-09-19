@@ -2522,6 +2522,33 @@ retries, control-block parse success, and the prompt hash of each E1 pass.
 A repair retry shows as two provider attempts and one retry, with the
 failed attempt's tokens included in the run total.
 
+## GATE 3 REVIEW ROUND 5 — the prose was still mode-only (2026-09-19, D52e)
+
+A wording correction, not a design change. No runtime code, retrieval,
+test, ranking, `0.82`, `b5b2477`, `038`/`039`, K10 or source coverage.
+
+D52d scoped the MACHINE declaration by pipeline and left Engine 6's `A8`
+PROSE organised by mode: *"`REBUILD` — the end of a new-client cycle. You
+receive `CASE_VERSION`, `CANONICAL_STATE`, `NORMALIZED_CONCEPTS`,
+`E1_HANDOFF`, `E2_HANDOFF`, `E3_HANDOFF`."* True of CLIENT_NEW, false of
+CLIENT_FOLLOWUP — which invokes `REBUILD` for its own final state
+reconstruction and receives neither `CANONICAL_STATE` nor
+`NORMALIZED_CONCEPTS`, plus eight blocks the new-client path never sends.
+**The declaration a machine reads was scoped and the paragraph a model
+reads was not**, so the checker could no longer be misled and the engine
+still could.
+
+`A8` is now organised BY PIPELINE first: `CLIENT_NEW` (`INIT`, then
+`REBUILD`, six-block shape unchanged); `CLIENT_FOLLOWUP` (`UPDATE`, then
+**`REBUILD` again**, named as the same mode with a different payload, its
+context in prose rather than as a field list); and an explicit **"DO NOT
+APPLY THE CLIENT_NEW `REBUILD` FIELD LIST ABOVE TO A FOLLOW-UP RUN"**.
+
+**No `CLIENT_FOLLOWUP` declaration was created.** The absence is still the
+deliberate position D52d made expressible. The `RUNTIME_INPUT_CONTRACT`
+lines are byte-identical, Engine 6's `sections` count is unchanged at 89,
+and the diff touches one file.
+
 ## GATE 3 REVIEW ROUND 4 — the contract key needed a pipeline (2026-09-19, D52d)
 
 `b5b2477`, 0.82, the retrieval weights, the first-run MISS, the `038`/`039`

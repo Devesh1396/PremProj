@@ -858,3 +858,54 @@ construct the colliding payload by hand.
   bash testing/run_all.sh  (re-run, idempotent)     0    ALL SUITES PASSED
   bash testing/run_bare.sh (no optional extension)  0    ALL SUITES PASSED
 ```
+
+---
+
+## 15. REVIEW ROUND 5 (D52e) — the prose was still mode-only
+
+**Sections 1–9 unchanged. The first run is still a MISS, 6 of 8.** No runtime
+code, retrieval, test, ranking, `0.82`, `b5b2477`, `038`/`039`, K10 or source
+coverage changed. One file touched.
+
+D52d scoped the machine-checkable declaration by pipeline. Engine 6's `A8`
+prose was still organised by mode:
+
+```
+**REBUILD** — the end of a new-client cycle. You receive CASE_VERSION,
+CANONICAL_STATE, NORMALIZED_CONCEPTS, E1_HANDOFF, E2_HANDOFF, E3_HANDOFF.
+```
+
+True of CLIENT_NEW. False of CLIENT_FOLLOWUP, which invokes `REBUILD` for its
+own final state reconstruction (`client_followup.py:393`) and receives neither
+`CANONICAL_STATE` nor `NORMALIZED_CONCEPTS`, plus eight blocks the new-client
+path never sends. **The declaration a machine reads was scoped and the
+paragraph a model reads was not** — the checker could no longer be misled and
+the engine still could.
+
+`A8` is now organised by PIPELINE first:
+
+* **CLIENT_NEW** — `INIT`, then `REBUILD`, the six-block shape unchanged.
+* **CLIENT_FOLLOWUP** — `UPDATE`, then **`REBUILD` again**, named as the same
+  mode with a different payload; its context described in prose (review
+  period, follow-up answers, current state, live interventions, Engine 4's
+  reasoning, Engine 6's earlier delta) rather than as a field list.
+* **"DO NOT APPLY THE CLIENT_NEW `REBUILD` FIELD LIST ABOVE TO A FOLLOW-UP
+  RUN"**, with the instruction to read what the envelope and payload actually
+  give on that path.
+
+**No `CLIENT_FOLLOWUP` declaration was created.** The absence is still the
+deliberate position D52d made expressible.
+
+Mechanically confirmed: the `RUNTIME_INPUT_CONTRACT` lines are byte-identical
+(no `+`/`-` declaration line in the diff), the manifest's `sections` count for
+Engine 6 is unchanged at **89**, and `git diff --stat prompts/` reports one
+file, 37 insertions, 11 deletions.
+
+### Verification, exit codes captured and checked, never behind a pipe
+
+```
+  rebuild + test_gate3_acceptance (live provider)   0
+  bash testing/run_all.sh                           0    ALL SUITES PASSED
+  bash testing/run_all.sh  (re-run, idempotent)     0    ALL SUITES PASSED
+  bash testing/run_bare.sh (no optional extension)  0    ALL SUITES PASSED
+```

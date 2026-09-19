@@ -56,13 +56,13 @@
   },
   {
     "file": "engine6_memory.md",
-    "words": 5920,
-    "chars": 42398,
+    "words": 6135,
+    "chars": 43677,
     "sections": 89,
     "has_control_tag": true,
     "has_handoff_open_tag": true,
     "has_handoff_close_tag": true,
-    "sha256": "71f5437d188d59410089b49fac6a97a1e8f05a4b4cb351a4c70d6c88b62b96ab"
+    "sha256": "836b2278408c7e55e06094344ca4063f7900d638b2c96d35a03c9891e132d6b8"
   },
   {
     "file": "engine7_research_practice.md",

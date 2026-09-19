@@ -4295,3 +4295,42 @@ claim about a path it does not declare. Engine 1's prose describing
 follow-up E1 genuinely carries that block, and the regression asserts it —
 but prose describing one block is not a complete declaration and is not
 presented as one.
+
+
+## D52e — the machine contract was scoped; the prose was not
+
+**Decided 2026-09-19.** A wording correction, not a design change. No runtime
+code, no retrieval, no test, no ranking, no `0.82`, no `b5b2477`, no
+`038`/`039`, no K10, no source coverage.
+
+D52d put the pipeline in the machine-checkable declaration and left Engine 6's
+`A8` prose organised **by mode**:
+
+> **`REBUILD`** — the end of a new-client cycle. You receive `CASE_VERSION`,
+> `CANONICAL_STATE`, `NORMALIZED_CONCEPTS`, `E1_HANDOFF`, `E2_HANDOFF`,
+> `E3_HANDOFF`.
+
+That is true of CLIENT_NEW and false of CLIENT_FOLLOWUP, which invokes
+`REBUILD` for its own final state reconstruction and receives none of
+`CANONICAL_STATE` or `NORMALIZED_CONCEPTS`, plus eight blocks the new-client
+path never sends. **The declaration a machine reads was scoped and the
+paragraph a model reads was not** — so the checker could no longer be misled
+and the engine still could.
+
+`A8` is now organised **by pipeline first**, with the mode under it:
+
+* `CLIENT_NEW` — `INIT`, then `REBUILD`, with the six-block shape unchanged.
+* `CLIENT_FOLLOWUP` — `UPDATE`, then **`REBUILD` again**, named explicitly as
+  the same mode with a different payload, and the follow-up's own context
+  described in prose rather than as a field list.
+* **"DO NOT APPLY THE CLIENT_NEW `REBUILD` FIELD LIST ABOVE TO A FOLLOW-UP
+  RUN"**, with the instruction to read what the envelope and payload actually
+  give on that path rather than inferring one from this section.
+
+**No `CLIENT_FOLLOWUP` declaration was created.** The absence is still the
+deliberate position D52d made expressible, and the prose now says so in the
+same words rather than leaving a field list standing in for it.
+
+Mechanically: the `RUNTIME_INPUT_CONTRACT` lines are byte-identical, the
+manifest's `sections` count for Engine 6 is unchanged at 89, and the diff
+touches one file.

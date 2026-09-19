@@ -1520,6 +1520,23 @@ prose about `RETRIEVED_KNOWLEDGE` on the follow-up's `pass = SINGLE` run stays
 and the regression asserts the block arrives — but prose about one block is
 not a complete declaration and is not presented as one.
 
+### GATE 3 REVIEW ROUND 5 — the prose was still mode-only (D52e)
+
+D52d scoped the MACHINE declaration by pipeline and left Engine 6's `A8`
+PROSE organised by mode — *"`REBUILD` — the end of a new-client cycle. You
+receive `CASE_VERSION`, `CANONICAL_STATE`, `NORMALIZED_CONCEPTS`, …"*. True of
+CLIENT_NEW, **false of CLIENT_FOLLOWUP**, which invokes `REBUILD` for its own
+final state reconstruction and receives neither `CANONICAL_STATE` nor
+`NORMALIZED_CONCEPTS`. **The declaration a MACHINE reads was scoped and the
+paragraph a MODEL reads was not** — the checker could no longer be misled and
+the engine still could.
+
+`A8` is organised BY PIPELINE first now, and says explicitly: **DO NOT APPLY
+THE CLIENT_NEW `REBUILD` FIELD LIST TO A FOLLOW-UP RUN.** No
+`CLIENT_FOLLOWUP` declaration was created — the absence is still the
+deliberate position. Declarations byte-identical, `sections` unchanged at 89,
+one file touched.
+
 **The first live call to any real API in this build FAILED, and the
 failure was informative.** The actor answers HTTP 201 from a SUCCEEDED
 run and reports item-level failure in an `error` field nothing read; a

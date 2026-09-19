@@ -100,11 +100,20 @@ practice intelligence, and practice outcomes remain structurally separate from p
 There is no path in the schema that merges them.
 
 
-## A8. Runtime input blocks, by MODE
+## A8. Runtime input blocks, by PIPELINE and MODE
 
 The orchestrator hands you named top-level blocks. **Which blocks arrive
-depends on the mode**, and the mode is in the `<RUNTIME_INVOCATION>`
-envelope rather than inferred from the payload.
+depends on the PIPELINE AND the mode — the mode alone does not tell you.**
+Both are in the `<RUNTIME_INVOCATION>` envelope rather than inferred from
+the payload.
+
+**THE MODE IS NOT THE WHOLE ANSWER.** `REBUILD` is used by BOTH client
+pipelines, for the same stated reason, and they hand you different things.
+A section organised by mode alone would have told you to expect the
+new-client blocks on a follow-up run, which is why this one is organised by
+pipeline first.
+
+### CLIENT_NEW — `INIT`, then `REBUILD`
 
 **`INIT`** — a new client. You receive the converted intake submission: its
 own fields, named as the intake schema names them, plus `CASE_VERSION` and
@@ -119,14 +128,31 @@ is `REBUILD` and not `UPDATE`: a delta's fields describe changes and do not
 map onto the state's fields, so a full state is asked for and the delta is
 kept beside it rather than merged.
 
-**`UPDATE`** — the follow-up path, where a delta IS the output A1 describes.
-Its input contract is not declared below because the follow-up pipeline's
-blocks are not yet written down; that gap is recorded rather than guessed at.
+### CLIENT_FOLLOWUP — `UPDATE`, then `REBUILD` again
 
-`NORMALIZED_CONCEPTS` is the concept spine, not a clinical claim: a phrase
-resolving to a concept says the vocabulary was recognised, not that the
-finding is established. A7's practice-intelligence boundary and A5's client
-isolation both still apply.
+**`UPDATE`** — the follow-up's first Engine 6 run, where a delta IS the
+output A1 describes.
+
+**`REBUILD`** — the follow-up's FINAL state reconstruction, at the end of
+that cycle. It uses the same mode as CLIENT_NEW's second run and for the
+same reason, and **it does not receive the same blocks.** The follow-up
+carries its own context — the review period, the follow-up answers, the
+current state, the live interventions, Engine 4's reasoning and Engine 6's
+own earlier delta — and does not carry `CANONICAL_STATE` or
+`NORMALIZED_CONCEPTS` at all.
+
+**DO NOT APPLY THE CLIENT_NEW `REBUILD` FIELD LIST ABOVE TO A FOLLOW-UP
+RUN.** Neither follow-up mode has a declared input contract below, and that
+absence is deliberate rather than an oversight: a declaration is a COMPLETE
+set, and completing one means settling every block that pipeline sends,
+which is a separate piece of work. **Read what the envelope and the payload
+actually give you on that path; do not infer a field list from this
+section.**
+
+`NORMALIZED_CONCEPTS`, where it is present, is the concept spine and not a
+clinical claim: a phrase resolving to a concept says the vocabulary was
+recognised, not that the finding is established. A7's practice-intelligence
+boundary and A5's client isolation apply on every path and in every mode.
 
 The lines below are a **machine-checkable declaration**, not decoration.
 `testing/test_client_new.py` drives the real CLIENT_NEW pipeline, reads the
