@@ -4334,3 +4334,82 @@ same words rather than leaving a field list standing in for it.
 Mechanically: the `RUNTIME_INPUT_CONTRACT` lines are byte-identical, the
 manifest's `sections` count for Engine 6 is unchanged at 89, and the diff
 touches one file.
+
+---
+
+## D53 — a curated object is not a strategy (GATE 4)
+
+**Decision.** A curated section organised by CURATION DIRECTIVE is stored as
+`curated_objects` with an explicit `disposition`, not as `curated_strategies`.
+Video 1's rows are not migrated.
+
+**Why.** Video 14 contains `Strategy N` **zero times** and a curation
+directive eleven times — `ADD`, `ADD / UPGRADE`, `MERGE`, `REINFORCE`,
+`SKIP`. Writing those into `curated_strategies` asserts each one IS a
+strategy, and for `SKIP — "Underground Vegetables Should Be Restricted"` that
+is not imprecision: it promotes a claim the practitioner explicitly refused
+to active knowledge. `curated_disposition_is_active()` makes "REINFORCE, SKIP
+and PROVENANCE_ONLY may never become active" a database property rather than
+a convention in a runner.
+
+**The disposition is read, never inferred.** It is the literal word the
+author wrote; `directive_start/end` point at those characters and
+`ck_object_directive_span` keeps the pointer inside the object. D48: a
+populated provenance field that points somewhere plausible but wrong is the
+shape that passes review.
+
+**Rejected: `curated_strategies` plus a flag.** It keeps the table name
+honest only by making every reader remember which rows are not strategies,
+and the retrieval layer already reads that table as active practitioner
+knowledge.
+
+**Rejected: migrating Video 1 into the new shape for uniformity.** GATE 1
+proved those rows byte-identical to a span fixed before the importer
+existed. Rewriting them for aesthetics spends that proof.
+
+**TWO RULES, NOT TWENTY.** Closing most of Video 14's 60 REVIEW_REQUIRED
+would mean a rule per unmatched heading, which is a parser fitted to its
+test. `CURATION_DIRECTIVE` is self-describing vocabulary; `SUB_AUTHORED_
+SUBHEAD` recognises "the author names their own subsection", which is
+authorial rather than lexical and so does not go stale when the next section
+invents different subheadings. Everything else stays REVIEW_REQUIRED at 48%.
+
+**Ownership became a registry COLUMN (`owner_kinds`).** `033` hard-coded
+STRATEGY/PRINCIPLE inside `attach()`. Left there, the generic rule would have
+matched level-3 headings inside Video 1's strategy cards and rewritten rows
+GATE 1 proved identical. The scope travels with the rule that needs it.
+
+**A RULE THAT CANNOT APPLY MUST NOT END THE CHAIN.** `classify()` selected
+the highest-priority matching rule and `attach()` then refused it, with no
+fallback — so a heading inside a curated object matched a strategy-card rule,
+failed ownership, and was lost although a rule that WOULD have applied also
+matched. A block's fate was decided by the order two rules were tried in.
+Same shape as the trigram tier ending the chain at a near-match and never
+reaching the semantic tier (D51); fixed the same way.
+
+**THE D50 VERIFICATION GAP IS CLOSED, because this section needs it.**
+`evidence_records` still has no `verification_actor` / `verification_status`.
+`curated_verifications` does, and attaches `PRACTITIONER_VERIFIED` to the
+exact statement span — never to the document. Video 14 states one personal
+check and also discusses berberine and ACV evidence the practitioner did NOT
+claim to have checked; a document-level flag would promote both. There is no
+`SYSTEM_VERIFIED` value to fall into. The phrase itself is registry data
+(`curated_verification_rules`) with a counterexample it must not match.
+
+**A CURATED OBJECT'S HEADING IS A TITLE, NOT A NAME.** `card_units` exempts a
+card name from the grammatical phrase test — right for `Breakfast
+restructuring`, wrong for `Rapid Improvement Is Possible, but Timeline ≠
+Biological Guarantee`. Sending that to the resolver is the mechanism mistake
+in a new costume (D51). The exemption is withdrawn for objects: 7 of 11 pass,
+4 are refused and say so.
+
+**Reported, NOT fixed:** the spans are CHARACTER offsets and GATE 1/GATE 3
+call them byte ranges throughout (20,364 bytes vs 20,298 characters here);
+retrieval does not surface curated objects, so their concept links are stored
+and unused; `PROVENANCE_ONLY` is implemented and unexercised by real data;
+`test_normalization` crashes on a provider HTTP 429 instead of degrading to a
+named skip (pre-existing, V3-shaped).
+
+**The first implemented run was a MISS** and is kept: `040` added the
+`derived_kind` enum value without the registration trigger hard rule 12
+requires, and `fk_derived_entity` caught it at the first real insert.

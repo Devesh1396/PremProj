@@ -3213,3 +3213,35 @@ Two Engine 7 items for the practitioner, neither blocking:
   needs a migration and a full re-embed
 - `norm_phrase` backs STORED generated columns; changing it later requires
   a migration that also rewrites those columns and rebuilds their indexes
+
+
+## GATE 4 — a second grammar family, tested (2026-09-19, D53)
+
+`docs/evidence/gate4_report.md` has the full A-K report; `gate4_prediction.md`,
+`gate4_baseline.md` and `gate4_first_run.md` are the frozen intermediate
+evidence. Migrations `040`-`044`, `testing/test_curated_objects.py`,
+`testing/test_gate4_acceptance.py`, `testing/gate4_baseline.py`.
+
+**BASELINE 1 of 61.** Video 14 under the Video 1 grammar: 61 blocks, 1 parsed,
+60 REVIEW_REQUIRED. `Strategy N` occurs zero times; the curation directive
+occurs eleven. The prediction committed before the baseline matched every
+number, and says in its own text why that is weak evidence.
+
+**AFTER: 11 objects, 1 principle, 31 fields, 29 REVIEW_REQUIRED (48%), 0
+transformed, 0 provider calls, 1 practitioner verification.** Two new grammar
+rules, not twenty.
+
+**Video 1 is byte-identical**, compared row by row in the acceptance suite and
+again at the parse level under both rule sets.
+
+**The first implemented run was a MISS** -- `040` added a `derived_kind` enum
+value without the registration trigger hard rule 12 requires. Recorded, not
+written out.
+
+**Open by design:** Q1 (is `Decision intelligence` the same field as `When
+potentially worth considering` / `When not to prioritize`), Q2 (where SKIP
+material belongs), Q3 (safety has no routable home -- a GAP).
+
+**NEXT IS NOT ANOTHER VIDEO.** The `Video N` heading stops at 14 and ~77,000
+words follow with no such heading -- ~30x this fixture. A structural survey of
+that material comes before any corpus-wide rule estimate.
