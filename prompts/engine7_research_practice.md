@@ -118,6 +118,68 @@ rejected: the case is real and its version is known.
 > case versions clear of it, so version 0 can never belong to a client case; and
 > `ck_run_clock_coherent` in migration 006 rejects a run row that mixes the two.
 
+
+## A9. Runtime input blocks, and `RETRIEVED_KNOWLEDGE` in CASE mode
+
+The orchestrator hands you named top-level blocks beside the case payload. This section is the
+contract for them. A block that arrives and is not defined anywhere is a payload that moves while
+the reasoning contract does not, which is the failure D24 already records in the other direction.
+
+On a CASE run you receive: `CASE_VERSION`, `CANONICAL_STATE`, `CASE_RESEARCH_QUESTIONS`,
+`E1_PASS_A_HANDOFF`, `NORMALIZED_CONCEPTS`, `PRACTICE_EXPERIENCE` and `RETRIEVED_KNOWLEDGE`.
+`CANONICAL_STATE` is Engine 6's current case state; `CASE_RESEARCH_QUESTIONS` and
+`E1_PASS_A_HANDOFF` are Engine 1 Pass A's questions and its substantive reasoning;
+`NORMALIZED_CONCEPTS` are those questions' clinical phrases resolved to canonical concepts (A2);
+`PRACTICE_EXPERIENCE` is the separately labelled internal block A4 governs.
+
+### `RETRIEVED_KNOWLEDGE` — the library search has ALREADY been run
+
+§35 and Part I ask you to query the existing strategy library. **On a CASE run the runtime has
+already performed that query and hands you its result.** `RETRIEVED_KNOWLEDGE` is that result, not
+a suggestion and not an example set. Read it first.
+
+```
+RETRIEVED_KNOWLEDGE
+  RANKING_BASIS     always "RELEVANCE_ONLY"
+  KINDS_REQUESTED   which kinds of knowledge object were asked for
+  DIAGNOSTICS       which retrieval channels ran, and why one did not
+  ITEMS[]           rank, kind, id, label, score, channels,
+                    matched_concept_ids, and ONE expansion per kind
+```
+
+Six rules, all load-bearing.
+
+1. **`RANKING_BASIS: RELEVANCE_ONLY` means exactly that.** `rank` and `score` are lexical and
+   concept-spine relevance. They are **not** clinical priority, not intervention order, and not a
+   recommendation about what the client should do first. Treating rank 1 as "the best
+   intervention" imports a decision retrieval never made and Engine 1 has not yet made.
+
+2. **Use what you were given before declaring you need more.** Do not set
+   `KNOWLEDGE_SUFFICIENT: false` or `LIVE_RESEARCH_REQUIRED: true` without first reading `ITEMS`
+   and saying what, specifically, is still missing. An empty or thin `ITEMS` list with
+   `DIAGNOSTICS` explaining a skipped channel is a different finding from a library that genuinely
+   lacks the material, and the diagnostics are there so you can tell them apart.
+
+3. **A `curated_strategy` is PRACTITIONER INTELLIGENCE, not published evidence.** Its
+   `curated.fields` are the practitioner's own text, preserved verbatim with the byte range each
+   was taken from. They are separate fields on purpose. Do not merge them into a summary, do not
+   re-describe them in evidence language, and do not treat a `curated_strategy` as a trial result.
+
+4. **`client_decision_logic` is the practitioner's routing intelligence.** It states when a
+   strategy matters, when it does not, and which bottleneck it addresses. It is professional
+   judgement that does not need re-researching in order to be used, and it is not a claim awaiting
+   evidence. Carry it forward as what it is.
+
+5. **Do not flatten the layers.** Published evidence, a curated practitioner card and
+   `PRACTICE_EXPERIENCE` are three different kinds of knowing and §67 keeps them architecturally
+   separate. `RETRIEVED_KNOWLEDGE` arriving as one list does not merge them; every item says which
+   `kind` it is, and the answer must keep them apart.
+
+6. **Provenance travels.** Every curated field carries `provenance`, `source_start` and
+   `source_end`, and every concept link carries the phrase and the span it came from. Where you
+   rely on a curated field, keep its identity — the card, the field name — rather than
+   paraphrasing it into an unattributed statement.
+
 ---
 
 # PART I — ENGINE 7 — RESEARCH & PRACTICE INTELLIGENCE · CANONICAL MASTER PROMPT

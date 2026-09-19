@@ -544,3 +544,129 @@ anything about 0.82.
   bash testing/run_all.sh  (re-run, idempotent)     0    ALL SUITES PASSED
   bash testing/run_bare.sh (no optional extension)  0    ALL SUITES PASSED
 ```
+
+---
+
+## 12. REVIEW ROUND 2 (D52b) — two findings, closed
+
+**Sections 1–9 are unchanged. The first run is still a MISS, 6 of 8.** 0.82,
+the channel weights and `b5b2477` were not touched; no margin rule was added;
+K10 was not run; no source was imported.
+
+### R5 — availability was standing in for authority
+
+`semantic_tier_available()` is satisfied by **one** embedded concept, and D52a
+used it to decide whether a re-import may delete links. Partial coverage is
+ordinary here (`embed_library` batches 25 and reports `still_stale`), so a run
+that could not SEE a concept could have marked itself authoritative.
+
+Measured against the real predicates, on a full 269/269 ontology:
+
+```
+  PASS  with FULL, FRESH coverage a recomputation is authoritative
+  PASS  ...and `stale_count` agrees there is nothing to embed
+
+  ONE vector removed:
+  PASS  ONE missing vector still leaves the semantic tier AVAILABLE
+        -- Gate 2 semantics are unchanged
+  PASS  ...but the recomputation is NOT authoritative
+  PASS  ...and the reason names partial coverage
+
+  vector present but its source hash no longer matches search_text:
+  PASS  a STALE vector is not coverage either
+  PASS  ...and the semantic tier is still available, so the two
+        predicates are genuinely different
+
+  end to end:
+  PASS  a link is established under full coverage
+  PASS  a re-import under PARTIAL coverage preserves it  [NOT_RECOMPUTED]
+```
+
+The two predicates are named differently on purpose:
+`normalize.semantic_tier_available()` answers *can it run*;
+`curated_concepts.semantic_recomputation_authoritative()` answers *may its
+silence delete*. Freshness is `embed_library.stale_count()` — the definition
+the loader that maintains the vectors already uses — plus a check that
+`MODEL_EMBEDDING` matches the model `embedding_provenance` pinned, because a
+query vector from a different model measures the model gap and not the phrase.
+
+### R6 — the block arrived at engines that had no contract for it
+
+`RETRIEVED_KNOWLEDGE` was delivered to E7 and E1 Pass B and defined in neither
+prompt. **Measured, it was not the exception.** Of the top-level blocks
+CLIENT_NEW composes, the number named in any prompt was:
+
+```
+  CASE_VERSION              named
+  CANONICAL_STATE           NOT named in any prompt
+  E1_PASS_A_HANDOFF         NOT named in any prompt
+  CASE_RESEARCH_QUESTIONS   NOT named in any prompt
+  NORMALIZED_CONCEPTS       NOT named in any prompt
+  E7_HANDOFF                NOT named in any prompt
+  E1_HANDOFF / E2_HANDOFF / E3_HANDOFF   NOT named as inputs
+  PRACTICE_EXPERIENCE       named (E7 only)
+  RETRIEVED_KNOWLEDGE       NOT named in any prompt
+```
+
+The runtime input contract had never been written down for anything. It is
+written now, in the build-owned Addendum A each prompt already carries — `## A5`
+(E1), `## A6` (E2), `## A7` (E3), `## A8` (E6), `## A9` (E7). The
+practitioner's specification is untouched, and the manifest confirms the
+`sections` count is unchanged for all seven prompts:
+
+```
+  engine1_prevention.md         70 sections   51,178 chars  4f9883bb65a3
+  engine2_behaviour.md          62 sections   43,710 chars  3534d02c2069
+  engine3_nutrition.md          72 sections   38,959 chars  b69eae25b620
+  engine4_progress.md           66 sections   43,504 chars  baca8ed84caa
+  engine5_communication.md      73 sections   29,777 chars  2acc29e0c5fe
+  engine6_memory.md             89 sections   40,690 chars  28223b899489
+  engine7_research_practice.md  88 sections  105,595 chars  436af579ea10
+```
+
+The regression asserts contract PRESENCE, never model wording:
+
+```
+  PASS  all 22 runtime block(s) sent are named in the receiving engine's prompt
+  PASS  ...and there were runtime blocks to check
+  PASS  RETRIEVED_KNOWLEDGE specifically reached E7 and Pass B
+  PASS  ...and NOT Pass A, which is what decides what to retrieve
+```
+
+**Teeth, proven:** deleting `## A9` from the Engine 7 prompt, regenerating the
+manifest and reloading turns it red on five blocks —
+
+```
+  FAIL  all 22 runtime block(s) sent are named ...
+        ['E7 <- CANONICAL_STATE', 'E7 <- CASE_RESEARCH_QUESTIONS',
+         'E7 <- E1_PASS_A_HANDOFF', 'E7 <- NORMALIZED_CONCEPTS',
+         'E7 <- RETRIEVED_KNOWLEDGE']
+```
+
+— and restoring it returns to green. The first attempt at that proof, editing
+`engine_prompts.content` directly, was **refused by the database**:
+
+```
+ERROR:  engine_prompts is append-only: prompt engine7_research_practice.md
+        (hash 436af579ea10) cannot be rewritten. engine_runs cites this hash
+        as the text that produced an output.
+```
+
+which is `trg_engine_prompts_append_only` working exactly as intended.
+
+### Reported, NOT closed
+
+CLIENT_FOLLOWUP's own blocks — `E4_HANDOFF`, `E6_DELTA`, `LIVE_INTERVENTIONS`,
+`FOLLOWUP_ANSWERS`, `FOLLOWUP_STRUCTURED`, `CURRENT_STATE`, `REVIEW_PERIOD` —
+have the same pre-existing gap. The regression covers CLIENT_NEW, as the review
+scoped it. `RETRIEVED_KNOWLEDGE` on the follow-up path IS covered, because E1's
+`## A5` names it and E1 is where that path sends it.
+
+### Verification, exit codes captured and checked, never behind a pipe
+
+```
+  rebuild + test_gate3_acceptance (live provider)   0    13 of 13
+  bash testing/run_all.sh                           0    ALL SUITES PASSED
+  bash testing/run_all.sh  (re-run, idempotent)     0    ALL SUITES PASSED
+  bash testing/run_bare.sh (no optional extension)  0    ALL SUITES PASSED
+```

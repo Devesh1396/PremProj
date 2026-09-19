@@ -111,7 +111,7 @@ def attach_concepts(conn, envelope_id: str, text: str,
     # AUTHORITY IS DECIDED ONCE, FOR THE WHOLE IMPORT, BEFORE ANY CARD IS
     # TOUCHED (D52a). A capability that could flip halfway would leave one
     # card recomputed and the next preserved with nothing saying so.
-    authoritative, why = CC.attachment_authority(conn, embed_call=embed_call)
+    authoritative, why = CC.semantic_recomputation_authoritative(conn, embed_call=embed_call)
 
     report = {"units": [], "refused": [], "links": 0, "unlinked_fields": [],
               "rules_fired": {}, "authoritative": authoritative,

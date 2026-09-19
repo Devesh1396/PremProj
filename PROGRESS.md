@@ -2522,6 +2522,87 @@ retries, control-block parse success, and the prompt hash of each E1 pass.
 A repair retry shows as two provider attempts and one retry, with the
 failed attempt's tokens included in the run total.
 
+## GATE 3 REVIEW ROUND 2 — availability is not authority (2026-09-19, D52b)
+
+Two final findings. Architecture, the frozen MISS, D52, D52a and migrations
+`038`/`039` unchanged; 0.82, the channel weights and `b5b2477` untouched, no
+margin rule, K10 not run, no source imported.
+
+**1. `semantic_tier_available()` WAS DOING TWO JOBS.** D52a made it the
+authority for replacing a curated link set, and it answers "can the tier
+execute?" — satisfied by **one** embedded concept. **Partial embedding
+coverage is an ordinary supported state here**: `embed_library.py` batches
+25 and reports `still_stale`. So a run that simply could not SEE a concept
+could mark itself authoritative and delete the link a complete run
+established — the same failure class as D52a, one level narrower, from a
+capability check that was true for the wrong reason.
+
+Two predicates now, deliberately not synonyms:
+`normalize.semantic_tier_available()` (can it run) and
+`curated_concepts.semantic_recomputation_authoritative()` (may its SILENCE
+delete). The second additionally requires **complete fresh coverage** —
+`embed_library.stale_count()`, the ONE freshness definition the loader
+already uses, never a second formula — and a **coherent pinned model**,
+because D34 pins one model per column and `trg_embedding_coherent` stops a
+second being WRITTEN but cannot stop a caller QUERYING with one.
+
+**GATE 2's operational behaviour is unchanged** and a test asserts it: the
+tier stays AVAILABLE in exactly the states where recomputation is refused.
+Four regressions — full coverage is authoritative; one removed vector
+leaves the tier available and the recomputation not; a stale vector
+(present, for changed text) is not coverage; a partial-coverage re-import
+preserves the link as `NOT_RECOMPUTED`.
+
+**2. `RETRIEVED_KNOWLEDGE` ARRIVED AND WAS DEFINED NOWHERE.** D52a proved
+it reaches the provider boundary; it did not prove any engine has a
+contract for using it. **Measured, it was not the exception: NONE of the
+top-level blocks CLIENT_NEW composes appeared in any prompt** — not
+`CANONICAL_STATE`, `E1_PASS_A_HANDOFF`, `E7_HANDOFF`,
+`NORMALIZED_CONCEPTS`, `CASE_RESEARCH_QUESTIONS` or any `_HANDOFF`. The
+runtime input contract had never been written down for anything.
+
+All of them now are, in the **build-owned Addendum A** each prompt already
+carries — `## A5` (E1), `## A6` (E2), `## A7` (E3), `## A8` (E6), `## A9`
+(E7). The practitioner's specification is untouched and the manifest's
+`sections` count is **unchanged for all seven prompts**, because
+`SECTION_RULE` does not count `## A`-form headings. Prompt hashes changed
+and were reloaded through the registry.
+
+E7 CASE is told: the library query has already been run and this is its
+result; `RANKING_BASIS: RELEVANCE_ONLY` is never clinical priority; use
+`ITEMS` before declaring `KNOWLEDGE_SUFFICIENT: false`; a
+`curated_strategy` is practitioner intelligence, not published evidence;
+`client_decision_logic` is professional judgement that does not need
+re-researching to be used; the three layers stay separate (§67). E1 is
+told: Pass A gets no retrieval because it decides what to retrieve; on Pass
+B `E7_HANDOFF` is the reasoning and `RETRIEVED_KNOWLEDGE` the preserved
+retrieval beside it; rank is relevance; **Engine 1 remains the
+decision-maker**.
+
+**The regression asserts contract PRESENCE, never model wording.** It
+drives the real CLIENT_NEW pipeline, captures each engine's actual
+`structured_input` keys from the real request objects, subtracts
+intake-derived fields using `intake.to_e6_input()` itself rather than a
+hand-written list, and checks the receiving engine's ACTIVE prompt row.
+**22 blocks.** Proven to have teeth by deleting `## A9`, reloading, and
+watching five go red. The append-only registry refused a direct tamper
+(`trg_engine_prompts_append_only`) — the guard working.
+
+**Reported, NOT closed:** CLIENT_FOLLOWUP's own blocks (`E4_HANDOFF`,
+`E6_DELTA`, `LIVE_INTERVENTIONS`, `FOLLOWUP_ANSWERS`,
+`FOLLOWUP_STRUCTURED`, `CURRENT_STATE`, `REVIEW_PERIOD`) have the same
+pre-existing gap. The regression covers CLIENT_NEW as the review scoped it;
+`RETRIEVED_KNOWLEDGE` on that path is covered because E1's `## A5` names it.
+
+Verified 2026-09-19, exit codes captured and checked, never behind a pipe:
+`test_gate3_acceptance` 0 on a clean rebuild, `run_all.sh` 0 twice,
+`run_bare.sh` 0.
+
+**Still true:** first run a MISS, 6 of 8. 20 units, 2 linked. 3 of 24
+profile facts. 0.82 PROVISIONAL. No vector channel for curated cards. K08
+and the curated parser put one source on a mixed page twice. K10 closed.
+20-video pilot closed.
+
 ## GATE 3 REVIEW CLOSED — the bridge is now in the runtime (2026-09-19, D52a)
 
 Four findings from an independent review of the branch. The architecture,

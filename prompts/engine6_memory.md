@@ -99,6 +99,21 @@ Individual client memory stays identifiable and client-scoped. Only de-identifie
 practice intelligence, and practice outcomes remain structurally separate from published evidence.
 There is no path in the schema that merges them.
 
+
+## A8. Runtime input blocks
+
+On an `INIT` run the orchestrator hands you the converted intake submission — its own fields, named
+as the intake schema names them — plus `CASE_VERSION` and `INTAKE_SCHEMA`.
+
+On an `UPDATE` run at the end of a cycle you additionally receive `CANONICAL_STATE` (the state you
+are updating), `NORMALIZED_CONCEPTS` (the cycle's clinical phrases resolved to canonical concepts),
+and `E1_HANDOFF`, `E2_HANDOFF` and `E3_HANDOFF` — the substantive reasoning of this cycle's
+engines, never their control blocks.
+
+`NORMALIZED_CONCEPTS` is the concept spine, not a clinical claim: a phrase resolving to a concept
+says the vocabulary was recognised, not that the finding is established. A7's practice-intelligence
+boundary and A5's client isolation both still apply.
+
 ---
 # ENGINE 6 — CASE MEMORY INTELLIGENCE
 

@@ -355,6 +355,112 @@ def main() -> int:
           str(stale_out))
 
     # ==================================================================
+    print("\n10b. AVAILABILITY IS NOT AUTHORITY: partial embedding coverage")
+
+    # The bug this closes: `semantic_tier_available()` is TRUE with ONE
+    # embedded concept, and partial coverage is an ordinary supported
+    # state here (`embed_library` batches 25 and reports `still_stale`).
+    # So a run whose resolver simply could not SEE a concept could mark
+    # itself authoritative and delete the link an earlier complete run
+    # established.
+    #
+    # Everything below drives the REAL predicates. Nothing simulates them.
+    import normalize as NZ
+    import embed_library as EL
+
+    if not preflight.have_capability(
+            conn, "vector",
+            "pgvector is absent (D15), so there is no embedding column, "
+            "`semantic_tier_available` is already False for the right "
+            "reason, and the availability/authority gap this section exists "
+            "to test cannot be constructed."):
+        pass
+    else:
+        live_ids = [r[1] for r in live]
+        saved = conn.execute(
+            """select concept_id::text, embedding::text, embedding_model,
+                      embedding_dim, embedding_source_hash
+                 from concepts where embedding is not null""").fetchall()
+
+        def restore():
+            for cid, vec, model, dim, h in saved:
+                conn.execute(
+                    "update concepts set embedding=%s::vector, "
+                    " embedding_model=%s, embedding_dim=%s, "
+                    " embedding_source_hash=%s where concept_id=%s",
+                    (vec, model, dim, h, cid))
+
+        try:
+            if not preflight.have(
+                    bool(saved), "an embedded ontology",
+                    "no live concept carries a vector, so full coverage "
+                    "cannot be established and neither half of the "
+                    "availability/authority comparison can be built. Run "
+                    "scripts/embed_library.py --table concepts."):
+                pass
+            else:
+                os.environ["LLM_API_KEY"] = "gate3-bridge-authority-probe"
+                full_ok, full_why = CC.semantic_recomputation_authoritative(conn)
+                check("with FULL, FRESH coverage a recomputation is "
+                      "authoritative", full_ok, full_why)
+                check("...and `stale_count` agrees there is nothing to embed",
+                      EL.stale_count(conn, "concepts") == 0)
+
+                # ONE concept's vector removed. Availability is untouched;
+                # authority must not be.
+                victim = saved[0][0]
+                conn.execute(
+                    "update concepts set embedding=null, "
+                    " embedding_source_hash=null where concept_id=%s",
+                    (victim,))
+                avail_ok, _ = NZ.semantic_tier_available(conn)
+                auth_ok, auth_why = CC.semantic_recomputation_authoritative(conn)
+                check("ONE missing vector still leaves the semantic tier "
+                      "AVAILABLE -- Gate 2 semantics are unchanged", avail_ok)
+                check("...but the recomputation is NOT authoritative",
+                      not auth_ok, auth_why)
+                check("...and the reason names partial coverage",
+                      "PARTIAL" in auth_why or "partial" in auth_why, auth_why)
+                restore()
+
+                # A STALE vector -- present, but for text that has changed.
+                # `embedding is not null` would call this covered; the
+                # source hash is what tells the difference.
+                conn.execute(
+                    "update concepts set embedding_source_hash=%s "
+                    " where concept_id=%s", ("0" * 64, victim))
+                stale_ok, stale_why = CC.semantic_recomputation_authoritative(conn)
+                check("a STALE vector is not coverage either: present but "
+                      "for different text", not stale_ok, stale_why)
+                check("...and the semantic tier is still available, so the "
+                      "two predicates are genuinely different",
+                      NZ.semantic_tier_available(conn)[0])
+                restore()
+
+                # ...and the whole point: a re-import under partial coverage
+                # must not delete an established link.
+                link_card(MOVEMENT, anchor_a)
+                established = CC.prior_links(conn, by_name[MOVEMENT])
+                check("a link is established under full coverage",
+                      len(established) == 1)
+                conn.execute(
+                    "update concepts set embedding=null, "
+                    " embedding_source_hash=null where concept_id=%s",
+                    (victim,))
+                auth, reason = CC.semantic_recomputation_authoritative(conn)
+                partial = CC.store_units(conn, by_name[MOVEMENT], text, [],
+                                         authoritative=auth,
+                                         authority_reason=reason)
+                check("a re-import under PARTIAL coverage preserves it",
+                      partial["status"] == CC.NOT_RECOMPUTED
+                      and CC.prior_links(conn, by_name[MOVEMENT]) == established,
+                      str(partial))
+                restore()
+        finally:
+            os.environ["LLM_API_KEY"] = ""
+            restore()
+
+    # ==================================================================
     print("\n11. RUNTIME: a real CLIENT_NEW case actually receives a curated card")
 
     # A test that calls `retrieval.py` is not proof of runtime integration.

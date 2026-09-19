@@ -63,7 +63,24 @@ def main() -> int:
     print("\nthe phase 4 pipeline, end to end on a complete intake")
     client, submission = submit_fixture(
         conn, SI.EXTERNAL_REF_COMPLETE, SI.COMPLETE_INTAKE)
-    outcome = CN.run_new_client(conn, submission)
+
+    # Every top-level key the pipeline actually hands each engine, taken
+    # from the REAL request objects rather than re-derived from a reading
+    # of `client_new.py` (V2). Used by the runtime-input-contract check
+    # further down; captured here so the pipeline runs once.
+    sent_keys: dict[str, set] = {}
+    _real_run_engine = RE.run_engine
+
+    def _capture(c, req):
+        label = req.engine + (f"_{req.pass_label}" if req.pass_label else "")
+        sent_keys.setdefault(label, set()).update((req.structured_input or {}).keys())
+        return _real_run_engine(c, req)
+
+    RE.run_engine = _capture
+    try:
+        outcome = CN.run_new_client(conn, submission)
+    finally:
+        RE.run_engine = _real_run_engine
     check("the pipeline reaches the review queue",
           outcome.status == "AWAITING_REVIEW",
           outcome.stopped_because or outcome.status)
@@ -102,6 +119,53 @@ def main() -> int:
         (outcome.cycle_id,)).fetchall()]
     check("seven engine runs are recorded against the cycle",
           engines == ["E6", "E1", "E7", "E1", "E2", "E3", "E6"], str(engines))
+
+    # ------------------------------------------------------------------
+    print("\nevery RUNTIME BLOCK CLIENT_NEW sends is named in the receiving "
+          "prompt's build-owned contract")
+
+    # D52a finding 2: `RETRIEVED_KNOWLEDGE` was physically delivered to E7
+    # and Pass B while NO prompt defined it -- the payload moved and the
+    # reasoning contract did not, which is D24's failure in the other
+    # direction. Measured at the time: it was not the exception. NONE of
+    # `CANONICAL_STATE`, `E1_PASS_A_HANDOFF`, `E7_HANDOFF`,
+    # `NORMALIZED_CONCEPTS`, `CASE_RESEARCH_QUESTIONS` or the `_HANDOFF`
+    # blocks appeared in any prompt either.
+    #
+    # A RUNTIME BLOCK is one the ORCHESTRATOR composes. The intake-derived
+    # fields Engine 6 receives on INIT are the client's own submission and
+    # are named by the intake schema, not by a prompt -- so they are
+    # subtracted using `intake.to_e6_input()` itself rather than a
+    # hand-written exclusion list that would go stale the moment the intake
+    # schema changed.
+    intake_keys = set(IN.to_e6_input(conn, submission).keys())
+    engine_of = {"E1_A": "E1", "E1_B": "E1", "E2_SINGLE": "E2",
+                 "E3_SINGLE": "E3", "E6_SINGLE": "E6", "E7_SINGLE": "E7"}
+    unnamed: list[str] = []
+    checked = 0
+    for label, keys in sorted(sent_keys.items()):
+        engine = engine_of.get(label, label.split("_")[0])
+        content = conn.execute(
+            "select content from engine_prompts "
+            " where engine=%s::engine_id and active", (engine,)).fetchone()
+        if content is None:
+            unnamed.append(f"{engine}: no active prompt row")
+            continue
+        for key in sorted(keys - intake_keys):
+            checked += 1
+            if key not in content[0]:
+                unnamed.append(f"{engine} <- {key}")
+    check(f"all {checked} runtime block(s) sent are named in the receiving "
+          "engine's prompt", not unnamed, str(unnamed))
+    # A count that could silently be zero is not a check (V2): if the spy
+    # captured nothing, the loop above passes having inspected nothing.
+    check("...and there were runtime blocks to check", checked >= 10, str(checked))
+    check("RETRIEVED_KNOWLEDGE specifically reached E7 and Pass B",
+          "RETRIEVED_KNOWLEDGE" in sent_keys.get("E7_SINGLE", set())
+          and "RETRIEVED_KNOWLEDGE" in sent_keys.get("E1_B", set()),
+          str({k: sorted(v) for k, v in sent_keys.items()}))
+    check("...and NOT Pass A, which is what decides what to retrieve",
+          "RETRIEVED_KNOWLEDGE" not in sent_keys.get("E1_A", set()))
 
     # ------------------------------------------------------------------
     print("\nEngine 4 and Engine 5 do not run (and that is the point)")

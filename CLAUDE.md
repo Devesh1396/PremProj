@@ -1376,6 +1376,73 @@ PROVIDER BOUNDARY — the request is client data and is not persisted (D28),
 so that boundary is the only honest place to look. A test that calls
 `retrieval.py` is not proof of runtime integration.
 
+### GATE 3 REVIEW ROUND 2 — availability is not authority (D52b)
+
+**`semantic_tier_available()` WAS DOING TWO JOBS.** D52a made it the authority
+for replacing a curated link set, and it answers "CAN the tier execute?" —
+satisfied by **one** embedded concept. **Partial embedding coverage is an
+ORDINARY SUPPORTED STATE here**: `embed_library.py` batches 25 and reports
+`still_stale`. So a run that simply could not SEE a concept could mark itself
+authoritative and delete a link a complete run established — the same failure
+class as D52a, one level narrower, from a capability check that was **true for
+the wrong reason**.
+
+**TWO PREDICATES, NEVER SYNONYMS.** `normalize.semantic_tier_available()` = can
+it run. `curated_concepts.semantic_recomputation_authoritative()` = may its
+SILENCE delete. The second additionally requires **complete fresh coverage** —
+`embed_library.stale_count()`, the ONE freshness definition the loader already
+uses (embedding null, hash null, or hash ≠ current `search_text`), never a
+second formula that would drift — and a **coherent pinned model**, because D34
+pins one model per column and `trg_embedding_coherent` stops a second being
+WRITTEN but cannot stop a caller QUERYING with one.
+
+**GATE 2's OPERATIONAL BEHAVIOUR IS UNCHANGED, and a test asserts it**: the
+tier stays AVAILABLE in exactly the states where recomputation is refused. Only
+the authority to DESTROY got stricter.
+
+**`RETRIEVED_KNOWLEDGE` ARRIVED AT THE ENGINES AND WAS DEFINED IN NONE.** D52a
+proved it reaches the provider boundary; that is not proof any engine has a
+contract for using it. **Measured, it was not the exception — NONE of the
+top-level blocks CLIENT_NEW composes appeared in any prompt**: not
+`CANONICAL_STATE`, `E1_PASS_A_HANDOFF`, `E7_HANDOFF`, `NORMALIZED_CONCEPTS`,
+`CASE_RESEARCH_QUESTIONS` or any `_HANDOFF`. **The runtime input contract had
+never been written down for anything.**
+
+All of them now are, in the **build-owned Addendum A** each prompt already
+carries — `## A5` (E1), `## A6` (E2), `## A7` (E3), `## A8` (E6), `## A9` (E7).
+**The practitioner's specification is untouched** (hard rule 1) and the
+manifest's `sections` count is **unchanged for all seven prompts**, because
+`SECTION_RULE` does not count `## A`-form headings. Prompt hashes changed and
+were reloaded through the registry.
+
+E7 CASE is told: **the library query has ALREADY been run and this is its
+result** — read it first; `RANKING_BASIS: RELEVANCE_ONLY` is never clinical
+priority; use `ITEMS` before declaring `KNOWLEDGE_SUFFICIENT: false` or
+`LIVE_RESEARCH_REQUIRED: true`; a `curated_strategy` is practitioner
+intelligence, **not published evidence**; `client_decision_logic` is
+professional judgement that does not need re-researching to be used; the three
+layers stay separate (§67). E1 is told: **Pass A gets no retrieval because it
+is what decides what to retrieve**; on Pass B `E7_HANDOFF` is the REASONING and
+`RETRIEVED_KNOWLEDGE` the preserved RETRIEVAL beside it, so a
+practitioner-authored field arrives verbatim rather than depending on Engine 7
+having repeated it; rank is relevance; **Engine 1 remains the decision-maker**.
+
+**THE REGRESSION ASSERTS CONTRACT PRESENCE, NEVER MODEL WORDING.** It drives
+the real CLIENT_NEW pipeline, captures each engine's actual `structured_input`
+keys from the real request objects, subtracts intake-derived fields using
+`intake.to_e6_input()` **itself** rather than a hand-written exclusion list that
+would go stale with the intake schema, and checks the receiving engine's ACTIVE
+prompt row. **22 blocks.** Proven to have teeth by deleting `## A9`, reloading,
+and watching five go red. Provider-boundary delivery is asserted separately.
+The append-only registry refused a direct tamper of the stored content
+(`trg_engine_prompts_append_only`) — the guard working.
+
+**Reported, NOT closed:** CLIENT_FOLLOWUP's own blocks (`E4_HANDOFF`,
+`E6_DELTA`, `LIVE_INTERVENTIONS`, `FOLLOWUP_ANSWERS`, `FOLLOWUP_STRUCTURED`,
+`CURRENT_STATE`, `REVIEW_PERIOD`) have the same pre-existing gap. The
+regression covers CLIENT_NEW as the review scoped it; `RETRIEVED_KNOWLEDGE` on
+that path IS covered, because E1's `## A5` names it.
+
 **The first live call to any real API in this build FAILED, and the
 failure was informative.** The actor answers HTTP 201 from a SUCCEEDED
 run and reports item-level failure in an `error` field nothing read; a

@@ -3969,3 +3969,129 @@ linked, 18 unresolved. 3 of 24 profile facts resolved. 0.82 remains
 PROVISIONAL. Curated cards are still not in the vector channel. K08 and the
 curated parser still put one source on a mixed page twice. K10 remains
 closed and the 20-video pilot remains closed.
+
+
+## D52b — Availability is not authority, and a payload that arrives is not a contract
+
+**Decided 2026-09-19**, closing the final two findings on the GATE 3 branch. The
+architecture, the frozen first-run MISS, D52, D52a and migrations `038`/`039`
+stand unchanged; 0.82, the channel weights and `b5b2477` were not touched, no
+margin rule was added, K10 was not run and no source was imported.
+
+### 1. `semantic_tier_available()` WAS DOING TWO JOBS
+
+D52a made `normalize.semantic_tier_available()` the authority for replacing a
+curated link set. It answers **"can the tier execute a query?"** and it is
+satisfied by **one** embedded concept. That is not the same question as **"is
+this run complete enough that its SILENCE may delete yesterday's link?"**
+
+**Partial embedding coverage is an ordinary supported state in this repo**, not
+an edge case: `embed_library.py` defaults to `KNOWLEDGE_BATCH_SIZE` 25 and
+reports `still_stale` precisely so a partial pass is a normal intermediate. So:
+
+```
+yesterday   269/269 embedded; `Meal-linked postprandial movement`
+            resolves to POST_MEAL_MOVEMENT; link stored
+today       25/269 fresh; the tier still runs, and the one concept the
+            phrase needed is not searchable
+result      phrase unresolved -> run marked authoritative -> valid link deleted
+```
+
+The same failure class D52a fixed, one level narrower: a capability check that
+was **true for the wrong reason**.
+
+**The two predicates are now separate and deliberately not synonyms:**
+
+| | question | satisfied by |
+|---|---|---|
+| `normalize.semantic_tier_available()` | can the tier execute? | pgvector, `MODEL_EMBEDDING`, a transport, **one** vector |
+| `curated_concepts.semantic_recomputation_authoritative()` | may this run's silence DELETE? | the above, **plus** complete fresh coverage, **plus** a coherent pinned model |
+
+**GATE 2's operational behaviour is deliberately unchanged.** `_tier_semantic`
+still searches whatever vectors exist and reports what it finds — that is the
+right answer for a resolver, and a test asserts the tier stays AVAILABLE in
+exactly the states where recomputation is refused. Only the authority to
+DESTROY is made stricter.
+
+**Freshness is `embed_library.stale_count()`, not a second formula.** Embedding
+null, `embedding_source_hash` null, or the hash not matching the current
+`search_text` (migration `023`) — the one definition the loader that actually
+maintains the vectors already uses. A second freshness rule written inside the
+importer would drift from it, which is the harness/production gap V2 is about.
+
+**A coherent pinned model is the third condition.** D34 pins one model per
+column and `trg_embedding_coherent` refuses to WRITE a second; it cannot stop a
+caller QUERYING with one. If `MODEL_EMBEDDING` names a different model than
+`embedding_provenance` holds, the query vector and the stored vectors are not
+in the same space, so a low score measures the model gap and not the phrase —
+not authority to delete anything.
+
+Four regressions, all driving the real predicates: full fresh coverage is
+authoritative; **one** removed vector leaves the tier AVAILABLE and the
+recomputation NOT authoritative; a **stale** vector (present, but for changed
+text) is not coverage either; and a re-import under partial coverage preserves
+an established link as `NOT_RECOMPUTED`.
+
+### 2. `RETRIEVED_KNOWLEDGE` ARRIVED AT SEVEN ENGINES AND WAS DEFINED IN NONE
+
+D52a delivered the block to E7 and E1 Pass B and proved it arrives at the
+provider boundary. **It did not prove any engine has a contract for using it**,
+and neither `engine7_research_practice.md` nor `engine1_prevention.md` named it.
+The payload moved while the reasoning contract did not — D24's failure in the
+other direction.
+
+**Measured, and it was not the exception.** Of the top-level blocks CLIENT_NEW
+composes, **none** appeared in any prompt: not `CANONICAL_STATE`, not
+`E1_PASS_A_HANDOFF`, not `E7_HANDOFF`, not `NORMALIZED_CONCEPTS`, not
+`CASE_RESEARCH_QUESTIONS`, not `E1_HANDOFF` / `E2_HANDOFF` / `E3_HANDOFF`. The
+runtime input contract had never been written down for anything.
+
+So all of them are written down, in the **build-owned Addendum A** each prompt
+already carries — the pattern D24 established, whose own preamble says these
+rules "govern how the engine is invoked and what context it receives". The
+practitioner's specification is not touched: `## A5` (E1), `## A6` (E2),
+`## A7` (E3), `## A8` (E6), `## A9` (E7) are appended inside the existing
+addenda, and the manifest's `sections` count is **unchanged** for all seven
+prompts because `SECTION_RULE` deliberately does not count `## A`-form
+headings.
+
+**What the E7 contract says** (CASE mode): the library query has ALREADY been
+run and this is its result, so read it first; `RANKING_BASIS: RELEVANCE_ONLY`
+is relevance, never clinical priority; use `ITEMS` before declaring
+`KNOWLEDGE_SUFFICIENT: false` or `LIVE_RESEARCH_REQUIRED: true`, and say what
+is specifically missing; a `curated_strategy` is practitioner intelligence, not
+published evidence; `client_decision_logic` is professional judgement that does
+not need re-researching to be used; the three layers (evidence, curated
+practitioner card, practice experience) stay separate per §67; and provenance
+travels with any curated field relied on.
+
+**What the E1 contract says**: Pass A receives `CASE_VERSION` and
+`CANONICAL_STATE` and nothing else — it is what decides what to retrieve, so it
+is not given the retrieval. On Pass B, `E7_HANDOFF` is Engine 7's **reasoning**
+and `RETRIEVED_KNOWLEDGE` is the **underlying retrieval preserved beside it**,
+travelling separately so a practitioner-authored field arrives verbatim rather
+than depending on Engine 7 having repeated it. Rank is relevance, not
+intervention priority. **Engine 1 remains the decision-maker.**
+
+**The regression asserts contract PRESENCE, never model wording.** It drives the
+real CLIENT_NEW pipeline, captures each engine's actual `structured_input` keys
+from the real request objects, subtracts the intake-derived fields using
+`intake.to_e6_input()` itself — never a hand-written exclusion list that would
+go stale with the intake schema — and asserts every remaining block is named in
+that engine's ACTIVE prompt row. **22 blocks checked.** Proven to have teeth by
+deleting `## A9` from the Engine 7 prompt, reloading, and watching five blocks
+go red. Provider-boundary delivery is asserted separately, in
+`test_gate3_bridge.py`.
+
+The append-only prompt registry refused an attempt to tamper with the stored
+content directly (`trg_engine_prompts_append_only`), which is the guard working;
+the proof had to be done at the file level and through the loader.
+
+### Reported, NOT closed
+
+**CLIENT_FOLLOWUP's runtime blocks are not all named.** `E4_HANDOFF`,
+`E6_DELTA`, `LIVE_INTERVENTIONS`, `FOLLOWUP_ANSWERS`, `FOLLOWUP_STRUCTURED`,
+`CURRENT_STATE` and `REVIEW_PERIOD` have the same gap, pre-existing and
+untouched here. The regression covers CLIENT_NEW, as the review scoped it.
+`RETRIEVED_KNOWLEDGE` on that path IS covered, because E1's `## A5` names it
+and E1 is where the follow-up path sends it.

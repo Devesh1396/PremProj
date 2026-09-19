@@ -46,6 +46,7 @@ from dataclasses import dataclass
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import embed_library as EL
 import normalize as NZ
 
 CARD_NAME_FIELD = "strategy_name"
@@ -291,15 +292,83 @@ NOT_RECOMPUTED = "NOT_RECOMPUTED"
 FAILED_CLOSED = "FAILED_CLOSED"
 
 
-def attachment_authority(conn, embed_call=None) -> tuple[bool, str]:
-    """Whether this run may REPLACE an existing link set.
+# AVAILABILITY IS NOT AUTHORITY, AND THE TWO MUST NOT SHARE A NAME.
+#
+#   normalize.semantic_tier_available()   CAN the tier execute a query?
+#   semantic_recomputation_authoritative() is this run COMPLETE enough
+#                                          that its SILENCE may delete
+#                                          yesterday's link?
+#
+# The first is satisfied by ONE embedded concept. The second is not, and
+# the gap between them is a live data-integrity bug in this repo, because
+# partial embedding coverage is an ORDINARY SUPPORTED STATE here:
+# `embed_library.py` defaults to batches of 25 rows and reports
+# `still_stale` precisely so a partial pass is a normal intermediate.
+#
+#     yesterday   269/269 embedded, "Meal-linked postprandial movement"
+#                 resolves to POST_MEAL_MOVEMENT, link stored
+#     today       25/269 fresh; the tier still RUNS, and the one concept
+#                 the phrase needed is not searchable
+#     result      phrase unresolved -> authoritative -> valid link deleted
+#
+# That is the same failure class the tri-state was written to stop, one
+# level narrower: a capability check that is true for the wrong reason.
+#
+# **GATE 2's behaviour is deliberately NOT changed.** `_tier_semantic`
+# still searches whatever vectors exist and reports what it finds, which
+# is the right operational answer for a resolver. Only the authority to
+# DESTROY is made stricter.
 
-    Delegates to `normalize.semantic_tier_available()` -- the same
-    predicate `_tier_semantic` itself acts on, never a second copy of its
-    conditions (V2). If the tier that produces curated links cannot run,
-    this run's silence is not evidence of anything.
+def semantic_recomputation_authoritative(conn, embed_call=None) -> tuple[bool, str]:
+    """May this run REPLACE an existing link set? Two conditions.
+
+    1. The tier can execute at all -- `normalize.semantic_tier_available()`,
+       the same predicate `_tier_semantic` itself acts on, never a second
+       copy of its conditions (V2).
+    2. Every live concept the semantic search is eligible to see carries a
+       CURRENT embedding for its CURRENT text, and the column's pinned
+       model is the one this run would query with.
+
+    Freshness is `embed_library.stale_count()`, the ONE definition of
+    "needs embedding" this repo already has -- embedding null, hash null,
+    or hash not matching `search_text` (migration `023`). A second
+    freshness formula written here would drift from the loader that
+    actually maintains the vectors, which is the harness/production gap V2
+    is about.
     """
-    return NZ.semantic_tier_available(conn, embed_call=embed_call)
+    ok, why = NZ.semantic_tier_available(conn, embed_call=embed_call)
+    if not ok:
+        return False, why
+
+    stale = EL.stale_count(conn, "concepts")
+    if stale:
+        total = conn.execute(
+            "select count(*) from concepts where status in ('SEEDED','ACTIVE')"
+        ).fetchone()[0]
+        return False, (
+            f"embedding coverage is PARTIAL: {stale} of {total} live concepts "
+            "have no current vector for their current search_text. The tier "
+            "can still run and Gate 2 still resolves on what exists, but a "
+            "phrase failing to resolve here may mean the concept was simply "
+            "not searchable -- which is not authority to delete a link an "
+            "earlier, complete run established.")
+
+    # D34/D38: one model per column, pinned at first write. If the runtime
+    # is configured to a DIFFERENT model than the column holds, the query
+    # vector and the stored vectors are not in the same space, so a low
+    # score says nothing about meaning. `trg_embedding_coherent` refuses to
+    # WRITE a second model; it cannot stop a caller QUERYING with one.
+    row = conn.execute(
+        "select embedding_model, embedding_dim from embedding_provenance "
+        " where table_name='concepts'").fetchone()
+    configured = os.environ.get("MODEL_EMBEDDING", "").strip()
+    if row and configured and row[0] != configured:
+        return False, (
+            f"the concepts column is pinned to {row[0]} and MODEL_EMBEDDING "
+            f"is {configured}: the query vector and the stored vectors are "
+            "from different models (D34), so a non-match measures the model "
+            "gap and not the phrase.")
+    return True, ""
 
 
 def prior_links(conn, curated_id: str) -> list[dict]:
