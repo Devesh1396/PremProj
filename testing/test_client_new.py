@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -72,9 +73,21 @@ def main() -> int:
     _real_run_engine = RE.run_engine
 
     def _capture(c, req):
-        label = req.engine + (f"_{req.pass_label}" if req.pass_label else "")
-        sent_keys.setdefault(label, set()).update((req.structured_input or {}).keys())
-        return _real_run_engine(c, req)
+        result = _real_run_engine(c, req)
+        # THE KEY IS THE INVOCATION AS THE RUNTIME RECORDED IT, not as the
+        # caller spelled it. `engine_runs.engine_mode` is the RESOLVED mode
+        # the `<RUNTIME_INVOCATION>` envelope carried (D27), which is the
+        # whole point: CLIENT_NEW's final Engine 6 step is NAMED
+        # "E6_UPDATE" and runs in mode REBUILD, and a check keyed on the
+        # caller's label would have agreed with the wrong one.
+        row = c.execute(
+            "select engine_mode, pass::text from engine_runs where run_id=%s",
+            (result.run_id,)).fetchone() if result.run_id else None
+        if row:
+            key = (req.engine, row[0], row[1] or "SINGLE")
+            sent_keys.setdefault(key, set()).update(
+                (req.structured_input or {}).keys())
+        return result
 
     RE.run_engine = _capture
     try:
@@ -121,51 +134,83 @@ def main() -> int:
           engines == ["E6", "E1", "E7", "E1", "E2", "E3", "E6"], str(engines))
 
     # ------------------------------------------------------------------
-    print("\nevery RUNTIME BLOCK CLIENT_NEW sends is named in the receiving "
-          "prompt's build-owned contract")
+    print("\nevery RUNTIME BLOCK is declared for the MODE AND PASS it is "
+          "actually sent in")
 
-    # D52a finding 2: `RETRIEVED_KNOWLEDGE` was physically delivered to E7
-    # and Pass B while NO prompt defined it -- the payload moved and the
-    # reasoning contract did not, which is D24's failure in the other
-    # direction. Measured at the time: it was not the exception. NONE of
-    # `CANONICAL_STATE`, `E1_PASS_A_HANDOFF`, `E7_HANDOFF`,
-    # `NORMALIZED_CONCEPTS`, `CASE_RESEARCH_QUESTIONS` or the `_HANDOFF`
-    # blocks appeared in any prompt either.
+    # D52b finding 2 delivered blocks to engines whose prompts did not name
+    # them. The first version of this check asked only `key in content` --
+    # DOES THIS WORD APPEAR ANYWHERE IN THE PROMPT -- and that is the third
+    # time in this gate a presence check stood in for a correctness check.
+    # It passed on a real contract bug: Engine 6's section declared
+    # `E1_HANDOFF` and friends for mode `UPDATE`, and CLIENT_NEW invokes
+    # Engine 6 in mode `REBUILD`. The words were all present; the contract
+    # was wrong.
     #
-    # A RUNTIME BLOCK is one the ORCHESTRATOR composes. The intake-derived
-    # fields Engine 6 receives on INIT are the client's own submission and
-    # are named by the intake schema, not by a prompt -- so they are
-    # subtracted using `intake.to_e6_input()` itself rather than a
-    # hand-written exclusion list that would go stale the moment the intake
-    # schema changed.
-    intake_keys = set(IN.to_e6_input(conn, submission).keys())
-    engine_of = {"E1_A": "E1", "E1_B": "E1", "E2_SINGLE": "E2",
-                 "E3_SINGLE": "E3", "E6_SINGLE": "E6", "E7_SINGLE": "E7"}
-    unnamed: list[str] = []
-    checked = 0
-    for label, keys in sorted(sent_keys.items()):
-        engine = engine_of.get(label, label.split("_")[0])
-        content = conn.execute(
+    # So the prompts now carry a machine-checkable declaration per
+    # invocation, and this compares SETS, not substrings:
+    #
+    #     RUNTIME_INPUT_CONTRACT E6/REBUILD = CASE_VERSION, CANONICAL_STATE, ...
+    #
+    # Before trusting a check, ask what it would still pass on. This one
+    # fails if a block arrives undeclared, if a declaration promises a block
+    # that never arrives, or if either is attached to the wrong mode.
+    DECL = re.compile(
+        r"^RUNTIME_INPUT_CONTRACT\s+(?P<engine>E\d)/(?P<mode>[A-Z_]+)"
+        r"(?:/(?P<pass>[A-Z]+))?\s*=\s*(?P<blocks>.+)$", re.M)
+
+    def declarations(engine: str) -> dict:
+        row = conn.execute(
             "select content from engine_prompts "
             " where engine=%s::engine_id and active", (engine,)).fetchone()
-        if content is None:
-            unnamed.append(f"{engine}: no active prompt row")
+        out = {}
+        if row is None:
+            return out
+        for m in DECL.finditer(row[0]):
+            key = (m.group("engine"), m.group("mode"), m.group("pass") or "SINGLE")
+            out[key] = {b.strip() for b in m.group("blocks").split(",") if b.strip()}
+        return out
+
+    # `INTAKE_PAYLOAD` is the one sentinel: Engine 6's INIT run receives the
+    # converted intake submission, whose fields are named by the intake
+    # schema and not by a prompt. It expands to what `intake.to_e6_input()`
+    # itself produces -- never a hand-written list, which would go stale the
+    # moment the intake schema changed.
+    intake_keys = set(IN.to_e6_input(conn, submission).keys())
+
+    mismatches: list[str] = []
+    for key in sorted(sent_keys):
+        engine = key[0]
+        declared = declarations(engine).get(key)
+        if declared is None:
+            mismatches.append(f"{'/'.join(key)}: NO declaration in the prompt")
             continue
-        for key in sorted(keys - intake_keys):
-            checked += 1
-            if key not in content[0]:
-                unnamed.append(f"{engine} <- {key}")
-    check(f"all {checked} runtime block(s) sent are named in the receiving "
-          "engine's prompt", not unnamed, str(unnamed))
-    # A count that could silently be zero is not a check (V2): if the spy
-    # captured nothing, the loop above passes having inspected nothing.
-    check("...and there were runtime blocks to check", checked >= 10, str(checked))
-    check("RETRIEVED_KNOWLEDGE specifically reached E7 and Pass B",
-          "RETRIEVED_KNOWLEDGE" in sent_keys.get("E7_SINGLE", set())
-          and "RETRIEVED_KNOWLEDGE" in sent_keys.get("E1_B", set()),
-          str({k: sorted(v) for k, v in sent_keys.items()}))
+        if "INTAKE_PAYLOAD" in declared:
+            declared = (declared - {"INTAKE_PAYLOAD"}) | intake_keys
+        missing = sorted(sent_keys[key] - declared)
+        extra = sorted(declared - sent_keys[key])
+        if missing:
+            mismatches.append(f"{'/'.join(key)}: sent but NOT declared {missing}")
+        if extra:
+            mismatches.append(f"{'/'.join(key)}: declared but NOT sent {extra}")
+    check(f"all {len(sent_keys)} CLIENT_NEW invocation(s) match their "
+          "declared runtime input contract exactly", not mismatches,
+          str(mismatches))
+
+    # A loop over an empty capture passes having inspected nothing (V2), and
+    # the count is hand-counted from the pipeline: E6 INIT, E1 A, E7 CASE,
+    # E1 B, E2, E3, E6 REBUILD.
+    check("...and all seven invocations were captured",
+          len(sent_keys) == 7, str(sorted("/".join(k) for k in sent_keys)))
+    check("the final Engine 6 run is REBUILD, not UPDATE -- the mismatch "
+          "this check exists to catch",
+          ("E6", "REBUILD", "SINGLE") in sent_keys
+          and ("E6", "UPDATE", "SINGLE") not in sent_keys,
+          str(sorted(k[1] for k in sent_keys if k[0] == "E6")))
+    check("RETRIEVED_KNOWLEDGE is declared for E7 CASE and E1 Pass B",
+          "RETRIEVED_KNOWLEDGE" in sent_keys.get(("E7", "CASE", "SINGLE"), set())
+          and "RETRIEVED_KNOWLEDGE" in sent_keys.get(("E1", "SINGLE", "B"), set()))
     check("...and NOT Pass A, which is what decides what to retrieve",
-          "RETRIEVED_KNOWLEDGE" not in sent_keys.get("E1_A", set()))
+          "RETRIEVED_KNOWLEDGE" not in sent_keys.get(("E1", "SINGLE", "A"), set()))
 
     # ------------------------------------------------------------------
     print("\nEngine 4 and Engine 5 do not run (and that is the point)")

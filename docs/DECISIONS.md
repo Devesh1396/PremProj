@@ -4095,3 +4095,111 @@ the proof had to be done at the file level and through the loader.
 untouched here. The regression covers CLIENT_NEW, as the review scoped it.
 `RETRIEVED_KNOWLEDGE` on that path IS covered, because E1's `## A5` names it
 and E1 is where the follow-up path sends it.
+
+
+## D52c — A contract that names the wrong mode, and the third presence check
+
+**Decided 2026-09-19.** Closing the last review finding on the GATE 3 branch.
+`b5b2477`, 0.82, the retrieval weights, the first-run MISS, K10's state,
+source coverage and the `038`/`039` architecture are all untouched.
+
+### THE BUG: the contract said UPDATE, the runtime says REBUILD
+
+D52b's Engine 6 section declared that `CANONICAL_STATE`,
+`NORMALIZED_CONCEPTS`, `E1_HANDOFF`, `E2_HANDOFF` and `E3_HANDOFF` arrive
+**"on an `UPDATE` run"**. CLIENT_NEW does not call Engine 6 in `UPDATE` there:
+
+```python
+e6_rebuild = _run(conn, outcome, "E6_UPDATE", engine="E6", mode="REBUILD",
+                  structured_input=e6_update_input)
+```
+
+The step is *named* `E6_UPDATE` and the mode is `REBUILD` — A1 already
+explains why (a delta's fields describe changes and do not map onto the
+state's fields, so the end of a new-client cycle asks for a full state). So
+the `<RUNTIME_INVOCATION>` envelope said `REBUILD` while the contract written
+to govern it said `UPDATE`. `UPDATE` belongs to CLIENT_FOLLOWUP.
+
+Corrected: A8 is now organised **by mode** — `INIT` (the converted intake
+payload), `REBUILD` (the new-client cycle's end), and `UPDATE` named as the
+follow-up path whose contract is **not** declared because that pipeline's
+blocks are not yet written down.
+
+### WHY THE NEW TEST DID NOT CATCH IT — the third presence check in this gate
+
+The D52b regression asked `if key not in content` — **does this word appear
+anywhere in the prompt?** `E1_HANDOFF` appeared, under an `UPDATE` paragraph,
+and a `REBUILD` invocation passed.
+
+That is the third time in GATE 3 a presence check stood in for a correctness
+check:
+
+| | the check | what it still passed on |
+|---|---|---|
+| first run | `if n in rank and low[0] in rank` | Strategy 3 absent → zero comparisons, suite green |
+| D52a | "the block reaches the provider boundary" | an engine with no contract for it |
+| D52b | "the name appears in the prompt" | the name attached to the wrong mode |
+
+**Before trusting a check, ask what it would still pass on. If the answer
+includes the bug it exists to prevent, the check is decorative.**
+
+### THE FIX: declarations that are compared as SETS, per invocation
+
+Each build-owned Addendum section now carries a machine-checkable line:
+
+```
+RUNTIME_INPUT_CONTRACT E6/REBUILD = CASE_VERSION, CANONICAL_STATE, NORMALIZED_CONCEPTS, E1_HANDOFF, E2_HANDOFF, E3_HANDOFF
+```
+
+**The key is the invocation as the RUNTIME RECORDED IT**, not as the caller
+spelled it: the test reads `engine_runs.engine_mode` and `pass` for each run
+(D27's stored mode — what the envelope actually carried), so a step *named*
+`E6_UPDATE` running in `REBUILD` is keyed `E6/REBUILD`. A check keyed on the
+caller's label would have agreed with the wrong one.
+
+The comparison is **set equality**, both directions. It fails when a block
+arrives undeclared, when a declaration promises a block that never arrives,
+and when either is attached to the wrong mode. All three were proven by
+breaking them:
+
+```
+moved REBUILD's declaration under UPDATE
+  FAIL  E6/REBUILD/SINGLE: NO declaration in the prompt
+dropped CASE_VERSION from E7's declaration
+  FAIL  E7/CASE/SINGLE: sent but NOT declared ['CASE_VERSION']
+added E7_HANDOFF to E2's declaration
+  FAIL  E2/SINGLE/SINGLE: declared but NOT sent ['E7_HANDOFF']
+```
+
+Seven invocations are covered — `E6/INIT`, `E1/SINGLE/A`, `E7/CASE`,
+`E1/SINGLE/B`, `E2/SINGLE`, `E3/SINGLE`, `E6/REBUILD` — and the count is
+asserted, because a loop over an empty capture passes having inspected
+nothing.
+
+**`INTAKE_PAYLOAD` is the one sentinel.** Engine 6's `INIT` run receives the
+converted intake submission, whose fields are named by the intake schema and
+not by any prompt. It expands to what `intake.to_e6_input()` itself produces
+— never a hand-written list, which would go stale the moment the intake
+schema changed.
+
+### The follow-up path: only the piece GATE 3 introduced
+
+This branch added `RETRIEVED_KNOWLEDGE` to CLIENT_FOLLOWUP's Engine 1 call,
+which runs **once** with `pass = SINGLE` — no Pass A, no Pass B, and **no
+`E7_HANDOFF`, because Engine 7 does not run on that path**. So the retrieval
+block is the only library input Engine 1 gets there, and nothing will have
+reasoned over it first. Engine 1's A5 now says exactly that, and repeats the
+three rules that matter: rank is relevance, a curated card is not published
+evidence, and Engine 1 remains the decision-maker.
+
+**No `RUNTIME_INPUT_CONTRACT` line is declared for `E1/SINGLE/SINGLE`**, and
+that is deliberate: a declaration is a COMPLETE set, and completing it means
+settling the whole follow-up contract — `E4_HANDOFF`, `E6_DELTA`,
+`LIVE_INTERVENTIONS`, `FOLLOWUP_ANSWERS`, `FOLLOWUP_STRUCTURED`,
+`CURRENT_STATE`, `REVIEW_PERIOD`. That is a pre-existing cleanup, recorded
+rather than guessed at, and the regression does not claim to cover it: it
+drives CLIENT_NEW, so every invocation it sees must be declared, and it makes
+no statement about a path it never runs.
+
+Engine 7's seven knowledge-clock modes are undeclared for the same reason —
+they are driven by the Knowledge Factory scripts, not a client pipeline.

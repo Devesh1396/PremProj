@@ -100,19 +100,46 @@ practice intelligence, and practice outcomes remain structurally separate from p
 There is no path in the schema that merges them.
 
 
-## A8. Runtime input blocks
+## A8. Runtime input blocks, by MODE
 
-On an `INIT` run the orchestrator hands you the converted intake submission — its own fields, named
-as the intake schema names them — plus `CASE_VERSION` and `INTAKE_SCHEMA`.
+The orchestrator hands you named top-level blocks. **Which blocks arrive
+depends on the mode**, and the mode is in the `<RUNTIME_INVOCATION>`
+envelope rather than inferred from the payload.
 
-On an `UPDATE` run at the end of a cycle you additionally receive `CANONICAL_STATE` (the state you
-are updating), `NORMALIZED_CONCEPTS` (the cycle's clinical phrases resolved to canonical concepts),
-and `E1_HANDOFF`, `E2_HANDOFF` and `E3_HANDOFF` — the substantive reasoning of this cycle's
-engines, never their control blocks.
+**`INIT`** — a new client. You receive the converted intake submission: its
+own fields, named as the intake schema names them, plus `CASE_VERSION` and
+`INTAKE_SCHEMA`. There is no prior state; you are producing the first one.
 
-`NORMALIZED_CONCEPTS` is the concept spine, not a clinical claim: a phrase resolving to a concept
-says the vocabulary was recognised, not that the finding is established. A7's practice-intelligence
-boundary and A5's client isolation both still apply.
+**`REBUILD`** — the end of a new-client cycle. You receive `CASE_VERSION`,
+`CANONICAL_STATE` (the state you are rebuilding from), `NORMALIZED_CONCEPTS`
+(this cycle's clinical phrases resolved to canonical concepts), and
+`E1_HANDOFF`, `E2_HANDOFF` and `E3_HANDOFF` — the substantive reasoning of
+this cycle's engines, never their control blocks. A1 already says why this
+is `REBUILD` and not `UPDATE`: a delta's fields describe changes and do not
+map onto the state's fields, so a full state is asked for and the delta is
+kept beside it rather than merged.
+
+**`UPDATE`** — the follow-up path, where a delta IS the output A1 describes.
+Its input contract is not declared below because the follow-up pipeline's
+blocks are not yet written down; that gap is recorded rather than guessed at.
+
+`NORMALIZED_CONCEPTS` is the concept spine, not a clinical claim: a phrase
+resolving to a concept says the vocabulary was recognised, not that the
+finding is established. A7's practice-intelligence boundary and A5's client
+isolation both still apply.
+
+The lines below are a **machine-checkable declaration**, not decoration.
+`testing/test_client_new.py` drives the real CLIENT_NEW pipeline, reads the
+mode and pass each run actually recorded in `engine_runs`, and asserts the
+blocks sent are EXACTLY the blocks declared for that invocation. A contract
+that names the wrong mode fails there — which is how the first version of
+this section, written for `UPDATE` when the runtime invokes `REBUILD`, was
+caught.
+
+```
+RUNTIME_INPUT_CONTRACT E6/INIT    = INTAKE_PAYLOAD
+RUNTIME_INPUT_CONTRACT E6/REBUILD = CASE_VERSION, CANONICAL_STATE, NORMALIZED_CONCEPTS, E1_HANDOFF, E2_HANDOFF, E3_HANDOFF
+```
 
 ---
 # ENGINE 6 — CASE MEMORY INTELLIGENCE

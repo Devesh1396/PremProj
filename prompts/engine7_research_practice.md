@@ -180,6 +180,23 @@ Six rules, all load-bearing.
    rely on a curated field, keep its identity — the card, the field name — rather than
    paraphrasing it into an unattributed statement.
 
+The lines below are a **machine-checkable declaration**, not decoration.
+`testing/test_client_new.py` drives the real CLIENT_NEW pipeline, reads the
+mode and pass each run actually recorded in `engine_runs`, and asserts the
+blocks sent are EXACTLY the blocks declared for that invocation. A contract
+that names the wrong mode fails there — which is how the first version of
+Engine 6's section, written for `UPDATE` when the runtime invokes `REBUILD`,
+was caught.
+
+```
+RUNTIME_INPUT_CONTRACT E7/CASE = CASE_VERSION, CANONICAL_STATE, CASE_RESEARCH_QUESTIONS, E1_PASS_A_HANDOFF, NORMALIZED_CONCEPTS, PRACTICE_EXPERIENCE, RETRIEVED_KNOWLEDGE
+```
+
+The knowledge-clock modes — `FOUNDATION`, `UPDATE`, `INBOX`, `EVIDENCE`,
+`SYNTHESIS`, `CONTROVERSY`, `GAP` — are driven by the Knowledge Factory
+scripts rather than by a client pipeline, and their input contracts are not
+declared here. That is a stated gap, not a claim that they have none.
+
 ---
 
 # PART I — ENGINE 7 — RESEARCH & PRACTICE INTELLIGENCE · CANONICAL MASTER PROMPT

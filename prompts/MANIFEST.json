@@ -6,33 +6,33 @@
   },
   {
     "file": "engine1_prevention.md",
-    "words": 7186,
-    "chars": 51178,
+    "words": 7453,
+    "chars": 53004,
     "sections": 70,
     "has_control_tag": true,
     "has_handoff_open_tag": true,
     "has_handoff_close_tag": true,
-    "sha256": "4f9883bb65a3c24e9783a5d11b7310772c546bfefadb2718fc1f0c964b82e133"
+    "sha256": "11c09ae55174bba8f9eade3d8a4537c941af7d35a01b538fbfaca611edab0781"
   },
   {
     "file": "engine2_behaviour.md",
-    "words": 6180,
-    "chars": 43710,
+    "words": 6272,
+    "chars": 44348,
     "sections": 62,
     "has_control_tag": true,
     "has_handoff_open_tag": true,
     "has_handoff_close_tag": true,
-    "sha256": "3534d02c206984c5a9e4df43e87079363b52e821031e36b725510d8aa53922f4"
+    "sha256": "4f4e31501a73e70fa124f0c186483987d2656124875f80eb7a9311a17d76fa10"
   },
   {
     "file": "engine3_nutrition.md",
-    "words": 5449,
-    "chars": 38959,
+    "words": 5541,
+    "chars": 39603,
     "sections": 72,
     "has_control_tag": true,
     "has_handoff_open_tag": true,
     "has_handoff_close_tag": true,
-    "sha256": "b69eae25b6205450c629671db71b326c6fe0d0ac8b5aff2c795dac5f164a15a2"
+    "sha256": "c2b116d59a488fb6af895d5493daf9ff1b7a650f171ab46b34aaa435cb419bb0"
   },
   {
     "file": "engine4_progress.md",
@@ -56,22 +56,22 @@
   },
   {
     "file": "engine6_memory.md",
-    "words": 5684,
-    "chars": 40690,
+    "words": 5882,
+    "chars": 42040,
     "sections": 89,
     "has_control_tag": true,
     "has_handoff_open_tag": true,
     "has_handoff_close_tag": true,
-    "sha256": "28223b8994893f79536c625aedfbdf3c00d1bb0ce3e2b89f974d33c5ab8b5f3f"
+    "sha256": "5afa7cdf419921a9031e06ababc8b221262569705a7de117d9bbffd937f0da56"
   },
   {
     "file": "engine7_research_practice.md",
-    "words": 14702,
-    "chars": 105595,
+    "words": 14828,
+    "chars": 106530,
     "sections": 88,
     "has_control_tag": true,
     "has_handoff_open_tag": true,
     "has_handoff_close_tag": true,
-    "sha256": "436af579ea10602d748f5d456031c8d86d269ae4892f85246e7147497cac74a6"
+    "sha256": "1d06bfc20ec95f479fadae830d080f521da3764f8f82c1983b4effc5b8212fe5"
   }
 ]

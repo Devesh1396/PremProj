@@ -162,6 +162,41 @@ Four rules.
    Keep the three layers distinct in your reasoning and in §63's output, exactly as A1's closing
    rule already requires for practice experience.
 
+### The follow-up path: one run, `pass = SINGLE`
+
+`CLIENT_FOLLOWUP` is a different pipeline (A1 describes the two-pass
+new-client cycle; this is not it). Engine 4 decides whether Engine 1 runs at
+all, and when it does it runs **once**, not twice — there is no Pass A and no
+Pass B, and no `PROVISIONAL_PENDING_E7` marker is available to defer behind.
+
+On that run you receive the follow-up context and Engine 4's reasoning,
+Engine 6's delta, and **`RETRIEVED_KNOWLEDGE`** — the same relevance-ranked
+library material described above, retrieved on the cycle's own normalized
+phrases. There is no `E7_HANDOFF` on this path, because Engine 7 does not
+run: the retrieval block is the only library input you get, and nothing else
+will have reasoned over it first.
+
+The three rules above hold unchanged. `RANKING_BASIS: RELEVANCE_ONLY` is
+relevance, not intervention priority; a curated practitioner card is not
+published evidence; and **Engine 1 remains the decision-maker**.
+
+The rest of that pipeline's blocks are not declared below: the follow-up
+input contract has not been written down, and guessing at it would be worse
+than recording the gap.
+
+The lines below are a **machine-checkable declaration**, not decoration.
+`testing/test_client_new.py` drives the real CLIENT_NEW pipeline, reads the
+mode and pass each run actually recorded in `engine_runs`, and asserts the
+blocks sent are EXACTLY the blocks declared for that invocation. A contract
+that names the wrong mode fails there — which is how the first version of
+Engine 6's section, written for `UPDATE` when the runtime invokes `REBUILD`,
+was caught.
+
+```
+RUNTIME_INPUT_CONTRACT E1/SINGLE/A = CASE_VERSION, CANONICAL_STATE
+RUNTIME_INPUT_CONTRACT E1/SINGLE/B = CASE_VERSION, CANONICAL_STATE, E1_PASS_A_HANDOFF, E7_HANDOFF, PRACTICE_EXPERIENCE, RETRIEVED_KNOWLEDGE
+```
+
 ---
 
 # ENGINE 1 — PREVENTION INTELLIGENCE

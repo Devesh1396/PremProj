@@ -2522,6 +2522,63 @@ retries, control-block parse success, and the prompt hash of each E1 pass.
 A repair retry shows as two provider attempts and one retry, with the
 failed attempt's tokens included in the run total.
 
+## GATE 3 REVIEW ROUND 3 — the contract named the wrong mode (2026-09-19, D52c)
+
+`b5b2477`, 0.82, the retrieval weights, the first-run MISS, K10's state,
+source coverage and the `038`/`039` architecture are untouched.
+
+**THE BUG.** D52b's Engine 6 section declared `CANONICAL_STATE`,
+`NORMALIZED_CONCEPTS` and the three `_HANDOFF` blocks as arriving "on an
+`UPDATE` run". CLIENT_NEW calls Engine 6 with `mode="REBUILD"` there — the
+step is only *named* `E6_UPDATE`, and A1 already explains why REBUILD:
+a delta's fields describe changes and do not map onto the state's fields.
+So the `<RUNTIME_INVOCATION>` envelope said REBUILD while the contract
+written to govern it said UPDATE. A8 is now organised **by mode**: `INIT`
+(converted intake payload), `REBUILD` (end of a new-client cycle), and
+`UPDATE` named as the follow-up path whose contract is deliberately NOT
+declared.
+
+**WHY THE TEST MISSED IT — the third presence check in this gate.** The
+D52b regression asked `if key not in content`: *does this word appear
+anywhere in the prompt?* `E1_HANDOFF` appeared, under an UPDATE paragraph,
+and a REBUILD invocation passed. The same shape as the first-run negative
+control (`if n in rank and low[0] in rank` → zero comparisons, green) and
+as "the block reaches the provider boundary" (→ an engine with no contract
+for it). **Before trusting a check, ask what it would still pass on. If
+the answer includes the bug it exists to prevent, the check is
+decorative.**
+
+**THE FIX.** Each build-owned Addendum carries a machine-checkable line —
+`RUNTIME_INPUT_CONTRACT E6/REBUILD = CASE_VERSION, CANONICAL_STATE, ...`.
+**The key is the invocation as the RUNTIME RECORDED IT**: the test reads
+`engine_runs.engine_mode` and `pass` (D27's stored mode, what the envelope
+carried), so a step named `E6_UPDATE` running in REBUILD is keyed
+`E6/REBUILD`. The comparison is **set equality, both directions** — it
+fails on a block sent undeclared, on a declaration promising a block that
+never arrives, and on either attached to the wrong mode. All three proven
+by breaking them. Seven invocations covered and the count asserted, because
+a loop over an empty capture passes having inspected nothing.
+
+`INTAKE_PAYLOAD` is the one sentinel: E6's INIT run receives the converted
+intake submission, whose fields the intake schema names, and it expands to
+what `intake.to_e6_input()` itself produces.
+
+**FOLLOW-UP, narrowly.** This branch added `RETRIEVED_KNOWLEDGE` to
+CLIENT_FOLLOWUP's Engine 1 call, which runs ONCE with `pass = SINGLE` and
+**no `E7_HANDOFF`, because Engine 7 does not run there** — so the retrieval
+block is the only library input, and nothing will have reasoned over it
+first. Engine 1's A5 says exactly that. **No declaration line is written
+for `E1/SINGLE/SINGLE`**: a declaration is a COMPLETE set, and completing
+it means settling the whole follow-up contract (`E4_HANDOFF`, `E6_DELTA`,
+`LIVE_INTERVENTIONS`, `FOLLOWUP_ANSWERS`, `FOLLOWUP_STRUCTURED`,
+`CURRENT_STATE`, `REVIEW_PERIOD`) — a pre-existing cleanup, recorded rather
+than guessed at. E7's seven knowledge-clock modes are undeclared for the
+same reason.
+
+Verified 2026-09-19, exit codes captured and checked, never behind a pipe:
+`test_gate3_acceptance` 0 on a clean rebuild, `run_all.sh` 0 twice,
+`run_bare.sh` 0.
+
 ## GATE 3 REVIEW ROUND 2 — availability is not authority (2026-09-19, D52b)
 
 Two final findings. Architecture, the frozen MISS, D52, D52a and migrations

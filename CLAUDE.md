@@ -1443,6 +1443,48 @@ The append-only registry refused a direct tamper of the stored content
 regression covers CLIENT_NEW as the review scoped it; `RETRIEVED_KNOWLEDGE` on
 that path IS covered, because E1's `## A5` names it.
 
+### GATE 3 REVIEW ROUND 3 — the contract named the wrong mode (D52c)
+
+**D52b's Engine 6 section said those blocks arrive "on an `UPDATE` run".
+CLIENT_NEW calls Engine 6 with `mode="REBUILD"`** — the step is only NAMED
+`E6_UPDATE`, and A1 already explains why REBUILD: a delta's fields describe
+changes and do not map onto the state's fields. The `<RUNTIME_INVOCATION>`
+envelope said REBUILD while the contract governing it said UPDATE. A8 is now
+organised BY MODE: `INIT`, `REBUILD`, and `UPDATE` named as the follow-up
+path whose contract is deliberately not declared.
+
+**THE THIRD PRESENCE CHECK IN THIS GATE.** D52b's regression asked `if key
+not in content` — *does this word appear anywhere in the prompt?*
+`E1_HANDOFF` appeared, under an UPDATE paragraph, and a REBUILD invocation
+passed. Same shape as the first-run negative control (`if n in rank and
+low[0] in rank` ran ZERO comparisons and stayed green) and as "the block
+reaches the provider boundary" (an engine with no contract for it).
+**BEFORE TRUSTING A CHECK, ASK WHAT IT WOULD STILL PASS ON. If the answer
+includes the bug it exists to prevent, the check is decorative.**
+
+**DECLARATIONS ARE COMPARED AS SETS, PER INVOCATION.** Each build-owned
+Addendum carries `RUNTIME_INPUT_CONTRACT E6/REBUILD = CASE_VERSION, ...`.
+**The key is the invocation as the RUNTIME RECORDED IT** — the test reads
+`engine_runs.engine_mode` and `pass` (D27's stored mode, what the envelope
+carried), so a step named `E6_UPDATE` running in REBUILD is keyed
+`E6/REBUILD`; a check keyed on the caller's label would have agreed with the
+wrong one. Set equality **both directions**: undeclared-but-sent,
+declared-but-not-sent, and either attached to the wrong mode. All three
+proven by breaking them. Seven invocations, and the COUNT is asserted
+because a loop over an empty capture passes having inspected nothing.
+
+`INTAKE_PAYLOAD` is the one sentinel: E6 INIT receives the converted intake
+submission, and it expands to what `intake.to_e6_input()` itself produces —
+never a hand-written list that would go stale with the intake schema.
+
+**THE FOLLOW-UP E1 RUNS ONCE, `pass = SINGLE`, AND GETS NO `E7_HANDOFF`** —
+Engine 7 does not run on that path, so `RETRIEVED_KNOWLEDGE` is the only
+library input and nothing will have reasoned over it first. E1's A5 says so.
+**No declaration line is written for it**: a declaration is a COMPLETE set,
+and completing it means settling the whole follow-up contract, which is a
+pre-existing cleanup recorded rather than guessed at. E7's seven
+knowledge-clock modes are undeclared for the same reason.
+
 **The first live call to any real API in this build FAILED, and the
 failure was informative.** The actor answers HTTP 201 from a SUCCEEDED
 run and reports item-level failure in an `error` field nothing read; a

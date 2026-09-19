@@ -670,3 +670,97 @@ scoped it. `RETRIEVED_KNOWLEDGE` on the follow-up path IS covered, because E1's
   bash testing/run_all.sh  (re-run, idempotent)     0    ALL SUITES PASSED
   bash testing/run_bare.sh (no optional extension)  0    ALL SUITES PASSED
 ```
+
+---
+
+## 13. REVIEW ROUND 3 (D52c) — the contract named the wrong mode
+
+**Sections 1–9 unchanged. The first run is still a MISS, 6 of 8.**
+
+### R7 — Engine 6's contract said UPDATE; CLIENT_NEW invokes REBUILD
+
+Measured from the real pipeline, reading the mode each run actually recorded
+in `engine_runs` rather than the caller's label for the step:
+
+```
+  E6/INIT/SINGLE     : (the converted intake payload)
+  E1/SINGLE/A        : CASE_VERSION, CANONICAL_STATE
+  E7/CASE/SINGLE     : CASE_VERSION, CANONICAL_STATE, CASE_RESEARCH_QUESTIONS,
+                       E1_PASS_A_HANDOFF, NORMALIZED_CONCEPTS,
+                       PRACTICE_EXPERIENCE, RETRIEVED_KNOWLEDGE
+  E1/SINGLE/B        : CASE_VERSION, CANONICAL_STATE, E1_PASS_A_HANDOFF,
+                       E7_HANDOFF, PRACTICE_EXPERIENCE, RETRIEVED_KNOWLEDGE
+  E2/SINGLE/SINGLE   : CASE_VERSION, CANONICAL_STATE, E1_HANDOFF
+  E3/SINGLE/SINGLE   : CASE_VERSION, CANONICAL_STATE, E1_HANDOFF, E2_HANDOFF
+  E6/REBUILD/SINGLE  : CASE_VERSION, CANONICAL_STATE, NORMALIZED_CONCEPTS,
+                       E1_HANDOFF, E2_HANDOFF, E3_HANDOFF
+```
+
+The last line is the bug: the step is *named* `E6_UPDATE` in
+`client_new.py` and runs in mode `REBUILD`, and D52b's A8 declared those
+blocks for `UPDATE`. `UPDATE` belongs to CLIENT_FOLLOWUP.
+
+### R8 — the presence check could not see it, and that is a pattern
+
+`if key not in content` asks *does this word appear anywhere in the prompt*.
+`E1_HANDOFF` appeared — under an `UPDATE` paragraph — so a `REBUILD`
+invocation passed. Third time in this gate:
+
+| | the check | what it still passed on |
+|---|---|---|
+| first run | `if n in rank and low[0] in rank` | Strategy 3 absent → zero comparisons, green |
+| D52a | the block reaches the provider boundary | an engine with no contract for it |
+| D52b | the name appears in the prompt | the name attached to the wrong mode |
+
+Replaced with a per-invocation **set equality** against a machine-checkable
+declaration carried in each build-owned Addendum:
+
+```
+RUNTIME_INPUT_CONTRACT E6/REBUILD = CASE_VERSION, CANONICAL_STATE, NORMALIZED_CONCEPTS, E1_HANDOFF, E2_HANDOFF, E3_HANDOFF
+```
+
+```
+  PASS  all 7 CLIENT_NEW invocation(s) match their declared runtime input
+        contract exactly
+  PASS  ...and all seven invocations were captured
+  PASS  the final Engine 6 run is REBUILD, not UPDATE -- the mismatch this
+        check exists to catch
+  PASS  RETRIEVED_KNOWLEDGE is declared for E7 CASE and E1 Pass B
+  PASS  ...and NOT Pass A, which is what decides what to retrieve
+```
+
+**Teeth, all three directions, each proven by breaking it:**
+
+```
+moved REBUILD's declaration under UPDATE  (the original bug, restaged)
+  FAIL  E6/REBUILD/SINGLE: NO declaration in the prompt
+
+dropped CASE_VERSION from E7's declaration
+  FAIL  E7/CASE/SINGLE: sent but NOT declared ['CASE_VERSION']
+
+added E7_HANDOFF to E2's declaration
+  FAIL  E2/SINGLE/SINGLE: declared but NOT sent ['E7_HANDOFF']
+```
+
+### R9 — the follow-up piece GATE 3 introduced, and only that
+
+CLIENT_FOLLOWUP's Engine 1 runs **once**, `pass = SINGLE`, and receives **no
+`E7_HANDOFF` because Engine 7 does not run on that path** — so
+`RETRIEVED_KNOWLEDGE` is the only library input it gets and nothing will
+have reasoned over it first. Engine 1's A5 now states that case and repeats
+the three rules: rank is relevance, a curated card is not published
+evidence, Engine 1 remains the decision-maker.
+
+**No declaration line is written for `E1/SINGLE/SINGLE`.** A declaration is
+a complete set, and completing it means settling the whole follow-up
+contract — recorded as a pre-existing gap rather than guessed at. The
+regression drives CLIENT_NEW and makes no claim about a path it never runs.
+
+### Verification, exit codes captured and checked, never behind a pipe
+
+```
+  rebuild + test_gate3_acceptance (live provider)   0
+  bash testing/run_all.sh                           0    ALL SUITES PASSED
+  bash testing/run_all.sh  (re-run, idempotent)     0    ALL SUITES PASSED
+  bash testing/run_bare.sh (no optional extension)  0    ALL SUITES PASSED
+```

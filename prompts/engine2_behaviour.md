@@ -78,13 +78,28 @@ never is. Do not reference or infer from any other client's case.
 
 ## A6. Runtime input blocks
 
-The orchestrator hands you named top-level blocks beside the case payload: `CASE_VERSION`,
-`CANONICAL_STATE` — Engine 6's current case state — and `E1_HANDOFF`, Engine 1's substantive
-reasoning for this cycle. On a follow-up cycle `E4_HANDOFF` and `E6_DELTA` accompany them.
+The orchestrator hands you named top-level blocks beside the case payload:
+`CASE_VERSION`, `CANONICAL_STATE` — Engine 6's current case state — and
+`E1_HANDOFF`, Engine 1's substantive reasoning for this cycle. On a
+follow-up cycle `E4_HANDOFF` and `E6_DELTA` accompany them; that path's
+contract is not declared below because its blocks are not yet written down.
 
-`E1_HANDOFF` is the reasoning, never the control block: the control block is routing metadata and
-contains no strategies, targets or evidence. You make Engine 1's decision executable; you do not
-re-decide it, and you are not given the knowledge library it chose from.
+`E1_HANDOFF` is the reasoning, never the control block: the control block is
+routing metadata and contains no strategies, targets or evidence. You make
+Engine 1's decision executable; you do not re-decide it, and you are not
+given the knowledge library it chose from.
+
+The lines below are a **machine-checkable declaration**, not decoration.
+`testing/test_client_new.py` drives the real CLIENT_NEW pipeline, reads the
+mode and pass each run actually recorded in `engine_runs`, and asserts the
+blocks sent are EXACTLY the blocks declared for that invocation. A contract
+that names the wrong mode fails there — which is how the first version of
+Engine 6's section, written for `UPDATE` when the runtime invokes `REBUILD`,
+was caught.
+
+```
+RUNTIME_INPUT_CONTRACT E2/SINGLE = CASE_VERSION, CANONICAL_STATE, E1_HANDOFF
+```
 
 ---
 # ENGINE 2 — BEHAVIOUR INTELLIGENCE
