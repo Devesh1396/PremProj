@@ -1200,6 +1200,38 @@ common write is a PROPOSED concept. Per-concept-neighbourhood scoping was
 rejected — a new concept has no prior relationship to any stored
 neighbourhood, which is the bug itself.
 
+**TWO HOLES IN `036`, CLOSED BY `037`** (append-only; `036` is not edited).
+
+1. **`036` DOCUMENTED THAT `embedding` BUMPS AND NEVER COMPARED IT.**
+   `embed_library.py` updates an EXISTING row's vector whenever its text
+   changed, and `_tier_semantic` ranks on that vector, so a re-embedded
+   concept became the better answer with the revision unmoved and the stale
+   row still served. **The branch is decided at MIGRATION time** — `037`
+   inspects `pg_attribute` once and compiles one function or the other —
+   because `concepts.embedding` exists only where pgvector was present at
+   `002`, and checking the capability inside the trigger would put a table
+   read on the path of every `retrieval_hits` write.
+   **A deployment that gains pgvector later gets nothing, consistently**:
+   `002` creates the column and the capability row together and no later
+   migration adds either, so vectors are simply not used. A future
+   migration that turns it on MUST rebuild `trg_ontology_concepts_upd()`,
+   and that is a TEST rather than a comment — the trigger body must mention
+   `embedding` **iff** the column exists, asserted on every floor.
+2. **"The trigger is the only thing that should ever move it" WAS NOT
+   ENFORCED.** `bump_ontology_revision()` was SECURITY DEFINER with no
+   REVOKE, and PostgreSQL grants EXECUTE to PUBLIC by default — any role
+   could invalidate the whole normalization cache on demand. **Granting
+   `phi_runtime` EXECUTE would recreate the hole**: it is exactly the role
+   that writes confirmed aliases, so it must be able to CAUSE a bump
+   without being able to ASK for one. The trigger functions are SECURITY
+   DEFINER and own the privilege; EXECUTE on the bump is revoked from
+   PUBLIC; PostgreSQL checks a trigger function's EXECUTE at CREATE TRIGGER
+   time, not at fire time, so the triggers still work. `search_path` pinned
+   to `public, pg_temp`, references schema-qualified.
+
+Raised and NOT fixed: the relation trigger bumps on a note-only edit to a
+`CONFUSABLE_DO_NOT_MERGE` row — broader than documented, safe direction.
+
 **Still not GATE 3.** `retrieval.by_concept()` reads `strategies`,
 `strategy_concepts` and `implementation_patterns` and does not reference
 `curated_strategies`. The six curated Video 1 strategies are no more

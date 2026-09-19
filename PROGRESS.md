@@ -248,6 +248,51 @@ harness*.
 
 ---
 
+## GATE 2 review 3 — two holes in 036 — 2026-09-19
+
+Migration `037` (append-only; `036` is not edited). Detail in
+`docs/evidence/gate2_semantic_tier.md` §11, decisions in D51. Both proven by
+reverting the fix; neither moves a number in the sweep.
+
+**1. `036` documented that a live concept's `embedding` changing bumps the
+revision, and the trigger never compared it.** `embed_library.py` updates
+the vector of an EXISTING row whenever its text changed, so a re-embedded
+concept could become the better semantic answer with the revision unmoved
+and the stale row still served. Reverting reproduces it exactly: revision
+`427 -> 427`, `RESOLVED cache`, zero embedding calls.
+
+The branch is decided at MIGRATION time — `pg_attribute` inspected once,
+one function or the other compiled, which one announced — because
+`concepts.embedding` exists only where pgvector was present at `002`, and
+checking the capability inside the trigger would put a table read on the
+path of every `retrieval_hits` write. A deployment that gains pgvector
+later gets nothing consistently (`002` creates column and capability
+together; no later migration adds either), and the obligation on a future
+migration that DOES add them is a **test**, not a comment: the trigger body
+must mention `embedding` iff the column exists, asserted on every floor.
+
+**2. `036` said the trigger was the only thing that could move the counter
+and did not REVOKE.** `bump_ontology_revision()` was SECURITY DEFINER and
+PUBLIC-executable — any role could invalidate the entire cache on demand.
+Granting `phi_runtime` EXECUTE would have recreated the hole, since the
+runtime is the role that writes confirmed aliases; instead the trigger
+functions became SECURITY DEFINER and own the privilege, and EXECUTE on the
+bump is revoked from PUBLIC. `search_path` pinned, references qualified.
+
+```
+phi_runtime direct bump  : REFUSED -- permission denied
+revision unchanged       : 567 -> 567
+phi_runtime may READ it  : 567
+a CONFIRMED alias by phi_runtime : 569 -> 570   <- the trigger bumped as owner
+```
+
+Raised, not fixed: the relation trigger bumps on a note-only edit to a
+confusable row. Broader than documented, safe direction.
+
+`run_all.sh` twice and `run_bare.sh`, exit codes read explicitly. On the
+bare floor `has_column`, `trigger_compares` and the capability are all
+false together.
+
 ## GATE 2 review 2 — the cache is bound to the ontology revision — 2026-09-18
 
 Migration `036`. Detail in `docs/evidence/gate2_semantic_tier.md` §10, and

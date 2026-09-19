@@ -643,3 +643,124 @@ PROVISIONAL, the committed answer key is unedited, no margin rule was
 added, and the production-relevant 49-phrase set still carries **4 known
 WRONG resolutions**. This work makes the resolver safer; it does not make
 the calibration settled, and nothing here should be read as saying it does.
+
+---
+
+## 11. Two holes in `036`, found by review (migration `037`)
+
+`036` is append-only and is not edited; `037` replaces its functions.
+
+### 11.1 The comment said `embedding` bumps. The code never compared it.
+
+`036`'s trigger set documented a live concept's `embedding` changing as a
+revision-advancing event. `trg_ontology_concepts_upd()` compared
+`canonical_name`, `canonical_key`, `concept_type`, `merged_into` and the
+status boundary — **and not `embedding`**. Documentation and implementation
+disagreed, and the implementation is what runs.
+
+It is not theoretical: `embed_library.py` updates the vector of an
+**existing** row whenever its text changed, and `_tier_semantic` ranks on
+exactly that vector. Reverting the fix reproduces the sequence:
+
+```
+revision 427 -> 427                (an existing live concept was re-embedded)
+resolve -> RESOLVED cache          (the stale answer, served)
+embedding calls: 0                 (it never looked)
+```
+
+Fixed, with the rows:
+
+```
+resolve                 : semantic -> 'demo alpha'     embedding calls=1
+revision BEFORE         : 566
+cache row BEFORE        : -> 'demo alpha' at revision 566
+CHANGE                  : only B's vector. no insert, no status, no alias, no relation
+revision AFTER          : 567
+resolve                 : semantic -> 'demo beta'      embedding calls=2 (+1)
+cache row AFTER         : -> 'demo beta' at revision 567
+```
+
+**The branch is decided at MIGRATION time, not at trigger-fire time.**
+`concepts.embedding` exists only where pgvector was present when `002` ran,
+so the function cannot reference it unconditionally — and the obvious
+alternative, asking `has_capability('vector')` inside the trigger, puts a
+table read on the path of every concept UPDATE, including the
+`retrieval_hits` write that fires on every retrieval. `037` inspects
+`pg_attribute` once and compiles one function or the other, announcing which:
+
+```
+full floor : concepts.embedding EXISTS, so a re-embedded live concept advances the revision
+bare floor : concepts.embedding is ABSENT, so the trigger does not reference it
+```
+
+Verified on both. On the bare floor `has_column`, `trigger_compares` and
+`system_capabilities.vector` are all false together.
+
+**What happens if a deployment gains pgvector later: nothing, and that is
+consistent rather than lucky.** `002` creates the column and the capability
+row together and no later migration adds either, so a database built
+without pgvector does not use vectors at all even if the extension is
+installed afterwards — `_tier_semantic` reads the capability and skips.
+Turning it on is a future migration that adds the column, updates the
+capability **and must rebuild this function**.
+
+That obligation is a test, not a comment. `test_normalization.py` asserts
+the trigger body mentions `embedding` **if and only if** the column exists,
+and it runs on every floor:
+
+```
+FAIL  the revision trigger compares `embedding` IF AND ONLY IF the column exists
+      column=True trigger_compares=False -- a migration that added the column
+      must also rebuild trg_ontology_concepts_upd()
+```
+
+So a migration that adds one without the other turns the suite red rather
+than leaving the epoch quietly blind to a re-embedding.
+
+### 11.2 "The trigger is the only thing that should ever move it" was not enforced
+
+`036` said exactly that and created `bump_ontology_revision()`
+SECURITY DEFINER with **no REVOKE**. PostgreSQL grants EXECUTE to PUBLIC by
+default, so any role could invalidate the entire normalization cache on
+demand — every phrase in the library made to cost a provider call again.
+
+Reverting the fix: `phi_runtime direct bump : SUCCEEDED`.
+
+Fixed:
+
+```
+phi_runtime direct bump  : REFUSED -- permission denied for function bump_ontology_revision
+revision unchanged       : 567 -> 567
+phi_runtime may READ it  : 567          (the resolver checks it on every cache read)
+phi_runtime writes a CONFIRMED alias (the legitimate path)
+revision                 : 569 -> 570   <- the trigger bumped as its owner
+```
+
+**Granting `phi_runtime` EXECUTE on the bump would have recreated the
+hole**, since the runtime is exactly the role that writes confirmed
+aliases — so it is exactly the role that must be able to *cause* a bump
+without being able to *ask for* one. The shape that works: the trigger
+functions become SECURITY DEFINER and own the privilege, and EXECUTE on the
+bump is revoked from PUBLIC. PostgreSQL checks EXECUTE on a trigger
+function when the **trigger is created**, not each time it fires, so
+revoking it does not stop the triggers.
+
+`search_path` is pinned to `public, pg_temp` on every one of them and every
+reference is schema-qualified — a SECURITY DEFINER function resolving
+`ontology_revision` through a caller-controlled path is how a definer
+function gets pointed at somebody else's table, and neither measure alone
+is load-bearing.
+
+### Not changed, and named as such
+
+The relation trigger still bumps on any UPDATE to a
+`CONFUSABLE_DO_NOT_MERGE` row, including a note-only edit. That is broader
+than the documented set and invalidates more cache than strictly necessary.
+It fails in the safe direction, the review agreed it is not a blocker, and
+narrowing it is a change with its own measurement to do.
+
+**And nothing here touches the calibration.** `SEMANTIC_THRESHOLD` is
+0.82, the committed D47 answer key is unedited, no margin rule exists, and
+the production-relevant 49-phrase set still carries **4 known WRONG
+resolutions**. GATE 2 is engineering-complete and calibration-provisional,
+and those are different claims.

@@ -789,6 +789,177 @@ def gate2_epoch(conn, check, concept) -> None:
                        (PFX + "EPOCH_%",)).fetchone()[0] == 0)
 
 
+
+def gate2_revision_integrity(conn, check, concept) -> None:
+    """The two holes review found in 036, and the drift check for both.
+
+    The schema-agreement check runs on EVERY floor, deliberately. It is the
+    mechanism that stops the vector branch quietly rotting: the trigger body
+    must mention `embedding` if and only if the column exists, so a future
+    migration that adds the column without rebuilding the trigger turns this
+    red rather than leaving the epoch blind to a re-embedding.
+    """
+    import psycopg
+    from test_case_events import _role_password, _with_user
+
+    print("\nGATE 2 revision integrity: the trigger must match the schema it was compiled against")
+
+    has_column = conn.execute(
+        """select exists (select 1 from pg_attribute
+                           where attrelid = 'public.concepts'::regclass
+                             and attname = 'embedding' and not attisdropped)"""
+    ).fetchone()[0]
+    mentions = conn.execute(
+        """select prosrc like '%%o.embedding IS DISTINCT FROM n.embedding%%'
+             from pg_proc where proname = 'trg_ontology_concepts_upd'"""
+    ).fetchone()[0]
+    check("the revision trigger compares `embedding` IF AND ONLY IF the "
+          "column exists",
+          has_column == mentions,
+          f"column={has_column} trigger_compares={mentions} -- a migration "
+          "that added the column must also rebuild trg_ontology_concepts_upd()")
+
+    print("\nthe counter is trigger-only, and that is enforced not asserted")
+
+    runtime_dsn = _with_user(os.environ["DATABASE_URL"], "phi_runtime",
+                             _role_password("POSTGRES_RUNTIME_PASSWORD"))
+    try:
+        runtime = psycopg.connect(runtime_dsn, autocommit=True)
+    except psycopg.Error as exc:
+        preflight.skip("a phi_runtime connection",
+                       f"the privilege half of this block cannot run: {exc}")
+        runtime = None
+
+    if runtime is not None:
+        with runtime:
+            before = conn.execute("select current_ontology_revision()").fetchone()[0]
+            refused = None
+            try:
+                runtime.execute("select bump_ontology_revision('c3test direct call')")
+            except psycopg.Error as exc:
+                refused = str(exc)
+            check("phi_runtime may NOT invoke bump_ontology_revision() directly",
+                  refused is not None, "the call succeeded")
+            check("...and it is refused on PERMISSION, not by accident",
+                  refused is not None and "permission denied" in refused.lower(),
+                  str(refused)[:120])
+            check("...so the revision did not move",
+                  conn.execute("select current_ontology_revision()").fetchone()[0] == before)
+
+            check("...while phi_runtime CAN still read the revision, which the "
+                  "resolver does on every cache read",
+                  runtime.execute("select current_ontology_revision()").fetchone()[0]
+                  == before)
+
+            # The legitimate path: the runtime writes a confirmed alias the
+            # way `_attach_alias` does, and the TRIGGER bumps as its owner.
+            host = concept("REV_HOST", "c3test revision host")
+            before = conn.execute("select current_ontology_revision()").fetchone()[0]
+            wrote = None
+            try:
+                runtime.execute(
+                    """insert into concept_aliases
+                         (concept_id, alias_text, method, confidence, confirmed)
+                       values (%s,'c3test runtime confirmed alias','DETERMINISTIC',1.0,true)""",
+                    (host,))
+                wrote = True
+            except psycopg.Error as exc:
+                wrote = str(exc)
+            if wrote is True:
+                check("a CONFIRMED ALIAS written by phi_runtime still advances "
+                      "the revision -- the trigger reaches the bump as its owner",
+                      conn.execute("select current_ontology_revision()").fetchone()[0] > before,
+                      f"still {before}")
+                conn.execute("delete from concept_aliases where alias_text=%s",
+                             ("c3test runtime confirmed alias",))
+            else:
+                preflight.skip("phi_runtime INSERT on concept_aliases",
+                               f"the legitimate-path half cannot run: {wrote}")
+            conn.execute("delete from concepts where canonical_key=%s", (PFX + "REV_HOST",))
+
+    # ------------------------------------------------------------------
+    print("\nre-embedding an EXISTING live concept advances the revision")
+
+    if not preflight.have_capability(conn, "vector"):
+        return
+    if not preflight.have_env(
+            "MODEL_EMBEDDING",
+            "the embedding-only change cannot be exercised, so the check that "
+            "a re-embedded concept invalidates the cache does not run"):
+        return
+
+    dims = conn.execute("select embedding_dim()").fetchone()[0]
+    pinned = conn.execute(
+        "select embedding_model from concepts where embedding is not null "
+        "limit 1").fetchone()
+    model = pinned[0] if pinned else "c3test-fixture-embedding"
+
+    def place(key, name, angle):
+        cid = concept(key, name)
+        conn.execute(
+            """update concepts set embedding = %s::vector, embedding_model = %s,
+                      embedding_dim = %s, embedding_source_hash = %s
+                where concept_id = %s""",
+            (str(unit(angle, dims)), model, dims, key.lower(), cid))
+        return cid
+
+    calls = []
+
+    def counted(_model, _text, d):
+        calls.append(_text)
+        return unit(0.0, d)
+
+    phrase = "c3test a phrase answered by whichever vector is nearer"
+    conn.execute("delete from normalization_cache where phrase_norm=norm_phrase(%s)",
+                 (phrase,))
+    conn.execute("delete from concept_proposals where raw_phrase=%s", (phrase,))
+    a = place("REV_A", "c3test revision alpha", 10.0)   # cos 0.985
+    b = place("REV_B", "c3test revision beta", 40.0)    # cos 0.766, below the floor
+
+    r1 = NZ.resolve(conn, phrase, llm=None, embed_call=counted)
+    check("the phrase resolves to the nearer of two EXISTING live concepts",
+          r1.decision == "RESOLVED" and r1.concept_ids == [a], repr(r1))
+    rev_before = conn.execute("select current_ontology_revision()").fetchone()[0]
+    cached_before = conn.execute(
+        """select concept_ids, ontology_revision from normalization_cache
+            where phrase_norm = norm_phrase(%s)""", (phrase,)).fetchone()
+    check("...and is cached at the current revision",
+          cached_before is not None and cached_before[1] == rev_before,
+          str(cached_before))
+
+    # THE ONLY CHANGE: an existing live concept's vector. No insert, no
+    # status change, no alias, no relation. Every check 036 had is satisfied.
+    conn.execute("update concepts set embedding = %s::vector where concept_id = %s",
+                 (str(unit(0.0, dims)), b))
+    rev_after = conn.execute("select current_ontology_revision()").fetchone()[0]
+    check("RE-EMBEDDING AN EXISTING LIVE CONCEPT ADVANCES THE REVISION",
+          rev_after > rev_before,
+          f"{rev_before} -> {rev_after}; 036 documented this and never compared it")
+
+    n = len(calls)
+    r2 = NZ.resolve(conn, phrase, llm=None, embed_call=counted)
+    check("...so the stale answer is not served from cache",
+          r2.method != "cache", repr(r2))
+    check("...and the live resolver returns the newly better concept",
+          r2.concept_ids == [b], repr(r2))
+    check("...having paid exactly one embedding call to find out",
+          len(calls) == n + 1, f"{len(calls) - n} call(s)")
+    check("...and the row is rewritten at the new revision",
+          conn.execute(
+              """select ontology_revision from normalization_cache
+                  where phrase_norm = norm_phrase(%s)""",
+              (phrase,)).fetchone()[0] == rev_after)
+
+    conn.execute("delete from normalization_cache where phrase_norm=norm_phrase(%s)",
+                 (phrase,))
+    conn.execute("delete from concept_proposals where raw_phrase=%s", (phrase,))
+    for key in ("REV_A", "REV_B"):
+        conn.execute("delete from concepts where canonical_key=%s", (PFX + key,))
+    check("the revision fixtures do not outlive the block",
+          conn.execute("select count(*) from concepts where canonical_key like %s",
+                       (PFX + "REV_%",)).fetchone()[0] == 0)
+
+
 def main() -> int:
     conn = psycopg.connect(os.environ["DATABASE_URL"], autocommit=True)
 
@@ -1009,6 +1180,7 @@ def main() -> int:
     gate2(conn, check, concept)
     gate2_review(conn, check, concept)
     gate2_epoch(conn, check, concept)
+    gate2_revision_integrity(conn, check, concept)
 
     print("\nan Engine 1 Pass A phrase list resolves end to end")
     results = NZ.resolve_all(conn, [

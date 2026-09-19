@@ -3549,6 +3549,61 @@ have to be kept in agreement and the one they replace is not expensive.
 written, because a confirmed alias advances the revision and caching first
 would stamp the row with a revision this same call then invalidated.
 
+### Two holes in `036`, found by review — migration `037`
+
+`036` is append-only and is not edited; `037` replaces its functions. Each
+fix is proven by reverting it and watching the suite go red, and neither
+moves a number in the sweep.
+
+**1. The comment said `embedding` bumps. The code never compared it.**
+`036` documented a live concept's `embedding` changing as revision-advancing
+and `trg_ontology_concepts_upd()` compared everything except that. Not
+theoretical: `embed_library.py` updates the vector of an EXISTING row
+whenever its text changed, and `_tier_semantic` ranks on exactly that
+vector, so a re-embedded concept could become the better answer with the
+revision unmoved and the stale row still served. Reverting reproduces it —
+`revision 427 -> 427`, the cache serving the old concept, zero embedding
+calls.
+
+**The branch is decided at MIGRATION time.** `concepts.embedding` exists
+only where pgvector was present when `002` ran, so the function cannot
+reference it unconditionally — and the obvious alternative, asking
+`has_capability('vector')` inside the trigger, puts a table read on the
+path of every concept UPDATE including the `retrieval_hits` write that
+fires on every retrieval. `037` inspects `pg_attribute` once and compiles
+one function or the other, announcing which. Verified on both floors.
+
+**A deployment that gains pgvector later gets nothing, consistently.**
+`002` creates the column and the capability row together and no later
+migration adds either, so a database built without pgvector does not use
+vectors at all even if the extension appears afterwards. Turning it on is a
+future migration that adds the column, updates the capability AND rebuilds
+this function — and that obligation is a TEST, not a comment:
+`test_normalization.py` asserts the trigger body mentions `embedding` if
+and only if the column exists, on every floor, so adding one without the
+other turns the suite red.
+
+**2. "The trigger is the only thing that should ever move it" was not
+enforced.** `036` said exactly that and created `bump_ontology_revision()`
+SECURITY DEFINER with no REVOKE; PostgreSQL grants EXECUTE to PUBLIC by
+default, so any role could invalidate the whole normalization cache on
+demand — every phrase in the library made to cost a provider call again.
+
+**Granting `phi_runtime` EXECUTE would have recreated the hole**: the
+runtime is exactly the role that writes confirmed aliases, so it is exactly
+the role that must be able to CAUSE a bump without being able to ASK for
+one. The shape that works: the trigger functions become SECURITY DEFINER
+and own the privilege, and EXECUTE on the bump is revoked from PUBLIC.
+PostgreSQL checks EXECUTE on a trigger function when the TRIGGER IS
+CREATED, not each time it fires, so revoking it does not stop the triggers.
+`search_path` is pinned to `public, pg_temp` on every one and every
+reference is schema-qualified; neither alone is load-bearing.
+
+**Left broader than documented, deliberately:** the relation trigger bumps
+on any UPDATE to a `CONFUSABLE_DO_NOT_MERGE` row, including a note-only
+edit. It invalidates more cache than necessary and fails in the safe
+direction; narrowing it is a change with its own measurement to do.
+
 ### Calibration is not solved, and this did not solve it
 
 `034`–`036` make the resolver harder to bypass. **They move no number in
