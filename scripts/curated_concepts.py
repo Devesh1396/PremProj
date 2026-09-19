@@ -247,13 +247,84 @@ def resolve_units(conn, units: list[Unit], embed_call=None) -> list[dict]:
     return out
 
 
-def store_units(conn, curated_id: str, source_text: str,
-                resolved: list[dict]) -> int:
-    """Replace this card's links with the ones that RESOLVED.
+# ---------------------------------------------------------------------
+# RECOMPUTATION IS TRI-STATE, AND ONLY ONE STATE MAY DELETE
+# ---------------------------------------------------------------------
+#
+# The first version deleted every link for a card and rewrote whatever
+# this run resolved. That is safe only if every run is equally capable,
+# and this build's runs are NOT: the semantic tier is the only tier that
+# answers a curated phrase, and it is inert without pgvector, without
+# MODEL_EMBEDDING, without a credential or with nothing embedded -- which
+# is exactly the configuration the VPS runs on purpose.
+#
+# So a re-import on a less capable machine would have turned a verified
+# link set into zero links and reported it as a successful import. A
+# MISSING OPTIONAL CAPABILITY MUST NEVER DEGRADE KNOWLEDGE THAT WAS
+# ALREADY ESTABLISHED.
+#
+#   RECOMPUTED       the resolver could reach every tier, so what it did
+#                    not resolve genuinely does not resolve. Authoritative:
+#                    the old link set is replaced, and a link that no
+#                    longer resolves is correctly removed.
+#   FIRST_ATTACHMENT no prior links exist, so nothing can be lost. What
+#                    this run found is written even degraded, and a later
+#                    authoritative run replaces it.
+#   NOT_RECOMPUTED   prior links exist and the resolver could not reach
+#                    the tier that produced them. Nothing is touched and
+#                    the reason is reported.
+#   FAILED_CLOSED    prior links exist, cannot be authoritatively
+#                    recomputed, AND no longer sit on the text they name.
+#                    Retaining them would keep a span pointing at moved
+#                    characters, which is the D48 shape exactly, so they
+#                    are DELETED rather than kept. Failing closed loses a
+#                    link; retaining would fabricate provenance.
+#
+# The staleness test is the containment check itself, applied to what is
+# already stored -- not a content hash kept in step somewhere. If every
+# prior link still IS its claimed slice of the source, the text has not
+# moved under it.
 
-    Verification happens BEFORE the delete, so a source whose spans have
-    drifted leaves the previous links intact rather than wiping them and
-    writing nothing.
+RECOMPUTED = "RECOMPUTED"
+FIRST_ATTACHMENT = "FIRST_ATTACHMENT"
+NOT_RECOMPUTED = "NOT_RECOMPUTED"
+FAILED_CLOSED = "FAILED_CLOSED"
+
+
+def attachment_authority(conn, embed_call=None) -> tuple[bool, str]:
+    """Whether this run may REPLACE an existing link set.
+
+    Delegates to `normalize.semantic_tier_available()` -- the same
+    predicate `_tier_semantic` itself acts on, never a second copy of its
+    conditions (V2). If the tier that produces curated links cannot run,
+    this run's silence is not evidence of anything.
+    """
+    return NZ.semantic_tier_available(conn, embed_call=embed_call)
+
+
+def prior_links(conn, curated_id: str) -> list[dict]:
+    rows = conn.execute(
+        """select link_id::text, concept_id::text, source_phrase,
+                  source_start, source_end, field_name, rule_id
+             from curated_strategy_concepts where curated_id=%s
+            order by source_start""", (curated_id,)).fetchall()
+    keys = ("link_id", "concept_id", "source_phrase", "source_start",
+            "source_end", "field_name", "rule_id")
+    return [dict(zip(keys, r)) for r in rows]
+
+
+def store_units(conn, curated_id: str, source_text: str,
+                resolved: list[dict], *, authoritative: bool,
+                authority_reason: str = "") -> dict:
+    """Write this card's links, or refuse to and say why.
+
+    Verification happens BEFORE anything is deleted, so a source whose
+    spans have drifted leaves the previous links intact rather than wiping
+    them and writing nothing.
+
+    Returns the tri-state report. The caller reports it; it is never
+    reduced to a count, because "2 links" after a degraded re-import and
+    "2 links" after an authoritative one are different facts.
     """
     keep = [r for r in resolved if r["concept_id"]]
     problems = verify(source_text, [r["unit"] for r in keep])
@@ -261,6 +332,33 @@ def store_units(conn, curated_id: str, source_text: str,
         raise RuntimeError(
             "concept unit(s) do not match the source span they claim, so "
             "nothing was stored:\n  " + "\n  ".join(problems))
+
+    existing = prior_links(conn, curated_id)
+
+    if not authoritative and existing:
+        stale = [l for l in existing
+                 if source_text[l["source_start"]:l["source_end"]]
+                 != l["source_phrase"]]
+        if stale:
+            conn.execute(
+                "delete from curated_strategy_concepts where curated_id=%s",
+                (curated_id,))
+            return {"status": FAILED_CLOSED, "written": 0,
+                    "retained": 0, "removed": len(existing),
+                    "reason": (
+                        f"{len(stale)} of {len(existing)} existing link(s) no "
+                        "longer sit on the text they name, and this run "
+                        f"cannot authoritatively recompute them ({authority_reason}). "
+                        "Stale spans are deleted rather than retained: a range "
+                        "that resolves cleanly to the wrong characters is worse "
+                        "than a missing link (D48).")}
+        return {"status": NOT_RECOMPUTED, "written": 0,
+                "retained": len(existing), "removed": 0,
+                "reason": (
+                    f"{authority_reason} -- the tier that produced these links "
+                    "could not run, so this run's failure to resolve them is "
+                    "not evidence that they no longer resolve. "
+                    f"{len(existing)} existing link(s) preserved unchanged.")}
 
     conn.execute("delete from curated_strategy_concepts where curated_id=%s",
                  (curated_id,))
@@ -277,4 +375,9 @@ def store_units(conn, curated_id: str, source_text: str,
             (curated_id, r["concept_id"], u.rule_id, u.field_name, u.phrase,
              u.source_start, u.source_end, r["tier"], r["score"]))
         written += 1
-    return written
+    return {"status": RECOMPUTED if authoritative else FIRST_ATTACHMENT,
+            "written": written, "retained": 0, "removed": len(existing),
+            "reason": "" if authoritative else (
+                f"{authority_reason} -- written anyway because this card had "
+                "no prior links, so nothing established could be lost. A "
+                "later authoritative run replaces this.")}

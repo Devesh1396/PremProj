@@ -442,3 +442,105 @@ of skipping" shape V3 exists to stop, introduced by this suite and caught
 by the floor that exists for it. Fixed by checking
 `preflight.have_capability(conn, "vector")` FIRST, before any query that
 names the column. `run_bare.sh` green afterwards.
+
+---
+
+## 11. REVIEW ROUND (D52a) — what changed after the first run, and what did not
+
+An independent review of the branch raised three correctness issues and one
+verification gap. **Sections 1–9 above are unchanged. The first run is still
+a MISS, 6 of 8.** No retrieval score was retuned and `b5b2477` was not
+edited.
+
+### R1 — GATE 3 was not in the runtime
+
+`retrieval.py` was imported by no script outside the suites, so the six
+curated strategies were retrievable and nothing retrieved them. Measured
+before the fix: `client_new.py`'s E7 `structured_input` held
+`CASE_RESEARCH_QUESTIONS`, `E1_PASS_A_HANDOFF`, `NORMALIZED_CONCEPTS` and
+`PRACTICE_EXPERIENCE` — no knowledge.
+
+After: a `RETRIEVE` step between `NORMALIZE` and `E7`, and the block
+verified at the PROVIDER BOUNDARY on a real `client_new.run_new_client()`
+run, which is where what-was-actually-sent can be read (the request is
+client data and is not persisted, D28):
+
+```
+  PASS  RETRIEVE runs between NORMALIZE and E7 in the real pipeline
+  PASS  E7 was sent a RETRIEVED_KNOWLEDGE block
+  PASS  ...labelled RELEVANCE_ONLY
+  PASS  ...that asked for knowledge objects, not vocabulary
+  PASS  ...carrying a curated Video 1 card BY NAME
+  PASS  ...with client_decision_logic as its own named field, not prose in a summary
+  PASS  ...and the practitioner's own words inside it
+  PASS  ...traceable to the preserved raw file
+  PASS  Pass B receives E7's REASONING over that retrieval   [SENT-E7-CASE-STRATEGY]
+  PASS  ...and the retrieval block beside it
+  PASS  Pass A is NOT given the retrieval: it is what decides what to retrieve
+  PASS  E2 and E3 reason over E1's decision, not over the library
+```
+
+In that run the curated cards arrive through **full text, not the concept
+spine** — the fixture's Pass A phrases do not resolve to K1 concepts
+without the semantic tier, which is inert there. The bridge has two
+channels and this is the one that works with no provider at all.
+
+**n8n parity, answered rather than left open:** `workflows/run_engine.json`
+holds one workflow, `RUN_ENGINE`, which takes `STRUCTURED_INPUT` from its
+caller and constructs no CASE payload; there is no other workflow file in
+the repository. Python and n8n cannot diverge today because only Python
+assembles the E7 input. The obligation transfers to the unwritten n8n
+CLIENT_NEW and is recorded in `PROGRESS.md` *Known gaps*.
+
+### R2 — a weaker re-import could erase valid links
+
+Reproduced before the fix: a capable import wrote 2 links; the same source
+re-imported with the semantic tier unavailable wrote 0 and **deleted both**,
+reporting a successful import.
+
+After, measured by `test_gate3_bridge.py` sections 8–10:
+
+```
+  PASS  there are links to lose                                  (2)
+  PASS  a degraded re-import preserves every link, identity and span
+  PASS  ...and reports NOT_RECOMPUTED for the cards that had links
+  PASS  ...with a reason naming what was unavailable
+  PASS  ...and the card is still retrievable afterwards
+  PASS  an authoritative run with nothing resolved removes the link
+  PASS  ...and the card stops being retrievable by that concept
+  PASS  a link that no longer sits on the text it names is DELETED, not kept,
+        when it cannot be recomputed
+```
+
+The second of those is what stops the first passing on a store that simply
+never deletes anything.
+
+### R3 — the negative control could pass vacuously
+
+`if n in rank and low[0] in rank: check(...)` executed **zero** comparisons
+on the first run, because Strategy 3 was absent — and the suite could still
+have exited 0 with its negative control never once tested. Presence is now
+asserted first as its own failable check, and the comparisons are counted:
+
+```
+  PASS  the negative control (Strategy 3) is ON the page, so its rank can be
+        measured at all
+  PASS  Strategy 3 does not outrank Strategy 1 / 4 / 6 / 2 / 5
+  PASS  ...and all 5 negative-control comparisons actually executed
+```
+
+### R4 — no GATE 3 regression ran in ordinary CI
+
+`testing/test_gate3_bridge.py`, deterministic and provider-free, 40 checks
+across 11 sections, green on every floor. It receives established K1
+concept ids and **manufactures no semantic corpus**; nothing in it says
+anything about 0.82.
+
+### Verification, exit codes captured and checked, never behind a pipe
+
+```
+  rebuild + test_gate3_acceptance (live provider)   0    13 of 13
+  bash testing/run_all.sh                           0    ALL SUITES PASSED
+  bash testing/run_all.sh  (re-run, idempotent)     0    ALL SUITES PASSED
+  bash testing/run_bare.sh (no optional extension)  0    ALL SUITES PASSED
+```

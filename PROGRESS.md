@@ -2522,6 +2522,85 @@ retries, control-block parse success, and the prompt hash of each E1 pass.
 A repair retry shows as two provider attempts and one retry, with the
 failed attempt's tokens included in the run total.
 
+## GATE 3 REVIEW CLOSED — the bridge is now in the runtime (2026-09-19, D52a)
+
+Four findings from an independent review of the branch. The architecture,
+the frozen MISS, D52 and migrations `038`/`039` are unchanged; no retrieval
+score was retuned and `b5b2477` was not edited.
+
+**1. GATE 3 WAS NOT IN THE RUNTIME.** `retrieval.py` was imported by no
+script outside the suites. `client_new.py` handed Engine 7
+`NORMALIZED_CONCEPTS` and **no knowledge at all**, so a real CLIENT_NEW
+case could not consume the six curated strategies this branch made
+retrievable, and the post-first-run `kinds` fix existed only inside the
+acceptance test. `retrieval.case_knowledge()` is now the one assembly both
+client pipelines call; CLIENT_NEW gained a `RETRIEVE` step between
+`NORMALIZE` and `E7`. `CASE_KINDS` is stated by the caller, never inherited
+from the mixed default. The query is Pass A's own phrases and research
+questions — identity-free by construction. A curated card is EXPANDED, not
+flattened: every preserved field with its provenance and byte range, so
+`client_decision_logic` stays its own field. `RANKING_BASIS:
+RELEVANCE_ONLY` is a field on the block, not a caption. Pass B gets
+`E7_HANDOFF` **and** the block; Pass A, E2 and E3 correctly do not.
+**CLIENT_FOLLOWUP was wired too** — its normalization comment said "an
+unnormalized phrase is a strategy nothing will retrieve" and nothing
+retrieved.
+
+**n8n PARITY — ANSWERED, not left open.** `workflows/run_engine.json` holds
+one workflow, `RUN_ENGINE`; it takes `STRUCTURED_INPUT` from its caller and
+executes one engine, constructing no CASE payload. There is no other
+workflow file in the repository. **Python and n8n cannot disagree today
+about what Engine 7 receives, because only Python assembles it.** The
+obligation transfers to whoever writes the n8n CLIENT_NEW: it must build
+the same E7 input including `RETRIEVED_KNOWLEDGE`, under the
+two-implementations-one-contract treatment of D26/D31. Listed under *Known
+gaps*.
+
+**2. A LESS CAPABLE RE-IMPORT COULD ERASE VERIFIED LINKS.**
+`store_units()` deleted every link and rewrote what that run resolved —
+safe only if every run is equally capable, and the semantic tier is inert
+on the VPS **by design**. Recomputation is now four-state: `RECOMPUTED`
+(authoritative, may delete), `FIRST_ATTACHMENT` (nothing to lose),
+`NOT_RECOMPUTED` (preserved untouched, reason reported), `FAILED_CLOSED`
+(prior links no longer sit on the text they name, so they are deleted
+rather than kept). **Only an authoritative recomputation may delete**, and
+authority is `normalize.semantic_tier_available()` — the same predicate
+`_tier_semantic` acts on, extracted so there is ONE implementation.
+Authority is decided once per import, before any card is touched. The
+staleness test is the containment check itself, not a hash kept in step.
+
+**3. THE NEGATIVE CONTROL COULD PASS VACUOUSLY.** `if n in rank and low[0]
+in rank` executed **zero** comparisons on the first run and the suite could
+still have exited 0. Presence is now its own failable check and the
+comparisons are COUNTED, so a silent zero is impossible.
+
+**4. NO GATE 3 REGRESSION RAN IN ORDINARY CI.**
+`testing/test_gate3_bridge.py` is deterministic, provider-free and runs on
+every floor. **GATE 2 owns phrase→concept; GATE 3 owns established
+concept→curated knowledge.** It RECEIVES K1 concept ids and **manufactures
+no semantic corpus** — fabricating vectors would be inventing GATE 2's
+answer and then testing it. Only the phrase→concept step is supplied;
+units, spans, verification and the insert are the production path. It
+covers the concept channel, the kinds filter, rank with a fixture that can
+tell right from wrong (and asserts the two cards do not merely TIE),
+the negative control, Strategy 6's field preservation, the full
+query→concept→link→card→field→byte-span trace, both halves of the
+tri-state, and a RUNTIME section that runs the real
+`client_new.run_new_client()` and reads what was actually sent to each
+engine at the provider boundary — the request is client data and is not
+persisted (D28), so the boundary is the only honest place to look.
+
+Verified 2026-09-19, exit codes captured and checked, never behind a pipe:
+`test_gate3_acceptance` 0 on a clean rebuild (13 of 13, all five
+negative-control comparisons executed), `run_all.sh` 0 twice, `run_bare.sh`
+0.
+
+**Still true and unchanged:** the first run is a MISS, 6 of 8. 20 curated
+units, 2 linked, 18 unresolved. 3 of 24 profile facts resolved. 0.82
+PROVISIONAL. No vector channel for curated cards. K08 and the curated
+parser put one source on a mixed page twice. K10 closed. 20-video pilot
+closed.
+
 ## GATE 3 — the bridge is built, and its FIRST RUN was a MISS (2026-09-19, D52)
 
 `docs/evidence/gate3_first_run.md` has every row. Migrations `038`/`039`,
@@ -2896,6 +2975,13 @@ Two Engine 7 items for the practitioner, neither blocking:
 - Deterministic flag rule set not yet written; `case_flags` and the gate
   work, but the SQL rules that populate HOLD/NOTE are still to come and
   must start narrow
+- **The n8n CLIENT_NEW must build the same E7 input as `client_new.py`,
+  `RETRIEVED_KNOWLEDGE` included (D52a).** `workflows/run_engine.json` is
+  RUN_ENGINE alone: it takes `STRUCTURED_INPUT` from its caller and builds
+  no CASE payload, and there is no other workflow file, so nothing diverges
+  today. The moment the n8n half of step 15 exists, two implementations
+  assemble one contract and it needs the D26/D31 treatment — a corpus and a
+  parity suite, not a reading of both.
 - `006` is schema only. No inbox UI, no ingestion pipeline, no acquisition
   adapters. It exists so those can be built without a retrofit.
 - Restore drill **performed 2026-09-10** (see above). Re-run it after any

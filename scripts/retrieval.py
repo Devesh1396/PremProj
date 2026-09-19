@@ -566,6 +566,129 @@ def curated_trace(conn, curated_id: str) -> dict:
     }
 
 
+# ---------------------------------------------------------------------
+# The CASE block: what a client pipeline actually hands Engine 7
+# ---------------------------------------------------------------------
+#
+# GATE 3 made curated cards retrievable and nothing in the runtime
+# retrieved them: `client_new.py` went E1 Pass A -> normalize -> E7 with
+# NORMALIZED_CONCEPTS and no knowledge at all, and `retrieval.py` was
+# imported by no script outside the suites. A bridge nothing crosses is
+# not a bridge (D52a).
+
+# CASE RETRIEVAL ASKS FOR KNOWLEDGE OBJECTS, EXPLICITLY.
+#
+# `KINDS` defaults to a MIXED set that includes `concept` -- ontology
+# vocabulary, which is the right answer for an ontology query and the
+# wrong one for a case. The GATE 3 first run measured what happens when a
+# caller takes the default: 82 of 124 merged results were concepts, each
+# in its own bucket so the per-bucket cap could not restrain them, and
+# they took 27 of 30 places. A case pipeline states what it wants rather
+# than inheriting a default that was never chosen for it.
+CASE_KINDS = ("strategy", "curated_strategy", "pattern")
+
+
+def curated_expansion(conn, curated_id: str) -> dict:
+    """A curated card for an engine payload, WITHOUT flattening it.
+
+    `client_decision_logic` stays its own field, with its provenance and
+    its byte range, exactly as `curated_fields` holds it. Collapsing the
+    fields into a `summary`/`mechanism` pair would rebuild the legacy
+    strategy shape GATE 1 refused to write (D50) -- the routing
+    intelligence would arrive as prose in a summary, which is how K09 lost
+    it in the first place (D49).
+    """
+    tr = curated_trace(conn, curated_id)
+    if not tr:
+        return {}
+    return {
+        "card_name": tr["name"],
+        "heading_path": tr["heading_path"],
+        "source_title": tr["source_title"],
+        "raw_location": tr["raw_location"],
+        "card_source_start": tr["source_start"],
+        "card_source_end": tr["source_end"],
+        # Every field the practitioner wrote, each with the provenance and
+        # the span that make it checkable against the original.
+        "fields": [{"field_name": f["field_name"],
+                    "provenance": f["provenance"],
+                    "source_start": f["source_start"],
+                    "source_end": f["source_end"],
+                    "text": f["text_value"]}
+                   for f in tr["fields"]],
+        "concept_links": [{"canonical_key": l["canonical_key"],
+                           "field_name": l["field_name"],
+                           "source_phrase": l["source_phrase"],
+                           "source_start": l["source_start"],
+                           "source_end": l["source_end"],
+                           "tier": l["tier"],
+                           "score": float(l["score"]) if l["score"] is not None else None}
+                          for l in tr["concept_links"]],
+    }
+
+
+def _library_expansion(conn, kind: str, row_id: str) -> dict:
+    if kind == "strategy":
+        row = conn.execute(
+            "select name, summary, mechanism, knowledge_status::text "
+            "  from strategies where strategy_id=%s", (row_id,)).fetchone()
+        keys = ("name", "summary", "mechanism", "knowledge_status")
+    else:
+        row = conn.execute(
+            "select intervention, practical_method, context_notes "
+            "  from implementation_patterns where pattern_id=%s",
+            (row_id,)).fetchone()
+        keys = ("intervention", "practical_method", "context_notes")
+    return dict(zip(keys, row)) if row else {}
+
+
+def case_knowledge(conn, *, query: str | None, concept_ids: list[str],
+                   limit: int = DEFAULT_LIMIT, embed_call=None,
+                   telemetry: bool = True) -> dict:
+    """The `RETRIEVED_KNOWLEDGE` block a case pipeline hands to an engine.
+
+    RETRIEVAL SUPPLIES RELEVANT KNOWLEDGE. IT DOES NOT DECIDE PRIORITY.
+    `RANKING_BASIS` is a FIELD on the block, not a caption in a comment
+    (D43): every consumer reads `RELEVANCE_ONLY` and knows the order is
+    lexical and concept-spine relevance. Which strategy the client should
+    start with is E1 Pass B's decision over E7's reasoning, and nothing
+    here computes it -- the GATE 3 answer key is explicit that
+    PRIMARY/SECONDARY/LOW mean retrieval prominence, not a treatment
+    ranking.
+
+    The diagnostics travel with the block on purpose. A thin result from a
+    young library and a thin result from an unembedded one look identical
+    in the items and different in the diagnostics, and an engine reasoning
+    over four strategies should be able to tell which it is looking at.
+    """
+    result = retrieve(conn, query=query, concept_ids=concept_ids,
+                      kinds=CASE_KINDS, limit=limit, embed_call=embed_call,
+                      telemetry=telemetry)
+    items = []
+    for rank, row in enumerate(result["results"], 1):
+        item = {
+            "rank": rank,
+            "kind": row["kind"],
+            "id": row["id"],
+            "label": row["label"],
+            "score": round(float(row["score"]), 6),
+            "channels": {c: round(float(v), 6)
+                         for c, v in sorted(row["channels"].items())},
+            "matched_concept_ids": row["buckets"],
+        }
+        if row["kind"] == "curated_strategy":
+            item["curated"] = curated_expansion(conn, row["id"])
+        else:
+            item[row["kind"]] = _library_expansion(conn, row["kind"], row["id"])
+        items.append(item)
+    return {
+        "RANKING_BASIS": "RELEVANCE_ONLY",
+        "KINDS_REQUESTED": list(CASE_KINDS),
+        "ITEMS": items,
+        "DIAGNOSTICS": result["diagnostics"],
+    }
+
+
 def record_hits(conn, rows: list[dict], concept_ids: list[str]) -> None:
     """Concept usage telemetry (002): concepts never hit by retrieval are
     review candidates; concepts hit constantly are worth deepening."""

@@ -108,8 +108,14 @@ def attach_concepts(conn, envelope_id: str, text: str,
         "select ordinal, curated_id::text from curated_strategies where envelope_id=%s",
         (envelope_id,)).fetchall())
 
+    # AUTHORITY IS DECIDED ONCE, FOR THE WHOLE IMPORT, BEFORE ANY CARD IS
+    # TOUCHED (D52a). A capability that could flip halfway would leave one
+    # card recomputed and the next preserved with nothing saying so.
+    authoritative, why = CC.attachment_authority(conn, embed_call=embed_call)
+
     report = {"units": [], "refused": [], "links": 0, "unlinked_fields": [],
-              "rules_fired": {}}
+              "rules_fired": {}, "authoritative": authoritative,
+              "authority_reason": why, "attachment": {}}
     for card in cards:
         if card.kind != "STRATEGY":
             continue
@@ -118,7 +124,15 @@ def attach_concepts(conn, envelope_id: str, text: str,
             continue
         units, refused = CC.card_units(conn, rules, card)
         resolved = CC.resolve_units(conn, units, embed_call=embed_call)
-        report["links"] += CC.store_units(conn, curated_id, text, resolved)
+        outcome = CC.store_units(conn, curated_id, text, resolved,
+                                 authoritative=authoritative,
+                                 authority_reason=why)
+        report["attachment"][card.ordinal] = outcome
+        # The count reported is what the card now HOLDS, not what this run
+        # wrote: a preserved link set is still links, and reporting 0 for a
+        # card whose links were deliberately retained would say the
+        # opposite of what happened.
+        report["links"] += (outcome["written"] or outcome["retained"])
 
         linked_fields = {r["unit"].field_name for r in resolved if r["concept_id"]}
         for f in card.fields:
@@ -304,6 +318,12 @@ def main() -> int:
         print(f"    {len(c['units'])} concept unit(s), {c['links']} linked, "
               f"{len(c['refused'])} refused as prose, "
               f"{len(c['unlinked_fields'])} field(s) unlinked")
+        states = {}
+        for a in c["attachment"].values():
+            states[a["status"]] = states.get(a["status"], 0) + 1
+        print(f"    attachment: {states}"
+              + ("" if c["authoritative"]
+                 else f"  NOT AUTHORITATIVE: {c['authority_reason']}"))
     if args.json:
         print(json.dumps(results, indent=2, default=str))
     return 0

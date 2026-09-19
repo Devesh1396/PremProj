@@ -76,6 +76,11 @@ def main() -> int:
                     # filtered by the case's resolved concepts, and before
                     # E7 because both E7 and Pass B receive it (D45).
                     "PRACTICE_EXPERIENCE",
+                    # D52a. K14 retrieval, between normalization and E7.
+                    # Before this the pipeline handed Engine 7 the case's
+                    # concepts and NO KNOWLEDGE, and `retrieval.py` was
+                    # imported by no runtime script at all.
+                    "RETRIEVE",
                     "E7", "E1_PASS_B", "E2", "E3",
                     # Step 20. The plan becomes rows, and only then do the
                     # deterministic rules run -- a rule that matches on an

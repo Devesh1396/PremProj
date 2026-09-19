@@ -333,13 +333,39 @@ def main() -> int:
     check("the three PRIMARY strategies hold the top three curated places",
           top3 == set(primary), f"top {len(primary)} = {sorted(top3)}")
 
-    # The negative control. The key's words: Strategy 3 "does not outrank
-    # clearly better-matched strategies".
+    # ------------------------------------------------------------------
+    # THE NEGATIVE CONTROL MUST BE EVALUABLE BEFORE IT IS EVALUATED.
+    #
+    # This was `if n in rank and low[0] in rank: check(...)`, and on the
+    # FIRST RUN Strategy 3 was not on the page -- so all five comparisons
+    # executed ZERO times and the suite could still have exited 0 with its
+    # negative control never once tested. That is the "green suite that
+    # silently skipped its only real assertion" shape (V2), in the very
+    # check the evidence file says is load-bearing.
+    #
+    # So presence is asserted FIRST, as its own check that can fail, and
+    # the comparisons are counted so a silent zero is impossible.
+    control = low[0]
+    check(f"the negative control (Strategy {control}) is ON the page, so its "
+          "rank can be measured at all", control in rank,
+          "absent: the five comparisons below cannot run")
+
+    compared = 0
     for n in primary + secondary:
-        if n in rank and low[0] in rank:
-            check(f"Strategy {low[0]} does not outrank Strategy {n}",
-                  rank[low[0]] > rank[n],
-                  f"ranks {rank.get(low[0])} vs {rank.get(n)}")
+        if control not in rank:
+            break
+        if n not in rank:
+            # The strategy it would be compared against is itself missing,
+            # which its own check above has already recorded as a failure.
+            continue
+        compared += 1
+        check(f"Strategy {control} does not outrank Strategy {n}",
+              rank[control] > rank[n],
+              f"ranks {rank.get(control)} vs {rank.get(n)}")
+    check(f"...and all {len(primary) + len(secondary)} negative-control "
+          "comparisons actually executed",
+          compared == len(primary) + len(secondary),
+          f"{compared} of {len(primary) + len(secondary)} ran")
 
     # "Strategy 6's decision logic survives retrieval" -- retrievable as
     # its own preserved field, traceable to the source bytes.

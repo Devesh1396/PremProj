@@ -1310,6 +1310,72 @@ as such**, not guessed; it is pre-existing.
 **The 20-video pilot stays closed.** K10 remains closed (D48). One source,
 one synthetic client.
 
+### GATE 3 REVIEW CLOSED — the bridge is now in the runtime (D52a)
+
+**GATE 3 WAS NOT IN THE RUNTIME.** `retrieval.py` was imported by NO script
+outside the suites, and `client_new.py` handed Engine 7
+`NORMALIZED_CONCEPTS` and **no knowledge at all** — so a real case could not
+consume the curated strategies this branch made retrievable, and the
+post-first-run `kinds` fix lived only in the acceptance test. **A bridge
+nothing crosses is not a bridge.** `retrieval.case_knowledge()` is the ONE
+assembly both client pipelines call; CLIENT_NEW has a `RETRIEVE` step
+between `NORMALIZE` and `E7`, and CLIENT_FOLLOWUP has one before its E1.
+
+**`CASE_KINDS` IS STATED BY THE CALLER, never inherited.**
+`retrieval.KINDS` includes `concept` — ontology vocabulary, right for an
+ontology query, wrong for a case, and the first run measured what it costs:
+27 of 30 places. **The query is Pass A's own phrases and research
+questions**, which is its statement of what matters and is identity-free by
+construction, not by a filter somebody remembers.
+
+**A CURATED CARD IS EXPANDED, NEVER FLATTENED.** Every preserved field with
+its provenance and byte range, so `client_decision_logic` stays its own
+field. Collapsing into `summary`/`mechanism` rebuilds the shape GATE 1
+refused to write and is how K09 lost it (D49). **`RANKING_BASIS:
+RELEVANCE_ONLY` is a FIELD on the block** (D43): retrieval supplies
+knowledge, E7 reasons, Pass B decides. Pass B gets `E7_HANDOFF` AND the
+block — relaying only through prose makes arrival depend on an engine
+having repeated it. Pass A, E2 and E3 do NOT get it.
+
+**n8n PARITY — ANSWERED.** `workflows/run_engine.json` is RUN_ENGINE alone:
+it takes `STRUCTURED_INPUT` from its caller and constructs no CASE payload,
+and there is no other workflow file. **Python and n8n cannot disagree today
+because only Python assembles it.** Whoever writes the n8n CLIENT_NEW must
+build the same E7 input, `RETRIEVED_KNOWLEDGE` included, under D26/D31.
+
+**A MISSING OPTIONAL CAPABILITY MUST NEVER DEGRADE ESTABLISHED KNOWLEDGE.**
+`store_units()` deleted every link and rewrote what that run resolved — and
+the semantic tier is inert on the VPS **by design**, so a re-import there
+would have turned a verified link set into zero links and called it a
+successful import. Recomputation is now four-state: **`RECOMPUTED`**
+(authoritative — the ONLY state that may delete), **`FIRST_ATTACHMENT`**
+(no prior links, nothing to lose), **`NOT_RECOMPUTED`** (preserved
+untouched, reason reported), **`FAILED_CLOSED`** (prior links no longer sit
+on the text they name, so they are deleted rather than kept — retaining a
+moved span fabricates provenance, D48). Authority is
+`normalize.semantic_tier_available()`, the SAME predicate `_tier_semantic`
+acts on, extracted so there is one implementation; decided ONCE per import
+before any card is touched. The staleness test is the containment check
+itself, not a hash kept in step.
+
+**THE NEGATIVE CONTROL COULD PASS VACUOUSLY.** `if n in rank and low[0] in
+rank` ran ZERO comparisons on the first run and the suite could still exit
+0. Presence is now its own failable check and the comparisons are COUNTED.
+
+**`testing/test_gate3_bridge.py` IS THE DETERMINISTIC REGRESSION** — no
+provider, every floor, because the acceptance suite SKIPS in every
+`run_all.sh`. **GATE 2 owns phrase→concept; GATE 3 owns established
+concept→curated knowledge.** It RECEIVES K1 concept ids and **manufactures
+no semantic corpus**: fabricating vectors would be inventing GATE 2's
+answer and then testing it, and would quietly become evidence that 0.82
+works. Only phrase→concept is supplied; units, spans, verification and the
+insert are production. Its rank fixture asserts the two cards do not merely
+TIE (V2), and its RUNTIME section runs the real
+`client_new.run_new_client()` and reads what was actually sent at the
+PROVIDER BOUNDARY — the request is client data and is not persisted (D28),
+so that boundary is the only honest place to look. A test that calls
+`retrieval.py` is not proof of runtime integration.
+
 **The first live call to any real API in this build FAILED, and the
 failure was informative.** The actor answers HTTP 201 from a SUCCEEDED
 run and reports item-level failure in an `error` field nothing read; a

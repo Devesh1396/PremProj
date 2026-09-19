@@ -3796,3 +3796,176 @@ away. It is kept (`name_start`/`name_end`), because re-deriving it by
 searching the document for the string would point at the wrong occurrence
 of a name that appears twice — a range that resolves cleanly to the wrong
 place is the D48 shape exactly.
+
+
+## D52a — GATE 3 review: the bridge nothing crossed, and the re-import that could erase it
+
+**Decided 2026-09-19**, closing four findings from an independent review of
+the GATE 3 branch. The architecture, the frozen first-run MISS, D52,
+migrations `038`/`039` and the recorded 4/1/6 → 2/5 → 3 ordering all stand
+unchanged; no retrieval score was retuned and `b5b2477` was not edited.
+
+### 1. GATE 3 WAS NOT IN THE RUNTIME
+
+`retrieval.py` was imported by **no script outside the suites**.
+`client_new.py` ran E1 Pass A → normalize → E7 and handed Engine 7
+`NORMALIZED_CONCEPTS`, `E1_PASS_A_HANDOFF` and `PRACTICE_EXPERIENCE` — and
+no knowledge at all. A real CLIENT_NEW case could not consume the six
+curated strategies this branch made retrievable, and the post-first-run
+`kinds` fix existed only inside the acceptance test. **A bridge nothing
+crosses is not a bridge.**
+
+`retrieval.case_knowledge()` is now the one assembly both client pipelines
+call, and `CLIENT_NEW` gained a `RETRIEVE` step between `NORMALIZE` and
+`E7`.
+
+**`CASE_KINDS = ("strategy", "curated_strategy", "pattern")`, stated by the
+caller.** `retrieval.KINDS` is a mixed default that includes `concept` —
+ontology vocabulary, right for an ontology query and wrong for a case. The
+GATE 3 first run measured what the default costs: 27 of 30 places. A case
+pipeline says what it wants rather than inheriting a default never chosen
+for it.
+
+**The query is Engine 1's own words** — Pass A's normalization phrases and
+research questions. They are its statement of what matters clinically, and
+they carry no identity, so `STRIP_IDENTITY_FROM_ENGINE_PAYLOADS` holds by
+construction rather than by a filter somebody has to remember.
+
+**A curated card is EXPANDED, never flattened.** `curated_expansion()`
+carries every preserved field with its provenance and byte range, plus the
+concept links with the span each phrase came from. Collapsing them into a
+`summary`/`mechanism` pair would rebuild the legacy shape GATE 1 refused to
+write, and the routing intelligence would arrive as prose in a summary —
+which is exactly how K09 lost it (D49).
+
+**`RANKING_BASIS: RELEVANCE_ONLY` is a FIELD on the block, not a caption in
+a comment** (D43). Retrieval supplies relevant knowledge; E7 reasons and E1
+Pass B decides. Nothing here computes a treatment priority.
+
+**Pass B gets both**: `E7_HANDOFF` is E7's reasoning over the retrieval,
+which is the entire reason Engine 1 runs twice (D4), and
+`RETRIEVED_KNOWLEDGE` travels beside it for the same reason
+`PRACTICE_EXPERIENCE` does — relaying it only through a prose handoff makes
+its arrival depend on an engine having repeated it, and the one thing D49
+is about is a curated `client_decision_logic` surviving verbatim rather
+than being re-summarised. Pass A is NOT given it: Pass A is what decides
+what to retrieve. E2 and E3 are not given it: they make E1's decision
+executable and reason over E1's handoff, not over the library it chose
+from.
+
+**CLIENT_FOLLOWUP was wired too.** Its normalization step carries the
+comment *"an unnormalized phrase is a strategy nothing will retrieve"* —
+and nothing retrieved. That path runs no E7, so Engine 1 is the only thing
+that can be shown the library, and it was reasoning without one. Same call,
+same contract. Reported rather than left as a silent asymmetry.
+
+### n8n PARITY: the answer is that there is nothing to diverge from — yet
+
+`workflows/run_engine.json` holds **one** workflow, `RUN_ENGINE`. Its
+trigger takes `STRUCTURED_INPUT` from its caller and it executes a single
+engine; it constructs no CASE payload. There is **no other workflow file in
+the repository**, and `PROGRESS.md` already records the gap: CLIENT_NEW
+exists only as `scripts/client_new.py`, and its workflow form is step 15's
+unwritten n8n half.
+
+So Python and n8n cannot disagree today about what Engine 7 receives,
+because only Python assembles it. **The obligation transfers**: whoever
+writes the n8n CLIENT_NEW must build the same E7 input, `RETRIEVED_KNOWLEDGE`
+included, and it needs the two-implementations-one-contract treatment D26
+and D31 exist for. Recorded in `PROGRESS.md` *Known gaps* so it cannot be
+discovered later as a surprise.
+
+### 2. A LESS CAPABLE RE-IMPORT COULD ERASE VERIFIED LINKS
+
+`store_units()` deleted every link for a card and rewrote whatever that run
+resolved. That is safe only if every run is equally capable, and this
+build's runs are not: the semantic tier is the **only** tier that answers a
+curated phrase, and it is inert without pgvector, without
+`MODEL_EMBEDDING`, without a credential or with nothing embedded — which is
+the configuration the VPS runs **on purpose**. A re-import there would have
+turned a verified link set into zero links and reported a successful
+import.
+
+**A missing optional capability must never degrade knowledge that was
+already established.** Recomputation is now explicitly four-state:
+
+| | when | what happens |
+|---|---|---|
+| `RECOMPUTED` | the resolver could reach every tier | authoritative: the old set is replaced, and a link that genuinely no longer resolves IS removed |
+| `FIRST_ATTACHMENT` | no prior links exist | what this run found is written even degraded; nothing established can be lost, and a later authoritative run replaces it |
+| `NOT_RECOMPUTED` | prior links exist and the tier that produced them could not run | nothing is touched, and the reason is reported |
+| `FAILED_CLOSED` | prior links exist, cannot be recomputed, AND no longer sit on the text they name | they are DELETED rather than kept |
+
+**Only an authoritative recomputation may delete.** Authority is
+`normalize.semantic_tier_available()` — the same predicate `_tier_semantic`
+itself acts on, extracted so there is ONE implementation rather than a
+second copy of four conditions that would drift (V2). Authority is decided
+once per import, before any card is touched: a capability that flipped
+halfway would leave one card recomputed and the next preserved with nothing
+saying so.
+
+**The staleness test is the containment check itself**, applied to what is
+already stored — not a content hash kept in step somewhere. If every prior
+link still IS its claimed slice of the source, the text has not moved under
+it. Failing closed loses a link; retaining a moved span would fabricate
+provenance, which is the D48 shape exactly.
+
+### 3. THE NEGATIVE CONTROL COULD STILL PASS VACUOUSLY
+
+`if n in rank and low[0] in rank: check(...)` — and on the first run
+Strategy 3 was not on the page, so all five comparisons executed **zero
+times** and the suite could have exited 0 with its negative control never
+tested. That is the green-suite-that-skipped-its-only-assertion shape (V2),
+in the check the evidence file calls load-bearing.
+
+Presence is now asserted FIRST as its own failable check, and the
+comparisons are COUNTED — `all N negative-control comparisons actually
+executed` is itself a check, so a silent zero is impossible. Option A of
+the review, because the post-first-run page deliberately returns all six
+cards so the control can be measured.
+
+### 4. GATE 3 HAD NO REGRESSION IN ORDINARY CI
+
+`test_gate3_acceptance` is the live-provider evidence and, measured, it
+SKIPS in every `run_all.sh`. So the bridge could have been broken by a
+future retrieval change with the full suite staying green.
+
+`testing/test_gate3_bridge.py` is the deterministic regression, and the
+split of responsibility is the whole design:
+
+    GATE 2 owns   phrase -> canonical concept, and its calibration.
+    GATE 3 owns   established concept -> curated knowledge, retrieved,
+                  ranked, traceable.
+
+It **receives** canonical concept ids that already exist in the K1 seed.
+**It manufactures no semantic corpus**: fabricating vectors so a phrase
+resolves would be inventing GATE 2's answer and then testing it, and would
+quietly become the evidence that 0.82 works. Nothing in it says anything
+about a threshold. Only the phrase→concept step is supplied; the units,
+their spans, the verification and the insert are the production path.
+
+It covers the concept channel, the knowledge-object kinds filter, rank and
+prominence with a fixture that can tell the right answer from the wrong one
+(a breakfast query must rank the breakfast card above the vinegar card, and
+they must not merely tie — a tie would be measuring the tie-break, V2), the
+negative control, Strategy 6's field preservation, the full
+query→concept→link→card→field→byte-span trace, both halves of the
+recomputation tri-state, and a **runtime** section that runs the real
+`client_new.run_new_client()` and reads what was actually sent to each
+engine at the provider boundary. The request is not persisted — it is
+client data (D28) — so the boundary is the only honest place to look, and a
+test that calls `retrieval.py` is not proof of runtime integration.
+
+In that runtime section the curated cards reach the case through **full
+text, not the concept spine**: the fixture's Pass A phrases do not resolve
+to K1 concepts without the semantic tier. That is the point — the bridge
+has two channels and this proves the one that works with no provider at all.
+
+### Nothing here changes what is still true
+
+The first run is still a MISS, 6 of 8, and section 4 of
+`docs/evidence/gate3_first_run.md` still records it. 20 curated units, 2
+linked, 18 unresolved. 3 of 24 profile facts resolved. 0.82 remains
+PROVISIONAL. Curated cards are still not in the vector channel. K08 and the
+curated parser still put one source on a mixed page twice. K10 remains
+closed and the 20-video pilot remains closed.

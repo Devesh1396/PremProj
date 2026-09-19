@@ -60,6 +60,7 @@ import psycopg
 import client_new as CN
 import normalize as NZ
 import practice_intelligence as PI
+import retrieval as RET
 import run_engine as RE
 
 PipelineStopped = CN.PipelineStopped
@@ -343,8 +344,33 @@ def run_followup(conn: psycopg.Connection, followup_id: str,
                                       llm=llm) if phrases else []
             outcome.step("NORMALIZE", "OK",
                          detail=f"{len(resolved)} of {len(phrases)} phrases resolved")
+
+            # ...and then RETRIEVE on them (D52a). The comment above says
+            # normalization is here because "an unnormalized phrase is a
+            # strategy nothing will retrieve" -- and nothing retrieved.
+            # This path runs no E7, so Engine 1 is the only thing that can
+            # be shown the library, and it was reasoning without it.
+            #
+            # Same call as CLIENT_NEW: knowledge objects requested
+            # explicitly, ranking basis RELEVANCE_ONLY, curated cards
+            # expanded rather than flattened. Two pipelines, one retrieval
+            # contract.
+            followup_concepts = sorted({c for r in resolved for c in r.concept_ids})
+            knowledge = RET.case_knowledge(
+                conn,
+                query=" ".join(str(x) for x in phrases).strip() or None,
+                concept_ids=followup_concepts)
+            outcome.step("RETRIEVE", "OK",
+                         detail=(f"{len(knowledge['ITEMS'])} knowledge object(s), "
+                                 f"{sum(1 for i in knowledge['ITEMS'] if i['kind'] == 'curated_strategy')}"
+                                 " curated"))
+            # NOT put into `handoffs`: that dict is spread into E2 and E3
+            # as well, and the retrieval block is Engine 1's input. E2 and
+            # E3 make E1's decision executable and reason over E1's
+            # handoff, not over the library it chose from.
             e1 = CN._run(conn, outcome, "E1", engine="E1", pass_label="SINGLE",
-                         structured_input={**followup_input, **handoffs})
+                         structured_input={**followup_input, **handoffs,
+                                           "RETRIEVED_KNOWLEDGE": knowledge})
             handoffs["E1_HANDOFF"] = e1.structured
 
         for engine in ("E2", "E3"):
