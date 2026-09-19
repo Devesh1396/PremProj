@@ -1,0 +1,117 @@
+{
+  "gate": "GATE 4",
+  "source_file": "testing/fixtures/curated/t2d_video14.md",
+  "source_sha256": "03b6577d6190dfa53f1f13ea35b0957581fed2fc5dd5764a54841948fffd6bfd",
+  "frozen_at": "2026-09-19",
+
+  "what_this_is": [
+    "EXPECTED MEANING AND STATE, written from the source before any GATE 4",
+    "implementation exists. It is deliberately NOT a statement of parser rules:",
+    "it says what must be true of the stored knowledge, and says nothing about",
+    "which regex produces it. If a later grammar satisfies this key by a route",
+    "nobody anticipated, that is a pass; if it satisfies the key only because",
+    "the key was rewritten after seeing the implementation, the key is worthless.",
+    "Nothing in here may be edited after the first implemented run. Later",
+    "findings are recorded as post-first-run notes elsewhere."
+  ],
+
+  "source_shape": {
+    "curation_directives_present": ["ADD", "ADD / UPGRADE", "MERGE", "REINFORCE", "SKIP", "PROVENANCE ONLY"],
+    "strategy_n_constructs_present": 0,
+    "claim": "Video 14 is organised by CURATION DIRECTIVE, not by numbered strategy card. That is the whole reason it is the GATE 4 stress source: the Video 1 grammar's primary unit does not occur here even once."
+  },
+
+  "must_be_true": {
+
+    "K1_directives_distinct": {
+      "state": "ADD, ADD / UPGRADE, MERGE, REINFORCE, SKIP and PROVENANCE ONLY must be machine-visible as DIFFERENT dispositions.",
+      "why": "They are Prem's authored curation decisions. ADD creates knowledge; MERGE enriches knowledge that already exists; REINFORCE confirms without creating; SKIP refuses; PROVENANCE ONLY keeps a trace and nothing active. Collapsing any pair loses the decision a human already made.",
+      "fails_if": "any two of them share a stored value, or any of them is represented only as free text inside a description."
+    },
+
+    "K2_practitioner_verified_evidence": {
+      "state": "The passage 'I checked the underlying published report.' must survive as a practitioner verification attached to THAT evidence object and to no other.",
+      "surrounding_object": "ADD — Rapid Improvement Is Possible, but Timeline != Biological Guarantee",
+      "required_semantics": "verification_actor = PRACTITIONER, verification_status = PRACTITIONER_VERIFIED (or the repository's implemented equivalent).",
+      "fails_if": "it is re-researched, sent to K10, downgraded to UNVERIFIED because automation did not confirm it, converted to SYSTEM_VERIFIED, given a fabricated DOI/PMID/sample detail, or allowed to spread to other evidence statements in the same source."
+    },
+
+    "K3_verification_does_not_spread": {
+      "state": "The berberine and ACV evidence passages are in the same document but were NOT declared personally checked. They must NOT inherit PRACTITIONER_VERIFIED.",
+      "why": "Verification attaches to a span, not to a document."
+    },
+
+    "K4_market_intelligence_stays_market": {
+      "state": "'Reverse insulin resistance in 90 days.' and the other market promises must remain machine-visibly market/client-expectation intelligence.",
+      "fails_if": "any of it is stored as clinical truth, practitioner recommendation, universal outcome promise, or verified evidence.",
+      "note": "The source itself separates these explicitly under 'Important separation' — clinical intelligence vs market intelligence vs claim policy. That separation must survive ingestion."
+    },
+
+    "K5_rejected_claims_are_not_active": {
+      "state": "Every claim under 'Claims NOT to Store as Clinical Truth', and the two SKIP sections, must be traceable as source/provenance material and must NOT become active strategy, active practitioner principle, active evidence claim, retrieval recommendation, or canonical concept.",
+      "claims": [
+        "insulin resistance always reverses in 90 days",
+        "every newly diagnosed diabetic can reproduce 8.9 -> 5.6",
+        "underground vegetables should generally be avoided",
+        "10-15 minutes of walking always halves glucose excursions",
+        "berberine works unequivocally in everyone",
+        "two tablespoons ACV is the universal optimal protocol",
+        "ACV can substitute for exercise because it activates similar pathways"
+      ],
+      "why": "'Prem explicitly rejected this' is itself curation information. Rejection must not be implemented as deletion of provenance."
+    },
+
+    "K6_merge_does_not_duplicate": {
+      "state": "The MERGE and REINFORCE sections must not produce duplicate active knowledge objects for material Prem said already exists, and must not silently discard the new decision logic or provenance they carry.",
+      "fails_if": "a MERGE target is guessed by semantic similarity alone. An unresolvable target must be reported (REVIEW_REQUIRED / TARGET_UNRESOLVED), never guessed."
+    },
+
+    "K7_adjunct_nuance_survives": {
+      "state": "Berberine and ACV must retain, separately: practitioner positioning, evidence interpretation, uncertainty, implementation role, safety/gating, and what the intervention must NOT replace.",
+      "fails_if": "any of it is flattened into a binary 'works' claim or into one generated description paragraph.",
+      "specific": [
+        "berberine: 'Evidence-supported but practitioner-gated glucose-management adjunct; not a foundational T2D strategy and not a replacement for core lifestyle or prescribed therapy.'",
+        "berberine safety: adverse effects, medication interaction, pregnancy/breastfeeding/infants, and the routing rule 'berberine + active medication use -> interaction/safety check before implementation'",
+        "ACV: 'Evidence-supported, low-cost secondary meal-level adjunct with moderate uncertainty.'",
+        "ACV guardrails: do not fix an immutable dose; do not recommend concentrated/undiluted vinegar; enamel/throat, insulin and diuretic interaction, potassium."
+      ]
+    },
+
+    "K8_practitioner_intelligence_is_not_evidence": {
+      "state": "Prem's reusable professional reasoning is usable practitioner knowledge and must not be recorded as a published evidence record, nor require re-research before it can be stored and used.",
+      "example": "Large metabolic improvements can occur surprisingly quickly in some recently diagnosed T2D clients when a powerful intervention meaningfully changes the underlying metabolic environment."
+    },
+
+    "K9_no_authored_text_silently_discarded": {
+      "state": "Every byte of authored text is either owned by a stored object or reported as REVIEW_REQUIRED with its heading, its text and its byte range. There is no third outcome.",
+      "why": "Strategy 6 vanished from Video 1 under K09 with nothing in the output saying so. Unknown must be loud."
+    },
+
+    "K10_preservation": {
+      "state": "Every stored authored field is byte-identical to its claimed span, verify() can re-read it, provenance is first-class, and the default is VERBATIM_SOURCE. No generated mechanism, decision logic or evidence interpretation.",
+      "fails_if": "any field is TRANSFORMED without an explicit declared rule."
+    },
+
+    "K11_video1_unchanged": {
+      "state": "Video 1's stored rows are byte-identical before and after GATE 4.",
+      "why": "A grammar change that altered how Video 1 parses would be invisible to a green suite whose assertions are about counts. The comparison is row-level, not suite-level."
+    },
+
+    "K12_no_provider_calls_in_parse": {
+      "state": "The deterministic parse makes zero provider/model calls. No K09, no K10.",
+      "note": "Concept normalization is a separate, later step and may cost embedding calls; that is not the parse."
+    },
+
+    "K13_concept_links_traceable": {
+      "state": "Any normalized concept link resolves query phrase -> concept -> curated object -> field -> source span -> exact text, and the span contains the phrase."
+    }
+  },
+
+  "open_questions_not_to_be_solved": {
+    "Q1": "Are 'Decision intelligence', 'When potentially worth considering' and 'When not to prioritize' one field under three names, or genuinely different fields? To be REPORTED with verbatim text, not aliased.",
+    "Q2": "Where does SKIP material live? Options to be reported; none to be chosen.",
+    "Q3": "Does the schema have a non-flattening home for safety content, or is that a gap? To be reported as a gap if it is one."
+  },
+
+  "acceptance": "PASS requires truthful classification, not parsing coverage. A high REVIEW_REQUIRED count with every unknown reported is a PASS. A low one achieved by adding rules to make this fixture parse is a FAIL."
+}
