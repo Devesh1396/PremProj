@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -29,6 +30,7 @@ import psycopg
 import client_new as CN
 import intake as IN
 import run_engine as RE
+import runtime_contract as RC
 import synthetic_intake as SI
 
 FAILS: list[str] = []
@@ -63,7 +65,36 @@ def main() -> int:
     print("\nthe phase 4 pipeline, end to end on a complete intake")
     client, submission = submit_fixture(
         conn, SI.EXTERNAL_REF_COMPLETE, SI.COMPLETE_INTAKE)
-    outcome = CN.run_new_client(conn, submission)
+
+    # Every top-level key the pipeline actually hands each engine, taken
+    # from the REAL request objects rather than re-derived from a reading
+    # of `client_new.py` (V2). Used by the runtime-input-contract check
+    # further down; captured here so the pipeline runs once.
+    sent_keys: dict[str, set] = {}
+    _real_run_engine = RE.run_engine
+
+    def _capture(c, req):
+        result = _real_run_engine(c, req)
+        # THE KEY IS THE INVOCATION AS THE RUNTIME RECORDED IT, not as the
+        # caller spelled it. `engine_runs.engine_mode` is the RESOLVED mode
+        # the `<RUNTIME_INVOCATION>` envelope carried (D27), which is the
+        # whole point: CLIENT_NEW's final Engine 6 step is NAMED
+        # "E6_UPDATE" and runs in mode REBUILD, and a check keyed on the
+        # caller's label would have agreed with the wrong one.
+        row = c.execute(
+            "select engine_mode, pass::text from engine_runs where run_id=%s",
+            (result.run_id,)).fetchone() if result.run_id else None
+        if row:
+            key = (req.engine, row[0], row[1] or "SINGLE")
+            sent_keys.setdefault(key, set()).update(
+                (req.structured_input or {}).keys())
+        return result
+
+    RE.run_engine = _capture
+    try:
+        outcome = CN.run_new_client(conn, submission)
+    finally:
+        RE.run_engine = _real_run_engine
     check("the pipeline reaches the review queue",
           outcome.status == "AWAITING_REVIEW",
           outcome.stopped_because or outcome.status)
@@ -76,6 +107,11 @@ def main() -> int:
                     # filtered by the case's resolved concepts, and before
                     # E7 because both E7 and Pass B receive it (D45).
                     "PRACTICE_EXPERIENCE",
+                    # D52a. K14 retrieval, between normalization and E7.
+                    # Before this the pipeline handed Engine 7 the case's
+                    # concepts and NO KNOWLEDGE, and `retrieval.py` was
+                    # imported by no runtime script at all.
+                    "RETRIEVE",
                     "E7", "E1_PASS_B", "E2", "E3",
                     # Step 20. The plan becomes rows, and only then do the
                     # deterministic rules run -- a rule that matches on an
@@ -97,6 +133,71 @@ def main() -> int:
         (outcome.cycle_id,)).fetchall()]
     check("seven engine runs are recorded against the cycle",
           engines == ["E6", "E1", "E7", "E1", "E2", "E3", "E6"], str(engines))
+
+    # ------------------------------------------------------------------
+    print("\nevery RUNTIME BLOCK is declared for the MODE AND PASS it is "
+          "actually sent in")
+
+    # D52b finding 2 delivered blocks to engines whose prompts did not name
+    # them. The first version of this check asked only `key in content` --
+    # DOES THIS WORD APPEAR ANYWHERE IN THE PROMPT -- and that is the third
+    # time in this gate a presence check stood in for a correctness check.
+    # It passed on a real contract bug: Engine 6's section declared
+    # `E1_HANDOFF` and friends for mode `UPDATE`, and CLIENT_NEW invokes
+    # Engine 6 in mode `REBUILD`. The words were all present; the contract
+    # was wrong.
+    #
+    # So the prompts now carry a machine-checkable declaration per
+    # invocation, and this compares SETS, not substrings:
+    #
+    #     RUNTIME_INPUT_CONTRACT E6/REBUILD = CASE_VERSION, CANONICAL_STATE, ...
+    #
+    # Before trusting a check, ask what it would still pass on. This one
+    # fails if a block arrives undeclared, if a declaration promises a block
+    # that never arrives, or if either is attached to the wrong mode.
+    # The parser is `testing/runtime_contract.py` -- ONE implementation,
+    # also read by `test_followup.py`, which asserts the follow-up's
+    # invocations do NOT silently fall under these declarations. Two copies
+    # of the regex would be two definitions of the contract.
+    #
+    # THE KEY CARRIES THE PIPELINE, and that is not decoration: CLIENT_NEW
+    # and CLIENT_FOLLOWUP both invoke E2/SINGLE, E3/SINGLE and E6/REBUILD
+    # with different payloads (D52d). A three-part key would read this
+    # declaration as governing both.
+    intake_keys = set(IN.to_e6_input(conn, submission).keys())
+
+    mismatches: list[str] = []
+    for key in sorted(sent_keys):
+        engine = key[0]
+        declared = RC.declarations(conn, engine).get(("CLIENT_NEW",) + key)
+        if declared is None:
+            mismatches.append(f"CLIENT_NEW {'/'.join(key)}: NO declaration")
+            continue
+        missing, extra = RC.compare(sent_keys[key],
+                                    RC.expand(declared, intake_keys))
+        if missing:
+            mismatches.append(f"CLIENT_NEW {'/'.join(key)}: sent but NOT declared {missing}")
+        if extra:
+            mismatches.append(f"CLIENT_NEW {'/'.join(key)}: declared but NOT sent {extra}")
+    check(f"all {len(sent_keys)} CLIENT_NEW invocation(s) match their "
+          "declared runtime input contract exactly", not mismatches,
+          str(mismatches))
+
+    # A loop over an empty capture passes having inspected nothing (V2), and
+    # the count is hand-counted from the pipeline: E6 INIT, E1 A, E7 CASE,
+    # E1 B, E2, E3, E6 REBUILD.
+    check("...and all seven invocations were captured",
+          len(sent_keys) == 7, str(sorted("/".join(k) for k in sent_keys)))
+    check("the final Engine 6 run is REBUILD, not UPDATE -- the mismatch "
+          "this check exists to catch",
+          ("E6", "REBUILD", "SINGLE") in sent_keys
+          and ("E6", "UPDATE", "SINGLE") not in sent_keys,
+          str(sorted(k[1] for k in sent_keys if k[0] == "E6")))
+    check("RETRIEVED_KNOWLEDGE is declared for E7 CASE and E1 Pass B",
+          "RETRIEVED_KNOWLEDGE" in sent_keys.get(("E7", "CASE", "SINGLE"), set())
+          and "RETRIEVED_KNOWLEDGE" in sent_keys.get(("E1", "SINGLE", "B"), set()))
+    check("...and NOT Pass A, which is what decides what to retrieve",
+          "RETRIEVED_KNOWLEDGE" not in sent_keys.get(("E1", "SINGLE", "A"), set()))
 
     # ------------------------------------------------------------------
     print("\nEngine 4 and Engine 5 do not run (and that is the point)")

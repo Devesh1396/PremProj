@@ -1232,10 +1232,310 @@ neighbourhood, which is the bug itself.
 Raised and NOT fixed: the relation trigger bumps on a note-only edit to a
 `CONFUSABLE_DO_NOT_MERGE` row — broader than documented, safe direction.
 
-**Still not GATE 3.** `retrieval.by_concept()` reads `strategies`,
-`strategy_concepts` and `implementation_patterns` and does not reference
-`curated_strategies`. The six curated Video 1 strategies are no more
-retrievable than before. **The 20-video pilot stays closed.**
+## GATE 3 — the bridge is built; its FIRST RUN was a MISS (2026-09-19, D52)
+
+`docs/evidence/gate3_first_run.md` has every row. Migrations `038`/`039`,
+`scripts/curated_concepts.py`, `testing/test_gate3_acceptance.py`.
+
+**THE CURATED TEXT DID NOT MOVE.** `curated_strategies` is a THIRD ROW
+SOURCE inside `by_concept()` and `by_fts()` — the same channels, score
+normalization, merge, cap and rerank, the way `implementation_patterns`
+already is. Copying `curated_fields.text_value` into `strategies` was
+rejected: the copy retrieval would return is the one with no span and no
+verbatim guarantee, in `strategies.mechanism`, the exact column D49
+measured K09 fabricating on this document.
+
+**THE FIRST RUN MISSED — 6 of 8. Strategies 2 and 5 were off the page, and
+so was Strategy 3, so the negative-control checks did not execute.** A
+check that did not run is not a check that passed. That result is section
+4 of the evidence file and **is never replaced by the tuned one**.
+
+**The relative ordering of the six cards was already exactly the frozen
+expectation: 4, 1, 6, then 2, 5, then 3 LAST.** The negative control works
+on relevance, with no line of retrieval code knowing the word "vinegar".
+The miss is page COMPOSITION — 82 of 124 merged results are `kind:
+concept`, each its own bucket so the per-bucket cap cannot restrain them.
+The post-first-run fix is the `kinds` filter `retrieve()` has always had;
+**no retrieval code changed**, and every run still prints what the
+default-kinds retrieval returned so the miss stays visible.
+
+**CONCEPT UNITS COME FROM A REGISTRY** (`curated_concept_rules`), each rule
+stating why its construct is reusable. **A unit is a NAME, not a sentence,
+and the discriminator is GRAMMATICAL** — no sentence-ending punctuation,
+comma, quote or arrow; not colon-terminated; at least one lexeme from
+PostgreSQL's own dictionary. **There is no character count in it**: a
+length threshold is a number that can be moved until a fixture passes.
+20 units, **17 bold runs refused as statements and reported**, 2 linked.
+The conditional clauses inside `client_decision_logic` are prose and stay
+UNLINKED — turning one into a concept phrase needs a claim extractor, and
+the claim extractor for curated content is K09 (D49).
+
+**18 of 20 units and 21 of 24 client-profile lines resolved to nothing.**
+The K1 seed has no concept for `Breakfast restructuring`, `Client
+overwhelmed`, `Metformin` or `Vinegar`, and `read_only=True` created none
+(D8). **A library state, reported — not a number to improve by creating
+concepts.**
+
+**EVERY LINK CARRIES THE PHRASE AND ITS BYTE RANGE, AND THE RANGE IS
+CHECKED.** `ck_link_span_is_phrase` refuses a span that cannot contain its
+phrase; `verify()` re-reads the preserved raw file before anything is
+stored, and the suite proves it has teeth by moving a span three
+characters. D48: a populated location field is not provenance.
+
+**Strategy 6's `client_decision_logic` survives retrieval as its own
+field**, verbatim at `[9452:10643]` of the original — the block K09 lost
+entirely and GATE 1 recovered.
+
+**`client_decision_logic` DOES influence what comes back** (full text
+ranks the card as one document). **Full text has no notion of negation**,
+so "LOWER PRIORITY when X" matches a query about X exactly as "prioritize
+when X" does; separating indication from contra-indication is E1 Pass B.
+
+**Curated cards are NOT in the vector channel** — no embedding column —
+and `diagnostics["curated_vector"]` says so on every retrieval.
+
+**Found and fixed:** `by_vector()` guarded on `MODEL_EMBEDDING` and not on
+`LLM_API_KEY`, so a configured model with no credential reached the live
+endpoint and raised 404 where V3 requires a named degradation.
+
+**Reported, NOT fixed:** a curated source is chunked by K08 AND parsed
+into cards, so its content is on a page twice.
+
+**`test_gate3_acceptance.py` is in `run_all.sh` and SKIPS there** — a full
+run leaves the ontology at 269 live concepts and **0 embeddings**, the
+same clean-seed condition D51 records for the sweep. It is run against a
+clean rebuild. Which suite empties the column is **unresolved and stated
+as such**, not guessed; it is pre-existing.
+
+**The 20-video pilot stays closed.** K10 remains closed (D48). One source,
+one synthetic client.
+
+### GATE 3 REVIEW CLOSED — the bridge is now in the runtime (D52a)
+
+**GATE 3 WAS NOT IN THE RUNTIME.** `retrieval.py` was imported by NO script
+outside the suites, and `client_new.py` handed Engine 7
+`NORMALIZED_CONCEPTS` and **no knowledge at all** — so a real case could not
+consume the curated strategies this branch made retrievable, and the
+post-first-run `kinds` fix lived only in the acceptance test. **A bridge
+nothing crosses is not a bridge.** `retrieval.case_knowledge()` is the ONE
+assembly both client pipelines call; CLIENT_NEW has a `RETRIEVE` step
+between `NORMALIZE` and `E7`, and CLIENT_FOLLOWUP has one before its E1.
+
+**`CASE_KINDS` IS STATED BY THE CALLER, never inherited.**
+`retrieval.KINDS` includes `concept` — ontology vocabulary, right for an
+ontology query, wrong for a case, and the first run measured what it costs:
+27 of 30 places. **The query is Pass A's own phrases and research
+questions**, which is its statement of what matters and is identity-free by
+construction, not by a filter somebody remembers.
+
+**A CURATED CARD IS EXPANDED, NEVER FLATTENED.** Every preserved field with
+its provenance and byte range, so `client_decision_logic` stays its own
+field. Collapsing into `summary`/`mechanism` rebuilds the shape GATE 1
+refused to write and is how K09 lost it (D49). **`RANKING_BASIS:
+RELEVANCE_ONLY` is a FIELD on the block** (D43): retrieval supplies
+knowledge, E7 reasons, Pass B decides. Pass B gets `E7_HANDOFF` AND the
+block — relaying only through prose makes arrival depend on an engine
+having repeated it. Pass A, E2 and E3 do NOT get it.
+
+**n8n PARITY — ANSWERED.** `workflows/run_engine.json` is RUN_ENGINE alone:
+it takes `STRUCTURED_INPUT` from its caller and constructs no CASE payload,
+and there is no other workflow file. **Python and n8n cannot disagree today
+because only Python assembles it.** Whoever writes the n8n CLIENT_NEW must
+build the same E7 input, `RETRIEVED_KNOWLEDGE` included, under D26/D31.
+
+**A MISSING OPTIONAL CAPABILITY MUST NEVER DEGRADE ESTABLISHED KNOWLEDGE.**
+`store_units()` deleted every link and rewrote what that run resolved — and
+the semantic tier is inert on the VPS **by design**, so a re-import there
+would have turned a verified link set into zero links and called it a
+successful import. Recomputation is now four-state: **`RECOMPUTED`**
+(authoritative — the ONLY state that may delete), **`FIRST_ATTACHMENT`**
+(no prior links, nothing to lose), **`NOT_RECOMPUTED`** (preserved
+untouched, reason reported), **`FAILED_CLOSED`** (prior links no longer sit
+on the text they name, so they are deleted rather than kept — retaining a
+moved span fabricates provenance, D48). Authority is
+`normalize.semantic_tier_available()`, the SAME predicate `_tier_semantic`
+acts on, extracted so there is one implementation; decided ONCE per import
+before any card is touched. The staleness test is the containment check
+itself, not a hash kept in step.
+
+**THE NEGATIVE CONTROL COULD PASS VACUOUSLY.** `if n in rank and low[0] in
+rank` ran ZERO comparisons on the first run and the suite could still exit
+0. Presence is now its own failable check and the comparisons are COUNTED.
+
+**`testing/test_gate3_bridge.py` IS THE DETERMINISTIC REGRESSION** — no
+provider, every floor, because the acceptance suite SKIPS in every
+`run_all.sh`. **GATE 2 owns phrase→concept; GATE 3 owns established
+concept→curated knowledge.** It RECEIVES K1 concept ids and **manufactures
+no semantic corpus**: fabricating vectors would be inventing GATE 2's
+answer and then testing it, and would quietly become evidence that 0.82
+works. Only phrase→concept is supplied; units, spans, verification and the
+insert are production. Its rank fixture asserts the two cards do not merely
+TIE (V2), and its RUNTIME section runs the real
+`client_new.run_new_client()` and reads what was actually sent at the
+PROVIDER BOUNDARY — the request is client data and is not persisted (D28),
+so that boundary is the only honest place to look. A test that calls
+`retrieval.py` is not proof of runtime integration.
+
+### GATE 3 REVIEW ROUND 2 — availability is not authority (D52b)
+
+**`semantic_tier_available()` WAS DOING TWO JOBS.** D52a made it the authority
+for replacing a curated link set, and it answers "CAN the tier execute?" —
+satisfied by **one** embedded concept. **Partial embedding coverage is an
+ORDINARY SUPPORTED STATE here**: `embed_library.py` batches 25 and reports
+`still_stale`. So a run that simply could not SEE a concept could mark itself
+authoritative and delete a link a complete run established — the same failure
+class as D52a, one level narrower, from a capability check that was **true for
+the wrong reason**.
+
+**TWO PREDICATES, NEVER SYNONYMS.** `normalize.semantic_tier_available()` = can
+it run. `curated_concepts.semantic_recomputation_authoritative()` = may its
+SILENCE delete. The second additionally requires **complete fresh coverage** —
+`embed_library.stale_count()`, the ONE freshness definition the loader already
+uses (embedding null, hash null, or hash ≠ current `search_text`), never a
+second formula that would drift — and a **coherent pinned model**, because D34
+pins one model per column and `trg_embedding_coherent` stops a second being
+WRITTEN but cannot stop a caller QUERYING with one.
+
+**GATE 2's OPERATIONAL BEHAVIOUR IS UNCHANGED, and a test asserts it**: the
+tier stays AVAILABLE in exactly the states where recomputation is refused. Only
+the authority to DESTROY got stricter.
+
+**`RETRIEVED_KNOWLEDGE` ARRIVED AT THE ENGINES AND WAS DEFINED IN NONE.** D52a
+proved it reaches the provider boundary; that is not proof any engine has a
+contract for using it. **Measured, it was not the exception — NONE of the
+top-level blocks CLIENT_NEW composes appeared in any prompt**: not
+`CANONICAL_STATE`, `E1_PASS_A_HANDOFF`, `E7_HANDOFF`, `NORMALIZED_CONCEPTS`,
+`CASE_RESEARCH_QUESTIONS` or any `_HANDOFF`. **The runtime input contract had
+never been written down for anything.**
+
+All of them now are, in the **build-owned Addendum A** each prompt already
+carries — `## A5` (E1), `## A6` (E2), `## A7` (E3), `## A8` (E6), `## A9` (E7).
+**The practitioner's specification is untouched** (hard rule 1) and the
+manifest's `sections` count is **unchanged for all seven prompts**, because
+`SECTION_RULE` does not count `## A`-form headings. Prompt hashes changed and
+were reloaded through the registry.
+
+E7 CASE is told: **the library query has ALREADY been run and this is its
+result** — read it first; `RANKING_BASIS: RELEVANCE_ONLY` is never clinical
+priority; use `ITEMS` before declaring `KNOWLEDGE_SUFFICIENT: false` or
+`LIVE_RESEARCH_REQUIRED: true`; a `curated_strategy` is practitioner
+intelligence, **not published evidence**; `client_decision_logic` is
+professional judgement that does not need re-researching to be used; the three
+layers stay separate (§67). E1 is told: **Pass A gets no retrieval because it
+is what decides what to retrieve**; on Pass B `E7_HANDOFF` is the REASONING and
+`RETRIEVED_KNOWLEDGE` the preserved RETRIEVAL beside it, so a
+practitioner-authored field arrives verbatim rather than depending on Engine 7
+having repeated it; rank is relevance; **Engine 1 remains the decision-maker**.
+
+**THE REGRESSION ASSERTS CONTRACT PRESENCE, NEVER MODEL WORDING.** It drives
+the real CLIENT_NEW pipeline, captures each engine's actual `structured_input`
+keys from the real request objects, subtracts intake-derived fields using
+`intake.to_e6_input()` **itself** rather than a hand-written exclusion list that
+would go stale with the intake schema, and checks the receiving engine's ACTIVE
+prompt row. **22 blocks.** Proven to have teeth by deleting `## A9`, reloading,
+and watching five go red. Provider-boundary delivery is asserted separately.
+The append-only registry refused a direct tamper of the stored content
+(`trg_engine_prompts_append_only`) — the guard working.
+
+**Reported, NOT closed:** CLIENT_FOLLOWUP's own blocks (`E4_HANDOFF`,
+`E6_DELTA`, `LIVE_INTERVENTIONS`, `FOLLOWUP_ANSWERS`, `FOLLOWUP_STRUCTURED`,
+`CURRENT_STATE`, `REVIEW_PERIOD`) have the same pre-existing gap. The
+regression covers CLIENT_NEW as the review scoped it; `RETRIEVED_KNOWLEDGE` on
+that path IS covered, because E1's `## A5` names it.
+
+### GATE 3 REVIEW ROUND 3 — the contract named the wrong mode (D52c)
+
+**D52b's Engine 6 section said those blocks arrive "on an `UPDATE` run".
+CLIENT_NEW calls Engine 6 with `mode="REBUILD"`** — the step is only NAMED
+`E6_UPDATE`, and A1 already explains why REBUILD: a delta's fields describe
+changes and do not map onto the state's fields. The `<RUNTIME_INVOCATION>`
+envelope said REBUILD while the contract governing it said UPDATE. A8 is now
+organised BY MODE: `INIT`, `REBUILD`, and `UPDATE` named as the follow-up
+path whose contract is deliberately not declared.
+
+**THE THIRD PRESENCE CHECK IN THIS GATE.** D52b's regression asked `if key
+not in content` — *does this word appear anywhere in the prompt?*
+`E1_HANDOFF` appeared, under an UPDATE paragraph, and a REBUILD invocation
+passed. Same shape as the first-run negative control (`if n in rank and
+low[0] in rank` ran ZERO comparisons and stayed green) and as "the block
+reaches the provider boundary" (an engine with no contract for it).
+**BEFORE TRUSTING A CHECK, ASK WHAT IT WOULD STILL PASS ON. If the answer
+includes the bug it exists to prevent, the check is decorative.**
+
+**DECLARATIONS ARE COMPARED AS SETS, PER INVOCATION.** Each build-owned
+Addendum carries `RUNTIME_INPUT_CONTRACT E6/REBUILD = CASE_VERSION, ...`.
+**The key is the invocation as the RUNTIME RECORDED IT** — the test reads
+`engine_runs.engine_mode` and `pass` (D27's stored mode, what the envelope
+carried), so a step named `E6_UPDATE` running in REBUILD is keyed
+`E6/REBUILD`; a check keyed on the caller's label would have agreed with the
+wrong one. Set equality **both directions**: undeclared-but-sent,
+declared-but-not-sent, and either attached to the wrong mode. All three
+proven by breaking them. Seven invocations, and the COUNT is asserted
+because a loop over an empty capture passes having inspected nothing.
+
+`INTAKE_PAYLOAD` is the one sentinel: E6 INIT receives the converted intake
+submission, and it expands to what `intake.to_e6_input()` itself produces —
+never a hand-written list that would go stale with the intake schema.
+
+**THE FOLLOW-UP E1 RUNS ONCE, `pass = SINGLE`, AND GETS NO `E7_HANDOFF`** —
+Engine 7 does not run on that path, so `RETRIEVED_KNOWLEDGE` is the only
+library input and nothing will have reasoned over it first. E1's A5 says so.
+**No declaration line is written for it**: a declaration is a COMPLETE set,
+and completing it means settling the whole follow-up contract, which is a
+pre-existing cleanup recorded rather than guessed at. E7's seven
+knowledge-clock modes are undeclared for the same reason.
+
+### GATE 3 REVIEW ROUND 4 — the contract key needed a pipeline (D52d)
+
+**`(engine, mode, pass)` DOES NOT DETERMINE THE PAYLOAD.** `client_new.py:571`
+and `client_followup.py:393` BOTH call `engine="E6", mode="REBUILD"`, for the
+same stated reason, and hand it completely different things — CLIENT_NEW's six
+blocks against the follow-up's thirteen (`FOLLOWUP_ANSWERS`, `CURRENT_STATE`,
+`LIVE_INTERVENTIONS`, `E4_HANDOFF`, `E6_DELTA`, …). `E2/SINGLE` and
+`E3/SINGLE` collide the same way once Engine 4 routes `MULTIPLE`. D52c's
+declaration would have read as the governing contract for a follow-up
+invocation, and a checker would have reported that payload as violating a
+contract that was never about it.
+
+**DECLARING NOTHING IS A POSITION AND HAD TO BE EXPRESSIBLE.** D52c said the
+follow-up contract was "deliberately not declared" and the syntax could not
+say it — a line already existed for those triples, written for the other
+pipeline. The key is now **`PIPELINE ENGINE/MODE/PASS`**, and the absence of a
+`CLIENT_FOLLOWUP` line now means what it says.
+
+**ONE PARSER** — `testing/runtime_contract.py`, read by `test_client_new.py`
+(CLIENT_NEW's invocations must match exactly, both directions) and
+`test_followup.py` (the follow-up's must NOT silently fall under them). Two
+copies of the regex would be two definitions of the contract.
+
+**THE REGRESSION DRIVES THE REAL COLLISION**, routing `MULTIPLE` so E1/E2/E3
+actually run rather than the E2/E3 half being assumed, and asserts that **a
+pipeline-blind lookup would have collapsed all three onto CLIENT_NEW's
+contract and reported false violations**. Reverting the key to three parts
+turns BOTH suites red.
+
+**CLIENT_FOLLOWUP's contract is still deliberately undeclared.** Completing it
+means settling every block that path sends, which is a separate cleanup. E1's
+prose about `RETRIEVED_KNOWLEDGE` on the follow-up's `pass = SINGLE` run stays
+and the regression asserts the block arrives — but prose about one block is
+not a complete declaration and is not presented as one.
+
+### GATE 3 REVIEW ROUND 5 — the prose was still mode-only (D52e)
+
+D52d scoped the MACHINE declaration by pipeline and left Engine 6's `A8`
+PROSE organised by mode — *"`REBUILD` — the end of a new-client cycle. You
+receive `CASE_VERSION`, `CANONICAL_STATE`, `NORMALIZED_CONCEPTS`, …"*. True of
+CLIENT_NEW, **false of CLIENT_FOLLOWUP**, which invokes `REBUILD` for its own
+final state reconstruction and receives neither `CANONICAL_STATE` nor
+`NORMALIZED_CONCEPTS`. **The declaration a MACHINE reads was scoped and the
+paragraph a MODEL reads was not** — the checker could no longer be misled and
+the engine still could.
+
+`A8` is organised BY PIPELINE first now, and says explicitly: **DO NOT APPLY
+THE CLIENT_NEW `REBUILD` FIELD LIST TO A FOLLOW-UP RUN.** No
+`CLIENT_FOLLOWUP` declaration was created — the absence is still the
+deliberate position. Declarations byte-identical, `sections` unchanged at 89,
+one file touched.
 
 **The first live call to any real API in this build FAILED, and the
 failure was informative.** The actor answers HTTP 201 from a SUCCEEDED

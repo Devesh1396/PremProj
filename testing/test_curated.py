@@ -467,6 +467,315 @@ def main() -> int:
     check(f"the grammar is broader than this fixture: {used} of {total} rules "
           "were needed here", used < total, f"{used}/{total}")
 
+    # ==================================================================
+    # GATE 3 — the bridge to retrieval, and the rules that feed it
+    # ==================================================================
+    #
+    # Nothing here reads `testing/fixtures/gate3/video1_answer_key.md`.
+    # These are the invariants the bridge must hold whatever a synthetic
+    # client turns out to retrieve; the acceptance run is a separate
+    # artifact and is deliberately run AFTER this suite is green (D52).
+
+    print("\nGATE 3 a. concept units come from a REGISTRY, not from this file")
+
+    import curated_concepts as CC
+    import normalize as NZ
+    import retrieval as R
+
+    unjustified = conn.execute(
+        """select count(*) from curated_concept_rules
+            where length(btrim(reusable_justification)) < 20
+               or length(btrim(expected_elsewhere)) < 10""").fetchone()[0]
+    check("no concept rule ships without a reusability justification",
+          unjustified == 0)
+
+    text_now = SOURCE.read_text(encoding="utf-8")
+    c_rules = CC.load_rules(conn)
+    _, cards_now = CP.parse(text_now, CP.load_rules(conn))
+    all_units, all_refused = [], []
+    for card in cards_now:
+        if card.kind != "STRATEGY":
+            continue
+        u, rf = CC.card_units(conn, c_rules, card)
+        all_units += u
+        all_refused += rf
+
+    fired = {u.rule_id for u in all_units}
+    total_rules = conn.execute(
+        "select count(*) from curated_concept_rules where active").fetchone()[0]
+    check(f"the rule set is broader than this fixture: {len(fired)} of "
+          f"{total_rules} rules fired here", len(fired) < total_rules,
+          f"{sorted(fired)}")
+
+    # Deactivating a rule must remove its units. If it does not, the
+    # extractor is reading a list in the code and the registry is
+    # decoration (hard rule 13).
+    conn.execute("update curated_concept_rules set active=false where rule_id='BOLD_LABEL'")
+    off_units = []
+    for card in cards_now:
+        if card.kind == "STRATEGY":
+            off_units += CC.card_units(conn, CC.load_rules(conn), card)[0]
+    conn.execute("update curated_concept_rules set active=true where rule_id='BOLD_LABEL'")
+    check("deactivating BOLD_LABEL removes exactly its units",
+          {u.rule_id for u in off_units} == fired - {"BOLD_LABEL"}
+          and len(off_units) < len(all_units),
+          f"{len(all_units)} -> {len(off_units)}")
+
+    # ==================================================================
+    print("\nGATE 3 b. a unit is a NAME; prose never reaches the resolver")
+
+    # The spec, stated in `039`'s header, applied to inputs that are not
+    # this document's. A bold run does two different jobs and only one of
+    # them is a concept candidate.
+    spec = [
+        ("post-meal muscular activity", True),
+        ("High-carb breakfast", True),
+        ("Restriction should have a reason.", False),
+        ("When clinically reasonable, preserve foods", False),
+        ('"Can we improve this meal?"', False),
+        ("Prioritize this strategy when:", False),
+        ("meal finishes → movement begins", False),
+        ("not", False),
+        ("   ", False),
+    ]
+    wrong = [p for p, want in spec if CC.is_name_shaped(conn, p)[0] != want]
+    check("the phrase test separates names from statements", not wrong, str(wrong))
+
+    # THE ASSERTION THAT MATTERS, and it is not constructed: every phrase
+    # the importer actually hands to `normalize.resolve()` on a real
+    # import, checked against the same rule. D51's mechanism failure was a
+    # CALLER sending prose to a concept resolver; this is the test that
+    # catches its recurrence in a new costume.
+    seen: list[tuple] = []
+    original_resolve = NZ.resolve
+
+    def spy(c, phrase, **kw):
+        seen.append((phrase, kw.get("read_only"), kw.get("allowed_types")))
+        return original_resolve(c, phrase, **kw)
+
+    NZ.resolve = spy
+    try:
+        conn.execute("update source_envelopes set status='NORMALIZED' "
+                     " where envelope_id=%s", (first,))
+        env = [e for e in CI.pending(conn) if str(e[0]) == first][0]
+        out = CI.import_one(conn, env)
+    finally:
+        NZ.resolve = original_resolve
+
+    check("the importer did call the resolver", bool(seen), str(len(seen)))
+    prose = [p for p, _, _ in seen
+             if p not in {c.name for c in cards_now}
+             and not CC.is_name_shaped(conn, p)[0]]
+    check("no phrase sent to the resolver is prose", not prose, str(prose[:3]))
+    check("every resolver call is READ-ONLY: nothing enters the ontology",
+          all(ro is True for _, ro, _ in seen))
+    check("no caller-supplied concept type: a curated card does not "
+          "structurally know one (D51)",
+          all(at is None for _, _, at in seen))
+
+    # ==================================================================
+    print("\nGATE 3 c. a link's span CONTAINS the phrase it attributes (D48)")
+
+    links = conn.execute(
+        """select l.source_phrase, l.source_start, l.source_end, l.field_name
+             from curated_strategy_concepts l
+             join curated_strategies s on s.curated_id = l.curated_id
+            where s.envelope_id=%s""", (first,)).fetchall()
+    raw = conn.execute("select raw_location from source_envelopes where envelope_id=%s",
+                       (first,)).fetchone()[0]
+    original = (root / raw).read_text(encoding="utf-8")
+    bad = [(p, a, b) for p, a, b, _ in links if original[a:b] != p]
+    if links:
+        check(f"every one of {len(links)} stored link(s) is its claimed slice "
+              "of the ORIGINAL file", not bad, str(bad[:2]))
+    else:
+        # A VACUOUS PASS IS WORSE THAN A SKIP (V2/V3). This suite sets
+        # LLM_API_KEY="" so no provider is ever called, which makes the
+        # semantic tier inert -- and the D47 phrases resolve through no
+        # cheaper tier, so a real import here stores no link at all. Saying
+        # "0 of 0 links verified" as a PASS would report the span check as
+        # exercised when nothing exercised it. The unit-level check below
+        # runs over all 20 extracted units and is the real assertion.
+        preflight.skip("a resolvable concept for any curated unit",
+                       "no curated unit resolved, so no link was stored and "
+                       "the stored-span check had nothing to verify. The "
+                       "per-unit span check below still runs over every "
+                       "extracted unit.")
+
+    # ...and the check has teeth. D48's stored ranges all LOOKED right;
+    # six of seven did not contain the statement. A verifier that cannot
+    # tell a wrong span from a right one asserts nothing.
+    if all_units:
+        u = all_units[0]
+        moved = CC.Unit(u.rule_id, u.unit_kind, u.field_name, u.phrase,
+                        u.source_start + 3, u.source_end + 3)
+        check("...and a span moved by three characters is REPORTED",
+              bool(CC.verify(original, [moved])))
+        check("...while the unmoved one is not", not CC.verify(original, [u]))
+
+    # Every unit offered, linked or not, is a verbatim slice: the
+    # extractor never summarises, shortens or rewrites.
+    check("every extracted unit is a verbatim slice of the source",
+          not CC.verify(original, all_units), str(CC.verify(original, all_units)[:2]))
+
+    # ==================================================================
+    print("\nGATE 3 d. the database refuses a link it cannot stand behind")
+
+    card_id = conn.execute(
+        "select curated_id from curated_strategies where envelope_id=%s "
+        " order by ordinal limit 1", (first,)).fetchone()[0]
+    live = conn.execute(
+        "select concept_id from concepts where status in ('SEEDED','ACTIVE') "
+        " order by canonical_key limit 1").fetchone()
+    if live is None:
+        preflight.skip("K1 ontology seed",
+                       "no live concept exists, so a retrieval link has "
+                       "nothing to point at and the bridge cannot be exercised.")
+    else:
+        live_id = live[0]
+        try:
+            conn.execute(
+                """insert into curated_strategy_concepts
+                     (curated_id, concept_id, rule_id, field_name, source_phrase,
+                      source_start, source_end, resolution_tier)
+                   values (%s,%s,'CARD_NAME','strategy_name','abcdef',10,99,'test')""",
+                (card_id, live_id))
+            check("a span whose length is not the phrase's is refused", False,
+                  "the insert succeeded")
+            conn.execute("delete from curated_strategy_concepts where resolution_tier='test'")
+        except psycopg.errors.CheckViolation:
+            check("a span whose length is not the phrase's is refused", True)
+
+        conn.execute("delete from concepts where canonical_key='CURTEST_PROPOSED'")
+        proposed = conn.execute(
+            """insert into concepts (canonical_key, canonical_name, concept_type, status)
+               values ('CURTEST_PROPOSED','curtest proposed','PHYSIOLOGY','PROPOSED')
+               returning concept_id""").fetchone()[0]
+        try:
+            conn.execute(
+                """insert into curated_strategy_concepts
+                     (curated_id, concept_id, rule_id, field_name, source_phrase,
+                      source_start, source_end, resolution_tier)
+                   values (%s,%s,'CARD_NAME','strategy_name','abcdef',10,16,'test')""",
+                (card_id, proposed))
+            check("a link to a PROPOSED concept is refused (D8)", False,
+                  "the insert succeeded")
+            conn.execute("delete from curated_strategy_concepts where resolution_tier='test'")
+        except psycopg.errors.RaiseException:
+            check("a link to a PROPOSED concept is refused (D8)", True)
+
+    # ==================================================================
+    print("\nGATE 3 e. GATE 1 is intact: no curated text was copied into "
+          "`strategies`")
+
+    names = tuple(SOURCE_STRATEGY_NAMES)
+    leaked = conn.execute(
+        "select count(*) from strategies where name = any(%s)", (list(names),)
+    ).fetchone()[0]
+    check("no curated card became a `strategies` row", leaked == 0, str(leaked))
+    bodies = conn.execute(
+        """select count(*) from strategies s
+            where exists (select 1 from curated_fields f
+                           where f.text_value is not null
+                             and (s.summary = f.text_value
+                               or s.mechanism = f.text_value))""").fetchone()[0]
+    check("no curated field text appears in `strategies.summary` or "
+          "`.mechanism` — the column D49 measured K09 fabricating",
+          bodies == 0, str(bodies))
+
+    # ==================================================================
+    print("\nGATE 3 f. retrieval reaches a curated card, and only via a link")
+
+    if live is not None:
+        # The span comes from the PARSER's own CARD_NAME unit, not from
+        # `curated_strategies.source_start`, which is the whole card. A
+        # hand-written span would be refused by `ck_link_span_is_phrase`,
+        # which is the constraint working.
+        ord0 = conn.execute("select ordinal from curated_strategies where curated_id=%s",
+                            (card_id,)).fetchone()[0]
+        nu = next(u for u in all_units
+                  if u.unit_kind == "CARD_NAME"
+                  and u.phrase == next(c.name for c in cards_now if c.ordinal == ord0))
+        name, n_a, n_b = nu.phrase, nu.source_start, nu.source_end
+        conn.execute(
+            """insert into curated_strategy_concepts
+                 (curated_id, concept_id, rule_id, field_name, source_phrase,
+                  source_start, source_end, resolution_tier, resolution_score)
+               values (%s,%s,'CARD_NAME','strategy_name',%s,%s,%s,'test',1.0)""",
+            (card_id, live_id, name, n_a, n_b))
+        got = R.retrieve(conn, concept_ids=[str(live_id)], limit=50,
+                         telemetry=False)["results"]
+        check("a linked curated card is retrievable through the concept spine",
+              any(r["kind"] == "curated_strategy" and r["id"] == str(card_id)
+                  for r in got), str([r["kind"] for r in got][:6]))
+
+        conn.execute("delete from curated_strategy_concepts where resolution_tier='test'")
+        got2 = R.retrieve(conn, concept_ids=[str(live_id)], limit=50,
+                          telemetry=False)["results"]
+        check("...and unreachable once the link is gone — the link is what "
+              "carries it, not a name match",
+              not any(r["id"] == str(card_id) for r in got2))
+
+    # Full text reads the preserved rows WHERE THEY ARE. A word that
+    # occurs only in a curated field must reach its card with no link at
+    # all, or the channel is not running.
+    fts = R.retrieve(conn, query="vinegar before a meal", limit=50,
+                     telemetry=False)["results"]
+    vinegar = conn.execute(
+        "select curated_id::text from curated_strategies "
+        " where envelope_id=%s and name like 'Vinegar%%'", (first,)).fetchone()
+    check("a curated card is reachable by full text over its preserved fields",
+          vinegar is not None
+          and any(r["kind"] == "curated_strategy" and r["id"] == vinegar[0]
+                  for r in fts),
+          str([r["label"][:30] for r in fts][:5]))
+
+    # ==================================================================
+    print("\nGATE 3 g. a retrieved card traces back to the practitioner's bytes")
+
+    tr = R.curated_trace(conn, str(card_id))
+    check("the trace names the preserved raw file", tr.get("raw_location") == raw)
+    check("...and every field it returns is verbatim at the span it names",
+          bool(tr["fields"]) and all(
+              original[f["source_start"]:f["source_end"]] == f["text_value"]
+              for f in tr["fields"]),
+          str(len(tr.get("fields", []))))
+
+    # ==================================================================
+    print("\nGATE 3 h. what could not be linked is REPORTED, never guessed")
+
+    rep = out["concepts"]
+    check("the import reports the units it refused as prose",
+          len(rep["refused"]) > 0, str(len(rep["refused"])))
+    check("...and the fields it could not link at all",
+          isinstance(rep["unlinked_fields"], list))
+    real_fields = {r[0] for r in conn.execute(
+        """select f.field_name from curated_fields f
+             join curated_strategies s on s.curated_id=f.curated_id
+            where s.envelope_id=%s""", (first,)).fetchall()}
+    check("every reported unlinked field is a real stored field",
+          all(u["field"] in real_fields for u in rep["unlinked_fields"]))
+
+    # Links are idempotent by identity, like the cards they hang off.
+    before_links = sorted(conn.execute(
+        """select l.concept_id::text, l.source_start, l.source_end
+             from curated_strategy_concepts l
+             join curated_strategies s on s.curated_id=l.curated_id
+            where s.envelope_id=%s order by 1,2""", (first,)).fetchall())
+    conn.execute("update source_envelopes set status='NORMALIZED' where envelope_id=%s",
+                 (first,))
+    CI.import_one(conn, [e for e in CI.pending(conn) if str(e[0]) == first][0])
+    after_links = sorted(conn.execute(
+        """select l.concept_id::text, l.source_start, l.source_end
+             from curated_strategy_concepts l
+             join curated_strategies s on s.curated_id=l.curated_id
+            where s.envelope_id=%s order by 1,2""", (first,)).fetchall())
+    check("re-importing produces the identical link set",
+          before_links == after_links,
+          f"{len(before_links)} -> {len(after_links)}")
+
+    conn.execute("delete from concepts where canonical_key='CURTEST_PROPOSED'")
+
     clear(conn)
     shutil.rmtree(root, ignore_errors=True)
     print()

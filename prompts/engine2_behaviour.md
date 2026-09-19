@@ -75,6 +75,38 @@ interesting.
 All reasoning is scoped to one `client_id`. Engine 7 knowledge is global and shared; client data
 never is. Do not reference or infer from any other client's case.
 
+
+## A6. Runtime input blocks
+
+The orchestrator hands you named top-level blocks beside the case payload:
+`CASE_VERSION`, `CANONICAL_STATE` — Engine 6's current case state — and
+`E1_HANDOFF`, Engine 1's substantive reasoning for this cycle. On a
+follow-up cycle `E4_HANDOFF` and `E6_DELTA` accompany them; that path's
+contract is not declared below because its blocks are not yet written down.
+
+`E1_HANDOFF` is the reasoning, never the control block: the control block is
+routing metadata and contains no strategies, targets or evidence. You make
+Engine 1's decision executable; you do not re-decide it, and you are not
+given the knowledge library it chose from.
+
+The lines below are a **machine-checkable declaration**, not decoration.
+`testing/test_client_new.py` drives the real CLIENT_NEW pipeline, reads the
+mode and pass each run actually recorded in `engine_runs`, and asserts the
+blocks sent are EXACTLY the blocks declared for that invocation.
+
+**THE KEY IS `PIPELINE ENGINE/MODE/PASS`, and the pipeline is not
+decoration either.** `(engine, mode, pass)` does NOT determine the payload:
+CLIENT_NEW and CLIENT_FOLLOWUP both invoke `E2/SINGLE`, `E3/SINGLE` and
+`E6/REBUILD`, with different blocks each time — the follow-up's
+`E6/REBUILD` carries `FOLLOWUP_ANSWERS`, `CURRENT_STATE`,
+`LIVE_INTERVENTIONS`, `E4_HANDOFF` and `E6_DELTA`, none of which exist on
+the new-client path. A declaration without a pipeline scope would be read
+as governing both.
+
+```
+RUNTIME_INPUT_CONTRACT CLIENT_NEW E2/SINGLE = CASE_VERSION, CANONICAL_STATE, E1_HANDOFF
+```
+
 ---
 # ENGINE 2 — BEHAVIOUR INTELLIGENCE
 

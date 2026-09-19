@@ -258,6 +258,14 @@ class ParsedCard:
     source_end: int
     fields: list[ParsedField]
     family: str | None = None
+    # The NAME's own span, which `name_span()` already computes and
+    # `parse()` used to discard. GATE 3 offers the card name to the
+    # concept resolver (D52) and a link without a byte range is not
+    # provenance (D48), so the offsets are kept rather than re-derived by
+    # searching the document for the string -- a name that occurs twice
+    # would make that search point at the wrong occurrence.
+    name_start: int | None = None
+    name_end: int | None = None
 
     @property
     def content_hash(self) -> str:
@@ -304,7 +312,7 @@ def parse(text: str, rules: list[Rule]) -> tuple[list[Block], list[ParsedCard]]:
             kind=b.block_kind, ordinal=b.ordinal, name=name,
             heading_path=b.heading_path,
             source_start=b.heading_start, source_end=card_end,
-            fields=fields))
+            fields=fields, name_start=n_start, name_end=n_end))
     return blocks, cards
 
 

@@ -99,6 +99,80 @@ Individual client memory stays identifiable and client-scoped. Only de-identifie
 practice intelligence, and practice outcomes remain structurally separate from published evidence.
 There is no path in the schema that merges them.
 
+
+## A8. Runtime input blocks, by PIPELINE and MODE
+
+The orchestrator hands you named top-level blocks. **Which blocks arrive
+depends on the PIPELINE AND the mode — the mode alone does not tell you.**
+Both are in the `<RUNTIME_INVOCATION>` envelope rather than inferred from
+the payload.
+
+**THE MODE IS NOT THE WHOLE ANSWER.** `REBUILD` is used by BOTH client
+pipelines, for the same stated reason, and they hand you different things.
+A section organised by mode alone would have told you to expect the
+new-client blocks on a follow-up run, which is why this one is organised by
+pipeline first.
+
+### CLIENT_NEW — `INIT`, then `REBUILD`
+
+**`INIT`** — a new client. You receive the converted intake submission: its
+own fields, named as the intake schema names them, plus `CASE_VERSION` and
+`INTAKE_SCHEMA`. There is no prior state; you are producing the first one.
+
+**`REBUILD`** — the end of a new-client cycle. You receive `CASE_VERSION`,
+`CANONICAL_STATE` (the state you are rebuilding from), `NORMALIZED_CONCEPTS`
+(this cycle's clinical phrases resolved to canonical concepts), and
+`E1_HANDOFF`, `E2_HANDOFF` and `E3_HANDOFF` — the substantive reasoning of
+this cycle's engines, never their control blocks. A1 already says why this
+is `REBUILD` and not `UPDATE`: a delta's fields describe changes and do not
+map onto the state's fields, so a full state is asked for and the delta is
+kept beside it rather than merged.
+
+### CLIENT_FOLLOWUP — `UPDATE`, then `REBUILD` again
+
+**`UPDATE`** — the follow-up's first Engine 6 run, where a delta IS the
+output A1 describes.
+
+**`REBUILD`** — the follow-up's FINAL state reconstruction, at the end of
+that cycle. It uses the same mode as CLIENT_NEW's second run and for the
+same reason, and **it does not receive the same blocks.** The follow-up
+carries its own context — the review period, the follow-up answers, the
+current state, the live interventions, Engine 4's reasoning and Engine 6's
+own earlier delta — and does not carry `CANONICAL_STATE` or
+`NORMALIZED_CONCEPTS` at all.
+
+**DO NOT APPLY THE CLIENT_NEW `REBUILD` FIELD LIST ABOVE TO A FOLLOW-UP
+RUN.** Neither follow-up mode has a declared input contract below, and that
+absence is deliberate rather than an oversight: a declaration is a COMPLETE
+set, and completing one means settling every block that pipeline sends,
+which is a separate piece of work. **Read what the envelope and the payload
+actually give you on that path; do not infer a field list from this
+section.**
+
+`NORMALIZED_CONCEPTS`, where it is present, is the concept spine and not a
+clinical claim: a phrase resolving to a concept says the vocabulary was
+recognised, not that the finding is established. A7's practice-intelligence
+boundary and A5's client isolation apply on every path and in every mode.
+
+The lines below are a **machine-checkable declaration**, not decoration.
+`testing/test_client_new.py` drives the real CLIENT_NEW pipeline, reads the
+mode and pass each run actually recorded in `engine_runs`, and asserts the
+blocks sent are EXACTLY the blocks declared for that invocation.
+
+**THE KEY IS `PIPELINE ENGINE/MODE/PASS`, and the pipeline is not
+decoration either.** `(engine, mode, pass)` does NOT determine the payload:
+CLIENT_NEW and CLIENT_FOLLOWUP both invoke `E2/SINGLE`, `E3/SINGLE` and
+`E6/REBUILD`, with different blocks each time — the follow-up's
+`E6/REBUILD` carries `FOLLOWUP_ANSWERS`, `CURRENT_STATE`,
+`LIVE_INTERVENTIONS`, `E4_HANDOFF` and `E6_DELTA`, none of which exist on
+the new-client path. A declaration without a pipeline scope would be read
+as governing both.
+
+```
+RUNTIME_INPUT_CONTRACT CLIENT_NEW E6/INIT    = INTAKE_PAYLOAD
+RUNTIME_INPUT_CONTRACT CLIENT_NEW E6/REBUILD = CASE_VERSION, CANONICAL_STATE, NORMALIZED_CONCEPTS, E1_HANDOFF, E2_HANDOFF, E3_HANDOFF
+```
+
 ---
 # ENGINE 6 — CASE MEMORY INTELLIGENCE
 

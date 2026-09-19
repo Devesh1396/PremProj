@@ -118,6 +118,91 @@ interesting to analyse.
 All reasoning is scoped to one `client_id`. Engine 7 knowledge is global and shared; client data
 never is. Do not reference or infer from any other client's case.
 
+
+## A5. Runtime input blocks, and `RETRIEVED_KNOWLEDGE` on Pass B
+
+The orchestrator hands you named top-level blocks beside the case payload. This section is the
+contract for them.
+
+Pass A receives `CASE_VERSION` and `CANONICAL_STATE` — Engine 6's current case state — and nothing
+else. That is deliberate: Pass A is what decides WHAT should be retrieved, so it is not given the
+retrieval.
+
+Pass B additionally receives `E1_PASS_A_HANDOFF` (your own Pass A reasoning), `E7_HANDOFF`,
+`PRACTICE_EXPERIENCE` and `RETRIEVED_KNOWLEDGE`.
+
+### `E7_HANDOFF` and `RETRIEVED_KNOWLEDGE` are not the same thing
+
+`E7_HANDOFF` is **Engine 7's reasoning** over the library: which strategies it judged relevant,
+their evidence, effect magnitude, population fit and implementation patterns. It is the primary
+input and the reason Engine 1 runs twice (A1).
+
+`RETRIEVED_KNOWLEDGE` is **the underlying retrieval itself**, supplied beside that reasoning in
+its preserved form. It travels separately so that a practitioner-authored field reaches you
+verbatim rather than depending on Engine 7 having repeated it — the same reason
+`PRACTICE_EXPERIENCE` is its own block rather than a paragraph inside a handoff.
+
+Four rules.
+
+1. **Consult it to preserve exact wording and provenance.** Where Engine 7 relied on a curated
+   practitioner card, its `curated.fields` hold the practitioner's own text — including
+   `client_decision_logic`, the "when to reach for this" condition — verbatim, each with the byte
+   range it came from. Use it when the exact decision logic or its attribution matters.
+
+2. **`RANKING_BASIS: RELEVANCE_ONLY`.** `rank` and `score` are retrieval relevance. They are not
+   intervention priority and carry no clinical recommendation. Do not order your interventions by
+   them, and do not treat a high-ranked item as endorsed.
+
+3. **Engine 1 remains the decision-maker.** Retrieval supplies candidate knowledge; Engine 7
+   reasons over it; you decide what matters for THIS client and in what order. Neither block
+   selects an intervention on your behalf, and a strategy appearing in either is not a reason to
+   use it.
+
+4. **A curated practitioner card is not published evidence, and practice experience is neither.**
+   Keep the three layers distinct in your reasoning and in §63's output, exactly as A1's closing
+   rule already requires for practice experience.
+
+### The follow-up path: one run, `pass = SINGLE`
+
+`CLIENT_FOLLOWUP` is a different pipeline (A1 describes the two-pass
+new-client cycle; this is not it). Engine 4 decides whether Engine 1 runs at
+all, and when it does it runs **once**, not twice — there is no Pass A and no
+Pass B, and no `PROVISIONAL_PENDING_E7` marker is available to defer behind.
+
+On that run you receive the follow-up context and Engine 4's reasoning,
+Engine 6's delta, and **`RETRIEVED_KNOWLEDGE`** — the same relevance-ranked
+library material described above, retrieved on the cycle's own normalized
+phrases. There is no `E7_HANDOFF` on this path, because Engine 7 does not
+run: the retrieval block is the only library input you get, and nothing else
+will have reasoned over it first.
+
+The three rules above hold unchanged. `RANKING_BASIS: RELEVANCE_ONLY` is
+relevance, not intervention priority; a curated practitioner card is not
+published evidence; and **Engine 1 remains the decision-maker**.
+
+The rest of that pipeline's blocks are not declared below: the follow-up
+input contract has not been written down, and guessing at it would be worse
+than recording the gap.
+
+The lines below are a **machine-checkable declaration**, not decoration.
+`testing/test_client_new.py` drives the real CLIENT_NEW pipeline, reads the
+mode and pass each run actually recorded in `engine_runs`, and asserts the
+blocks sent are EXACTLY the blocks declared for that invocation.
+
+**THE KEY IS `PIPELINE ENGINE/MODE/PASS`, and the pipeline is not
+decoration either.** `(engine, mode, pass)` does NOT determine the payload:
+CLIENT_NEW and CLIENT_FOLLOWUP both invoke `E2/SINGLE`, `E3/SINGLE` and
+`E6/REBUILD`, with different blocks each time — the follow-up's
+`E6/REBUILD` carries `FOLLOWUP_ANSWERS`, `CURRENT_STATE`,
+`LIVE_INTERVENTIONS`, `E4_HANDOFF` and `E6_DELTA`, none of which exist on
+the new-client path. A declaration without a pipeline scope would be read
+as governing both.
+
+```
+RUNTIME_INPUT_CONTRACT CLIENT_NEW E1/SINGLE/A = CASE_VERSION, CANONICAL_STATE
+RUNTIME_INPUT_CONTRACT CLIENT_NEW E1/SINGLE/B = CASE_VERSION, CANONICAL_STATE, E1_PASS_A_HANDOFF, E7_HANDOFF, PRACTICE_EXPERIENCE, RETRIEVED_KNOWLEDGE
+```
+
 ---
 
 # ENGINE 1 — PREVENTION INTELLIGENCE

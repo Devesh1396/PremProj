@@ -38,6 +38,7 @@ import client_followup as CF
 import client_new as CN
 import preflight
 import run_engine as RE
+import runtime_contract as RC
 
 FAILS: list[str] = []
 PREFIX = "FUTEST_"
@@ -403,6 +404,91 @@ def main() -> int:
     check("with a reason it stops, and dates itself",
           stopped_row[0] == "STOPPED" and stopped_row[1] and stopped_row[2],
           str(stopped_row))
+
+    # ==================================================================
+    print("\nthe runtime input contract is PIPELINE-SCOPED, and this is why")
+
+    # D52d. The declaration key was `(engine, mode, pass)`, and that does
+    # NOT determine the payload. `client_new.py:571` and
+    # `client_followup.py:393` BOTH call engine="E6", mode="REBUILD", for
+    # the same stated reason, and hand it completely different things. So
+    # CLIENT_NEW's declaration would have read as the governing contract
+    # for a follow-up invocation, and the follow-up payload would have
+    # looked like a violation of a contract that was never about it.
+    #
+    # THE COLLISION IS MEASURED, NOT ASSUMED: the key sets below come from
+    # driving the real pipeline, and the declarations from the real ACTIVE
+    # prompt rows. Nothing here is hand-written (V2).
+    fu_sent: dict[tuple, set] = {}
+    _real_run_engine = RE.run_engine
+
+    def _capture(c, req):
+        result = _real_run_engine(c, req)
+        row = c.execute(
+            "select engine_mode, pass::text from engine_runs where run_id=%s",
+            (result.run_id,)).fetchone() if result.run_id else None
+        if row:
+            fu_sent.setdefault((req.engine, row[0], row[1] or "SINGLE"),
+                               set()).update((req.structured_input or {}).keys())
+        return result
+
+    collide = seed_case(conn, "CONTRACT-SCOPE")
+    collide_followup = submit_followup(conn, collide["client_id"])
+    RE.run_engine = _capture
+    try:
+        # MULTIPLE so Engine 4 routes to E1, E2 and E3 -- otherwise the
+        # E2/E3 half of the collision is never invoked and this would be
+        # measuring a pipeline that did not run.
+        routed = run_with(conn, with_control(
+            {"ROUTING_RECOMMENDATION": "MULTIPLE",
+             "ROUTING_REASON": "contract-scope regression"}), collide_followup)
+    finally:
+        RE.run_engine = _real_run_engine
+
+    check("the follow-up routed to E1, E2 and E3",
+          routed.routed == ("E1", "E2", "E3"), str(routed.routed))
+
+    COLLIDING = [("E2", "SINGLE", "SINGLE"), ("E3", "SINGLE", "SINGLE"),
+                 ("E6", "REBUILD", "SINGLE")]
+    check("CLIENT_FOLLOWUP invokes the same engine/mode/pass CLIENT_NEW does",
+          all(k in fu_sent for k in COLLIDING),
+          str(sorted("/".join(k) for k in fu_sent)))
+
+    collapsed: list[str] = []
+    scoped_hits: list[str] = []
+    for key in COLLIDING:
+        decls = RC.declarations(conn, key[0])
+        # The PRODUCTION lookup is pipeline-scoped. There is no
+        # CLIENT_FOLLOWUP declaration, deliberately, so it finds nothing.
+        if ("CLIENT_FOLLOWUP",) + key in decls:
+            scoped_hits.append("/".join(key))
+        # The OLD three-part lookup, kept as the thing being ruled out:
+        # strip the pipeline and any declaration for the triple matches,
+        # whichever pipeline wrote it.
+        triple = {k[1:]: v for k, v in decls.items()}
+        if key in triple:
+            missing, extra = RC.compare(fu_sent[key], triple[key])
+            if missing or extra:
+                collapsed.append(f"{'/'.join(key)}: a pipeline-blind lookup "
+                                 f"would report {len(missing)} undeclared and "
+                                 f"{len(extra)} missing block(s)")
+
+    check("the follow-up has NO declaration of its own -- deliberately "
+          "undeclared, and the pipeline scope is what makes that sayable",
+          not scoped_hits, str(scoped_hits))
+    check("...and a PIPELINE-BLIND key would have collapsed all three onto "
+          "CLIENT_NEW's contract and reported false violations",
+          len(collapsed) == len(COLLIDING), str(collapsed))
+    e6_decl = RC.declarations(conn, "E6")
+    check("CLIENT_NEW's E6/REBUILD declaration exists and is NOT the "
+          "follow-up's payload",
+          ("CLIENT_NEW", "E6", "REBUILD", "SINGLE") in e6_decl
+          and e6_decl[("CLIENT_NEW", "E6", "REBUILD", "SINGLE")]
+              != fu_sent[("E6", "REBUILD", "SINGLE")])
+    check("...and the follow-up E1 really does carry RETRIEVED_KNOWLEDGE, "
+          "the block GATE 3 added to this path",
+          "RETRIEVED_KNOWLEDGE" in fu_sent.get(("E1", "SINGLE", "SINGLE"), set()),
+          str(sorted(fu_sent.get(("E1", "SINGLE", "SINGLE"), set()))))
 
     clear(conn)
     print()

@@ -4,7 +4,8 @@
 BUILD_GUIDE step 15, MASTER_SPEC phase 4.
 
     intake -> extract -> E6 v1
-           -> E1 Pass A -> normalization -> E7 -> E1 Pass B
+           -> E1 Pass A -> normalization -> K14 retrieval -> E7
+           -> E1 Pass B
            -> E2 -> E3 -> E6 v2
            -> practitioner review queue.  STOP.
 
@@ -59,12 +60,14 @@ import psycopg
 import intake as IN
 import normalize as NZ
 import practice_intelligence as PI
+import retrieval as RET
 import run_engine as RE
 
 # Engines that are internal reasoning, in the order phase 4 specifies.
 # E4 is absent because there is no response data yet; E5 is absent because
 # it is gated on a practitioner decision.
-PIPELINE_DESCRIPTION = "E6 -> E1(A) -> normalize -> E7 -> E1(B) -> E2 -> E3 -> E6 -> review"
+PIPELINE_DESCRIPTION = ("E6 -> E1(A) -> normalize -> retrieve -> E7 -> E1(B) "
+                        "-> E2 -> E3 -> E6 -> review")
 
 
 @dataclass
@@ -426,6 +429,39 @@ def run_new_client(conn: psycopg.Connection, submission_id: str,
                              "none: no strategy has an assessed cohort of 5 yet"))
 
         # ------------------------------------------------------------------
+        # K14 RETRIEVAL, on the case's own concepts (D52a).
+        #
+        # This is the step that was missing. GATE 3 made the curated cards
+        # retrievable and no runtime caller retrieved anything: Engine 7
+        # received NORMALIZED_CONCEPTS and was left to reason about a
+        # library it had not been shown. `retrieval.py` was imported by no
+        # script outside the suites.
+        #
+        # THE QUERY IS ENGINE 1'S OWN WORDS, not the case record. Pass A's
+        # normalization phrases and research questions ARE its statement of
+        # what matters clinically, which is exactly what should be searched
+        # -- and they carry no identity, so this respects
+        # STRIP_IDENTITY_FROM_ENGINE_PAYLOADS by construction rather than
+        # by a filter somebody has to remember.
+        #
+        # `case_knowledge` asks for KNOWLEDGE OBJECTS explicitly
+        # (`CASE_KINDS`) rather than inheriting `retrieval.KINDS`, whose
+        # `concept` entries are ontology vocabulary. The GATE 3 first run
+        # measured what the default costs a case: 27 of 30 places.
+        retrieval_query = " ".join(
+            [str(p) for p in phrases]
+            + [str(q) for q in (pass_a.control.get("RESEARCH_QUESTIONS") or [])]
+        ).strip() or None
+        knowledge = RET.case_knowledge(conn, query=retrieval_query,
+                                       concept_ids=case_concepts)
+        curated_n = sum(1 for i in knowledge["ITEMS"]
+                        if i["kind"] == "curated_strategy")
+        outcome.step("RETRIEVE", "OK",
+                     detail=(f"{len(knowledge['ITEMS'])} knowledge object(s), "
+                             f"{curated_n} curated; "
+                             f"{knowledge['DIAGNOSTICS'].get('result', '')}"))
+
+        # ------------------------------------------------------------------
         # E7 in CASE mode. CASE_VERSION is the real version here, not 0:
         # 0 is reserved for knowledge-clock runs (D18), and this run is
         # about one client's case.
@@ -447,6 +483,7 @@ def run_new_client(conn: psycopg.Connection, submission_id: str,
                            "method": r.method}
                           for r in resolved],
                       "PRACTICE_EXPERIENCE": practice,
+                      "RETRIEVED_KNOWLEDGE": knowledge,
                   })
 
         # ------------------------------------------------------------------
@@ -462,6 +499,16 @@ def run_new_client(conn: psycopg.Connection, submission_id: str,
                           "E7_HANDOFF": e7.structured,
                           "E1_PASS_A_HANDOFF": pass_a.structured,
                           "PRACTICE_EXPERIENCE": practice,
+                          # E7's REASONING over the retrieval is
+                          # `E7_HANDOFF`, and that is what Pass B is for
+                          # (D4). The retrieval block travels beside it for
+                          # the same reason PRACTICE_EXPERIENCE does:
+                          # relaying it only through a prose handoff makes
+                          # its arrival depend on an engine having repeated
+                          # it, and the one thing D49 is about is a curated
+                          # `client_decision_logic` surviving the trip
+                          # verbatim rather than being re-summarised.
+                          "RETRIEVED_KNOWLEDGE": knowledge,
                       })
 
         # ------------------------------------------------------------------

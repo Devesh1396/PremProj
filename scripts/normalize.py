@@ -359,6 +359,51 @@ def _tier_trigram(conn, phrase_norm: str, **_) -> TierResult:
     return TierResult.exact(tied, best)
 
 
+def semantic_tier_available(conn, *, embed_call=None) -> tuple[bool, str]:
+    """Can the semantic tier actually answer on this deployment?
+
+    ONE implementation, because two callers now need the answer and a
+    second copy of these four conditions would drift the moment one of
+    them changed. `_tier_semantic` returns `TierResult.empty(why)` from
+    exactly this, so the reason a caller is told is the reason the tier
+    itself acted on -- never a parallel guess about it (V2).
+
+    The second caller is `curated_concepts`: a re-import that cannot reach
+    this tier is NOT AUTHORITATIVE and must not be allowed to delete links
+    a capable run established (D52a). "The resolver returned nothing"
+    means two completely different things depending on this answer.
+
+    Returns `(available, reason)`. `reason` is empty when available, and
+    is a NAMED consequence otherwise (V3) -- the VPS runs with
+    MODEL_EMBEDDING deliberately unset, so "inert here" is a supported
+    state that must say so rather than raise.
+    """
+    if not _capability(conn, "vector"):
+        return False, "pgvector absent (D15): the semantic tier cannot run"
+    if not os.environ.get("MODEL_EMBEDDING", "").strip():
+        return False, (
+            "MODEL_EMBEDDING is not set: the phrase cannot be embedded, so the "
+            "semantic tier is skipped (alias, structured and trigram only)")
+    if embed_call is None and not os.environ.get("LLM_API_KEY", "").strip():
+        # No credential, no call. `run_engine` already treats an empty
+        # LLM_API_KEY as "use the fixture provider, spend nothing", and the
+        # VPS runs with it empty on purpose; without this the tier reached
+        # for the live endpoint anyway and every suite that resolves a
+        # phrase started paying -- or, with no key, getting a 404 from
+        # inside the resolver, which is a worse way to learn the same thing.
+        # An injected `embed_call` is its own transport and needs no key.
+        return False, (
+            "LLM_API_KEY is not set: no provider call may be made, so the "
+            "semantic tier is skipped (alias, structured and trigram only)")
+    embedded = conn.execute(
+        "select count(*) from concepts where embedding is not null "
+        "and status in ('SEEDED','ACTIVE')").fetchone()[0]
+    if not embedded:
+        return False, (
+            "no concept is embedded yet: run scripts/embed_library.py --table concepts")
+    return True, ""
+
+
 def _tier_semantic(conn, phrase_norm: str, *, phrase: str | None = None,
                    embed_call=None, **_) -> TierResult:
     """Cosine similarity over the embedded concepts. The synonym tier.
@@ -381,29 +426,9 @@ def _tier_semantic(conn, phrase_norm: str, *, phrase: str | None = None,
     production today" is a supported state and must say so -- a resolver
     that raised there would take down every caller.
     """
-    if not _capability(conn, "vector"):
-        return TierResult.empty("pgvector absent (D15): the semantic tier cannot run")
-    if not os.environ.get("MODEL_EMBEDDING", "").strip():
-        return TierResult.empty(
-            "MODEL_EMBEDDING is not set: the phrase cannot be embedded, so the "
-            "semantic tier is skipped (alias, structured and trigram only)")
-    if embed_call is None and not os.environ.get("LLM_API_KEY", "").strip():
-        # No credential, no call. `run_engine` already treats an empty
-        # LLM_API_KEY as "use the fixture provider, spend nothing", and the
-        # VPS runs with it empty on purpose; without this the tier reached
-        # for the live endpoint anyway and every suite that resolves a
-        # phrase started paying -- or, with no key, getting a 404 from
-        # inside the resolver, which is a worse way to learn the same thing.
-        # An injected `embed_call` is its own transport and needs no key.
-        return TierResult.empty(
-            "LLM_API_KEY is not set: no provider call may be made, so the "
-            "semantic tier is skipped (alias, structured and trigram only)")
-    embedded = conn.execute(
-        "select count(*) from concepts where embedding is not null "
-        "and status in ('SEEDED','ACTIVE')").fetchone()[0]
-    if not embedded:
-        return TierResult.empty(
-            "no concept is embedded yet: run scripts/embed_library.py --table concepts")
+    available, why = semantic_tier_available(conn, embed_call=embed_call)
+    if not available:
+        return TierResult.empty(why)
 
     # embedding.embed() is the ONE embedding boundary (D38): it pins the
     # model, refuses non-text, checks the dimension and the unit norm, and
