@@ -380,3 +380,65 @@ contains it — which is the thing GATE 3 had to prove it had not spent.
   and nothing here computes it.
 * **Nothing about vector recall for curated cards.** They are not embedded;
   every curated hit above came from the concept spine or full text.
+
+---
+
+## 10. POST-FIRST-RUN CHANGE to the acceptance suite, and where it runs
+
+`testing/test_gate3_acceptance.py` now asks for
+`kinds=("strategy", "curated_strategy", "pattern")`. **No retrieval code
+changed.** Every run still performs the default-kinds retrieval first and
+prints which curated cards it returned, so the recorded miss stays visible
+rather than being replaced by the configuration that passes.
+
+With that change the suite passes 13 of 13, including the five negative-
+control checks that could not execute on the first run because Strategy 3
+was not on the page at all:
+
+```
+  FIRST-RUN configuration (default kinds, limit 30) returned curated cards [4, 1, 6] of 6
+  curated cards by rank: [(4, 0.9774), (1, 0.4286), (6, 0.3910),
+                          (2, 0.2632), (5, 0.1880), (3, 0.0977)]
+  PASS  Strategy 1 / 4 / 6 surfaced (PRIMARY)
+  PASS  Strategy 2 / 5 appear as secondary knowledge
+  PASS  the three PRIMARY strategies hold the top three curated places
+  PASS  Strategy 3 does not outrank Strategy 1 / 4 / 6 / 2 / 5
+  PASS  Strategy 6's client_decision_logic survives retrieval as its own field
+  PASS  ...verbatim at the byte range it names
+```
+
+**Section 4 is still the first-run result and it is still a MISS.**
+
+### Where this suite actually runs, measured
+
+It is wired into `run_all.sh` and **skips there**. Measured 2026-09-19: a
+full `run_all.sh` leaves the ontology at **269 live concepts and 0
+embeddings**, so the semantic tier — the only tier that answers anything
+in this fixture — is inert and the suite says so by name rather than
+failing. That is the same condition D51 already records for the
+normalization sweep ("the sweep must run on a CLEAN K1 SEED"), and the
+acceptance run above was made against a clean rebuild.
+
+Which suite empties the column was NOT established. Only
+`test_embeddings.py` nulls `concepts.embedding` at all and it scopes the
+UPDATE to its own `EMBTEST_` keys, so the cause is elsewhere — most likely
+concepts being deleted and re-inserted under the K1 seed's own canonical
+keys, which D51 already records happening. **Stated as unresolved rather
+than guessed at**, and it is pre-existing: nothing in GATE 3 touches it.
+
+### The bare floor caught the acceptance suite crashing instead of skipping
+
+First `run_bare.sh` after wiring the suite in: **RED**.
+
+```
+=== gate3_acceptance ===
+psycopg.errors.UndefinedColumn: column "embedding" does not exist
+LINE 1: select count(*) from concepts where embedding is not null …
+```
+
+Without pgvector there is no `concepts.embedding`, so the query that
+checks *whether anything is embedded* raised — the exact "crashes instead
+of skipping" shape V3 exists to stop, introduced by this suite and caught
+by the floor that exists for it. Fixed by checking
+`preflight.have_capability(conn, "vector")` FIRST, before any query that
+names the column. `run_bare.sh` green afterwards.

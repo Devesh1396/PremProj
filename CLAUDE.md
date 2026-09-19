@@ -1232,10 +1232,83 @@ neighbourhood, which is the bug itself.
 Raised and NOT fixed: the relation trigger bumps on a note-only edit to a
 `CONFUSABLE_DO_NOT_MERGE` row — broader than documented, safe direction.
 
-**Still not GATE 3.** `retrieval.by_concept()` reads `strategies`,
-`strategy_concepts` and `implementation_patterns` and does not reference
-`curated_strategies`. The six curated Video 1 strategies are no more
-retrievable than before. **The 20-video pilot stays closed.**
+## GATE 3 — the bridge is built; its FIRST RUN was a MISS (2026-09-19, D52)
+
+`docs/evidence/gate3_first_run.md` has every row. Migrations `038`/`039`,
+`scripts/curated_concepts.py`, `testing/test_gate3_acceptance.py`.
+
+**THE CURATED TEXT DID NOT MOVE.** `curated_strategies` is a THIRD ROW
+SOURCE inside `by_concept()` and `by_fts()` — the same channels, score
+normalization, merge, cap and rerank, the way `implementation_patterns`
+already is. Copying `curated_fields.text_value` into `strategies` was
+rejected: the copy retrieval would return is the one with no span and no
+verbatim guarantee, in `strategies.mechanism`, the exact column D49
+measured K09 fabricating on this document.
+
+**THE FIRST RUN MISSED — 6 of 8. Strategies 2 and 5 were off the page, and
+so was Strategy 3, so the negative-control checks did not execute.** A
+check that did not run is not a check that passed. That result is section
+4 of the evidence file and **is never replaced by the tuned one**.
+
+**The relative ordering of the six cards was already exactly the frozen
+expectation: 4, 1, 6, then 2, 5, then 3 LAST.** The negative control works
+on relevance, with no line of retrieval code knowing the word "vinegar".
+The miss is page COMPOSITION — 82 of 124 merged results are `kind:
+concept`, each its own bucket so the per-bucket cap cannot restrain them.
+The post-first-run fix is the `kinds` filter `retrieve()` has always had;
+**no retrieval code changed**, and every run still prints what the
+default-kinds retrieval returned so the miss stays visible.
+
+**CONCEPT UNITS COME FROM A REGISTRY** (`curated_concept_rules`), each rule
+stating why its construct is reusable. **A unit is a NAME, not a sentence,
+and the discriminator is GRAMMATICAL** — no sentence-ending punctuation,
+comma, quote or arrow; not colon-terminated; at least one lexeme from
+PostgreSQL's own dictionary. **There is no character count in it**: a
+length threshold is a number that can be moved until a fixture passes.
+20 units, **17 bold runs refused as statements and reported**, 2 linked.
+The conditional clauses inside `client_decision_logic` are prose and stay
+UNLINKED — turning one into a concept phrase needs a claim extractor, and
+the claim extractor for curated content is K09 (D49).
+
+**18 of 20 units and 21 of 24 client-profile lines resolved to nothing.**
+The K1 seed has no concept for `Breakfast restructuring`, `Client
+overwhelmed`, `Metformin` or `Vinegar`, and `read_only=True` created none
+(D8). **A library state, reported — not a number to improve by creating
+concepts.**
+
+**EVERY LINK CARRIES THE PHRASE AND ITS BYTE RANGE, AND THE RANGE IS
+CHECKED.** `ck_link_span_is_phrase` refuses a span that cannot contain its
+phrase; `verify()` re-reads the preserved raw file before anything is
+stored, and the suite proves it has teeth by moving a span three
+characters. D48: a populated location field is not provenance.
+
+**Strategy 6's `client_decision_logic` survives retrieval as its own
+field**, verbatim at `[9452:10643]` of the original — the block K09 lost
+entirely and GATE 1 recovered.
+
+**`client_decision_logic` DOES influence what comes back** (full text
+ranks the card as one document). **Full text has no notion of negation**,
+so "LOWER PRIORITY when X" matches a query about X exactly as "prioritize
+when X" does; separating indication from contra-indication is E1 Pass B.
+
+**Curated cards are NOT in the vector channel** — no embedding column —
+and `diagnostics["curated_vector"]` says so on every retrieval.
+
+**Found and fixed:** `by_vector()` guarded on `MODEL_EMBEDDING` and not on
+`LLM_API_KEY`, so a configured model with no credential reached the live
+endpoint and raised 404 where V3 requires a named degradation.
+
+**Reported, NOT fixed:** a curated source is chunked by K08 AND parsed
+into cards, so its content is on a page twice.
+
+**`test_gate3_acceptance.py` is in `run_all.sh` and SKIPS there** — a full
+run leaves the ontology at 269 live concepts and **0 embeddings**, the
+same clean-seed condition D51 records for the sweep. It is run against a
+clean rebuild. Which suite empties the column is **unresolved and stated
+as such**, not guessed; it is pre-existing.
+
+**The 20-video pilot stays closed.** K10 remains closed (D48). One source,
+one synthetic client.
 
 **The first live call to any real API in this build FAILED, and the
 failure was informative.** The actor answers HTTP 201 from a SUCCEEDED

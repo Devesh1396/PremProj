@@ -2522,6 +2522,96 @@ retries, control-block parse success, and the prompt hash of each E1 pass.
 A repair retry shows as two provider attempts and one retry, with the
 failed attempt's tokens included in the run total.
 
+## GATE 3 — the bridge is built, and its FIRST RUN was a MISS (2026-09-19, D52)
+
+`docs/evidence/gate3_first_run.md` has every row. Migrations `038`/`039`,
+`scripts/curated_concepts.py`, `testing/test_gate3_acceptance.py`, and a
+GATE 3 block in `testing/test_curated.py`.
+
+**The curated text did not move.** `curated_strategies` is queried
+alongside `strategies` and `implementation_patterns` inside
+`by_concept()`, and alongside them inside `by_fts()` — a THIRD ROW SOURCE
+in the functions that already exist, sharing the channel, the score
+normalization, the merge, the per-bucket cap and the rerank. The rejected
+alternative, copying `curated_fields.text_value` into `strategies`, undoes
+GATE 1: the copy retrieval returns would be the one with no span and no
+verbatim guarantee, in `strategies.mechanism` — the exact column D49
+measured K09 fabricating on this document.
+
+**THE FIRST RUN MISSED: 6 of 8 checks. Strategies 2 and 5 were not on the
+page, and neither was Strategy 3, so the negative-control checks did not
+execute.** That result is section 4 of the evidence file and it is not
+replaced by the later, better number.
+
+**The relative ordering of the six curated cards was already exactly the
+frozen expectation** — 4, 1, 6, then 2, 5, then 3 LAST. The negative
+control works on relevance alone, with no line of retrieval code knowing
+the word "vinegar". The miss is page COMPOSITION: 82 of 124 merged results
+are `kind: concept`, each in its own bucket so the per-bucket cap cannot
+restrain them, and they take 27 of 30 places. The post-first-run fix uses
+the `kinds` filter `retrieve()` has always had; **no retrieval code
+changed**, and every acceptance run still performs the default-kinds
+retrieval first and prints what it returned so the miss stays visible.
+
+**Concept units come from a REGISTRY** (`curated_concept_rules`), each rule
+stating why its construct is reusable, as `curated_grammar_rules` already
+does for headings. **A unit is a NAME, not a sentence, and the
+discriminator is grammatical** — no sentence-ending punctuation, comma,
+quotation mark or arrow; not colon-terminated; at least one lexeme from
+PostgreSQL's own English dictionary. **There is no character count
+anywhere in it**, because a length threshold is a number that can be moved
+until a fixture passes. 20 units extracted, **17 bold runs refused as
+statements and reported**, 2 linked.
+
+**18 of 20 units resolved to nothing, and 5 of 6 cards carry no concept
+link.** The K1 seed has no concept for `Breakfast restructuring`,
+`Client overwhelmed` or `Vinegar`, and `read_only=True` means none was
+created (D8). Those cards reached the page through full text. **That is a
+library state, reported, not a number to improve by creating concepts.**
+
+**Every link carries the phrase AND its byte range, and the range is
+CHECKED.** `ck_link_span_is_phrase` refuses a span that cannot contain its
+phrase; `curated_concepts.verify()` re-reads the preserved raw file before
+anything is stored. The suite proves the check has teeth by moving a span
+three characters and asserting it is reported — D48: a populated location
+field is not provenance, containment is.
+
+**Strategy 6's `client_decision_logic` — the block K09 lost entirely and
+GATE 1 recovered — survives retrieval as its own field, verbatim at
+`[9452:10643]` of the preserved original.**
+
+**`client_decision_logic` DOES influence what comes back**: the full-text
+channel ranks a curated card as one document, name plus every preserved
+field. The cost is stated rather than discovered later — full text has no
+notion of negation, so "LOWER PRIORITY when X" matches a query about X
+exactly as "prioritize when X" does. Separating an indication from a
+contra-indication is E1 Pass B's job.
+
+**Curated cards are NOT in the vector channel.** `curated_strategies` has
+no embedding column, so they reach a page through the concept spine and
+full text only, and `diagnostics["curated_vector"]` says so on every run.
+
+**Found and fixed on the way:** `retrieval.by_vector()` guarded on
+`MODEL_EMBEDDING` and **not** on `LLM_API_KEY`, so a database with a model
+configured and no credential reached the live endpoint from inside
+retrieval and raised HTTP 404 — an exception where V3 requires a named
+degradation.
+
+**Reported and NOT fixed:** a curated source is chunked by K08 AND parsed
+into cards, so its content is on a page twice. Whether K08 should chunk a
+source bound for the deterministic parser is outside GATE 3.
+
+**`test_gate3_acceptance.py` is wired into `run_all.sh` and SKIPS there.**
+Measured: a full `run_all.sh` leaves the ontology at 269 live concepts and
+**0 embeddings**, so the semantic tier is inert — the same clean-seed
+condition D51 records for the normalization sweep. The acceptance run is
+made against a clean rebuild. Which suite empties the column was not
+established and is stated as unresolved rather than guessed; it is
+pre-existing.
+
+**The 20-video pilot stays closed** and K10 remains closed (D48). One
+source, one synthetic client, one curated document.
+
 ## Next task
 
 **As of 2026-09-11: fix concept normalization before ingesting anything
