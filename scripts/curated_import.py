@@ -39,8 +39,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import psycopg
 
+import curated_concepts as CC
 import curated_parser as CP
-import normalize as NZ
 
 KNOWLEDGE = Path(os.environ.get("KNOWLEDGE_DIR",
                                 Path(__file__).resolve().parent.parent / "knowledge"))
@@ -86,42 +86,63 @@ def source_text(raw_location: str) -> str:
 
 
 # ---------------------------------------------------------------------
-# Concept candidates — GATE 2 territory, deliberately read-only
+# Concept attachment — GATE 3, deterministic units, read-only resolution
 # ---------------------------------------------------------------------
 
-def concept_candidates(conn, cards: list[CP.ParsedCard]) -> list[dict]:
-    """Only explicit source language: the names the practitioner wrote.
+def attach_concepts(conn, envelope_id: str, text: str,
+                    cards: list[CP.ParsedCard], embed_call=None) -> dict:
+    """Extract deterministic units, resolve them, link what resolved.
 
-    `read_only=True` runs the SAME tiers as production and writes nothing
-    — no cache row, no alias, no PROPOSED concept. Concept normalization
-    is a separate gate (D49 §15) and is currently unsolved; creating
-    concepts here would pollute the ontology to make a preservation test
-    look better. Mechanism-derived phrases are not offered at all: there
-    are none, because nothing here invents a mechanism.
+    GATE 1 stored the practitioner's words with their byte ranges and
+    stopped there, because concept normalization was unsolved (D50). GATE
+    2 built the semantic tier (D51). This is the join: the SAME resolver
+    production uses, run `read_only=True` over spans of the
+    practitioner's own characters, with every link keeping the range it
+    came from (D52).
+
+    Nothing here summarises, shortens or invents a phrase. A field with no
+    recognised unit stays unlinked and is counted in `unlinked_fields`.
     """
-    out: list[dict] = []
+    rules = CC.load_rules(conn)
+    ids = dict(conn.execute(
+        "select ordinal, curated_id::text from curated_strategies where envelope_id=%s",
+        (envelope_id,)).fetchall())
+
+    report = {"units": [], "refused": [], "links": 0, "unlinked_fields": [],
+              "rules_fired": {}}
     for card in cards:
-        res = NZ.resolve(conn, card.name, context="CURATED_IMPORT",
-                         llm=None, read_only=True)
-        nearest, score = None, None
-        if res.concept_ids:
-            row = conn.execute(
-                "select canonical_key from concepts where concept_id = %s",
-                (res.concept_ids[0],)).fetchone()
-            nearest = row[0] if row else None
-            score = res.confidence
-        out.append({
-            "source_phrase": card.name,
-            "nearest_existing_concept": nearest,
-            "match_score": score,
-            "resolution_method": res.method,
-            "resolution_tier": res.method,
-            "final_status": ("RESOLVED" if res.concept_ids else
-                             "REVIEW_REQUIRED" if res.decision == "ESCALATED"
-                             else "PROPOSED"),
-            "note": res.note,
-        })
-    return out
+        if card.kind != "STRATEGY":
+            continue
+        curated_id = ids.get(card.ordinal)
+        if curated_id is None:
+            continue
+        units, refused = CC.card_units(conn, rules, card)
+        resolved = CC.resolve_units(conn, units, embed_call=embed_call)
+        report["links"] += CC.store_units(conn, curated_id, text, resolved)
+
+        linked_fields = {r["unit"].field_name for r in resolved if r["concept_id"]}
+        for f in card.fields:
+            if f.field_name not in linked_fields:
+                report["unlinked_fields"].append(
+                    {"ordinal": card.ordinal, "field": f.field_name,
+                     "chars": len(f.text_value)})
+        for u in units:
+            report["rules_fired"][u.rule_id] = report["rules_fired"].get(u.rule_id, 0) + 1
+        for r in resolved:
+            u = r["unit"]
+            report["units"].append({
+                "ordinal": card.ordinal, "card": card.name,
+                "rule_id": u.rule_id, "field": u.field_name,
+                "source_phrase": u.phrase,
+                "source_start": u.source_start, "source_end": u.source_end,
+                "resolved_to": r["canonical_key"],
+                "tier": r["tier"], "score": r["score"],
+                "final_status": "LINKED" if r["concept_id"] else r["decision"],
+                "note": r["note"]})
+        for x in refused:
+            x["ordinal"] = card.ordinal
+            report["refused"].append(x)
+    return report
 
 
 # ---------------------------------------------------------------------
@@ -238,7 +259,7 @@ def store(conn, envelope_id: str, text: str, blocks: list[CP.Block],
     return counts
 
 
-def import_one(conn, envelope: tuple) -> dict:
+def import_one(conn, envelope: tuple, embed_call=None) -> dict:
     envelope_id, title, kind, raw_location = envelope
     text = source_text(raw_location)
     rules = CP.load_rules(conn)
@@ -246,11 +267,13 @@ def import_one(conn, envelope: tuple) -> dict:
 
     counts = store(conn, str(envelope_id), text, blocks, cards)
     review = [b for b in blocks if b.status == "REVIEW_REQUIRED"]
+    concepts = attach_concepts(conn, str(envelope_id), text, cards,
+                               embed_call=embed_call)
 
     return {
         "envelope_id": str(envelope_id), "title": title, "kind": kind,
         "blocks": len(blocks), "review_required": len(review),
-        "concepts": concept_candidates(conn, cards),
+        "concepts": concepts,
         **counts,
     }
 
@@ -277,6 +300,10 @@ def main() -> int:
               f"{out['transformed']} transformed)")
         print(f"    {out['blocks']} block(s), "
               f"{out['review_required']} REVIEW_REQUIRED")
+        c = out["concepts"]
+        print(f"    {len(c['units'])} concept unit(s), {c['links']} linked, "
+              f"{len(c['refused'])} refused as prose, "
+              f"{len(c['unlinked_fields'])} field(s) unlinked")
     if args.json:
         print(json.dumps(results, indent=2, default=str))
     return 0

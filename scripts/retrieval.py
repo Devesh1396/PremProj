@@ -86,7 +86,7 @@ def derive_cap(limit: int, n_buckets: int) -> int:
 # and only the second of those is a real degradation.
 CHANNEL_WEIGHTS = {"concept": 0.40, "fts": 0.30, "vector": 0.30}
 
-KINDS = ("strategy", "chunk", "pattern", "concept")
+KINDS = ("strategy", "curated_strategy", "chunk", "pattern", "concept")
 
 
 def dsn() -> str:
@@ -167,6 +167,32 @@ def by_concept(conn, concept_ids: list[str], include_held_out: bool) -> list[dic
         (concept_ids,)).fetchall()
     for pid, label, cid, weight in patterns:
         out.append({"kind": "pattern", "id": pid, "label": label,
+                    "bucket": cid, "channel": "concept", "raw": float(weight)})
+
+    # THE THIRD ROW SOURCE: preserved curated practitioner knowledge (D52).
+    #
+    # It is here, inside the same function, rather than in a pipeline of
+    # its own, and that is the whole mitigation for the risk this design
+    # accepted. `curated_strategies` is a second place a retrievable thing
+    # lives, so two sources CAN diverge -- but sharing this function means
+    # they cannot diverge in channel, in score normalization, in the merge
+    # or in the rerank, which is where a divergence would actually hurt.
+    # `implementation_patterns` above is the same pattern, already proven.
+    #
+    # The alternative was to copy `curated_fields.text_value` into
+    # `strategies` and have one source. That undoes GATE 1: two copies of
+    # the practitioner's words, and the one retrieval returns is the copy
+    # with no span, no per-field provenance and no verbatim guarantee.
+    curated = conn.execute(
+        """select s.curated_id::text, s.name, l.concept_id::text,
+                  max(l.weight)::float
+             from curated_strategies s
+             join curated_strategy_concepts l on l.curated_id = s.curated_id
+            where l.concept_id = any(%s::uuid[])
+            group by 1, 2, 3""",
+        (concept_ids,)).fetchall()
+    for cur_id, name, cid, weight in curated:
+        out.append({"kind": "curated_strategy", "id": cur_id, "label": name,
                     "bucket": cid, "channel": "concept", "raw": float(weight)})
     return out
 
@@ -254,6 +280,48 @@ def by_fts(conn, query: str, include_held_out: bool) -> list[dict]:
     for cid, name, rank in rows:
         out.append({"kind": "concept", "id": cid, "label": name,
                     "bucket": cid, "channel": "fts", "raw": float(rank)})
+
+    # Curated cards are ranked as ONE DOCUMENT -- name plus every
+    # preserved field -- exactly as a `strategies` row is ranked as name
+    # plus summary plus mechanism. Ranking each field separately and
+    # taking the best would let a card matching six terms across three
+    # fields lose to one matching two terms in a single field, which is
+    # the opposite of what `ts_rank_cd` is for.
+    #
+    # THE TEXT IS READ WHERE IT LIVES. Nothing is copied into a search
+    # column, so the words ranked here are the same characters
+    # `curated_fields` preserved, at the spans it recorded.
+    #
+    # `client_decision_logic` IS PART OF THAT DOCUMENT, so the routing
+    # intelligence influences what comes back and not only what a reader
+    # sees afterwards. The alternative -- an allowlist of "descriptive"
+    # fields -- would be a per-field weighting nobody could justify from
+    # the source. The cost is stated in D52: full text has no notion of
+    # negation, so a card saying "this is LOW priority when X" matches a
+    # query about X exactly as a card saying "prioritize when X" does.
+    # Distinguishing them is E1 Pass B's job, not retrieval's.
+    rows = conn.execute(
+        """with doc as (
+             select s.curated_id, s.name,
+                    s.name || ' ' || coalesce(
+                      string_agg(f.text_value, ' ' order by f.source_start), '')
+                    as body
+               from curated_strategies s
+               left join curated_fields f on f.curated_id = s.curated_id
+              group by s.curated_id, s.name)
+           select d.curated_id::text, d.name,
+                  ts_rank_cd(to_tsvector('english', d.body),
+                      to_tsquery('english', %s))::float,
+                  (select l.concept_id::text from curated_strategy_concepts l
+                    where l.curated_id = d.curated_id
+                    order by l.weight desc, l.concept_id limit 1)
+             from doc d
+            where to_tsvector('english', d.body)
+                  @@ to_tsquery('english', %s)""",
+        (tsq, tsq)).fetchall()
+    for cur_id, name, rank, bucket in rows:
+        out.append({"kind": "curated_strategy", "id": cur_id, "label": name,
+                    "bucket": bucket, "channel": "fts", "raw": float(rank)})
     return out
 
 
@@ -290,6 +358,19 @@ def by_vector(conn, query: str, include_held_out: bool,
     if not os.environ.get("MODEL_EMBEDDING", "").strip():
         return [], ("MODEL_EMBEDDING is not set: the query cannot be embedded, "
                     "so the vector channel is skipped (metadata + full text only)")
+
+    # THE SAME GUARD `_tier_semantic` CARRIES, and for the same reason
+    # (V3). `MODEL_EMBEDDING` says which model; `LLM_API_KEY` says whether
+    # a call may be made at all, and they are configured independently.
+    # Without this, a suite with a model configured and no credential
+    # reached the live endpoint from inside retrieval and got a 404 --
+    # an exception where a named degradation belongs. Found by the GATE 3
+    # bridge test, which queries full text on a database that has both a
+    # model name and no key. An injected `embed_call` is its own
+    # transport and needs no credential.
+    if embed_call is None and not os.environ.get("LLM_API_KEY", "").strip():
+        return [], ("LLM_API_KEY is not set: no provider call may be made, so "
+                    "the vector channel is skipped (metadata + full text only)")
 
     tables = [t for t in ("strategies", "knowledge_chunks", "concepts")
               if has_vectors(conn, t)]
@@ -431,6 +512,60 @@ def rerank(rows: list[dict], limit: int, per_bucket_cap: int) -> list[dict]:
     return chosen[:limit]
 
 
+# ---------------------------------------------------------------------
+# Traceability: a retrieved curated strategy back to the source bytes
+# ---------------------------------------------------------------------
+
+def curated_trace(conn, curated_id: str) -> dict:
+    """query -> concept -> curated strategy -> field -> byte range -> text.
+
+    D52. If what a practitioner sees cannot be traced back to the words
+    they wrote, GATE 1 bought nothing -- so a retrieved `curated_strategy`
+    result resolves to its card, its concept links with the exact span
+    each one came from, its preserved fields with theirs, and the
+    `raw_location` of the untouched original.
+
+    The last hop, reading the file and slicing it, is deliberately NOT
+    done here. The check that matters is against the ORIGINAL document,
+    and a verifier that compares the database against the database has
+    constructed both halves of its own comparison (V2).
+    """
+    card = conn.execute(
+        """select s.curated_id::text, s.ordinal, s.name, s.heading_path,
+                  s.source_start, s.source_end, e.envelope_id::text,
+                  e.raw_location, e.source_title
+             from curated_strategies s
+             join source_envelopes e on e.envelope_id = s.envelope_id
+            where s.curated_id = %s""", (curated_id,)).fetchone()
+    if card is None:
+        return {}
+    links = conn.execute(
+        """select canonical_key, canonical_name, concept_type, field_name,
+                  source_phrase, source_start, source_end, rule_id,
+                  resolution_tier, resolution_score
+             from v_curated_concept_trace
+            where curated_id = %s
+            order by source_start""", (curated_id,)).fetchall()
+    fields = conn.execute(
+        """select field_name, provenance::text, source_start, source_end,
+                  text_value, heading_path
+             from curated_fields where curated_id = %s
+            order by source_start""", (curated_id,)).fetchall()
+    keys = ("curated_id", "ordinal", "name", "heading_path",
+            "source_start", "source_end", "envelope_id", "raw_location",
+            "source_title")
+    return {
+        **dict(zip(keys, card)),
+        "concept_links": [dict(zip(
+            ("canonical_key", "canonical_name", "concept_type", "field_name",
+             "source_phrase", "source_start", "source_end", "rule_id",
+             "tier", "score"), r)) for r in links],
+        "fields": [dict(zip(
+            ("field_name", "provenance", "source_start", "source_end",
+             "text_value", "heading_path"), r)) for r in fields],
+    }
+
+
 def record_hits(conn, rows: list[dict], concept_ids: list[str]) -> None:
     """Concept usage telemetry (002): concepts never hit by retrieval are
     review candidates; concepts hit constantly are worth deepening."""
@@ -489,6 +624,13 @@ def retrieve(conn, *, query: str | None = None,
     hits += vector_hits
     diagnostics["vector"] = f"{len(vector_hits)} hits: {note}" if vector_hits \
         else note
+    # STATED, NOT ASSUMED. `curated_strategies` has no embedding column, so
+    # a curated card reaches a page through the concept spine and full text
+    # and never through cosine similarity. That is a real recall
+    # limitation, and the diagnostics say so rather than letting a thin
+    # curated result look like a ranking decision (D52).
+    diagnostics["curated_vector"] = (
+        "curated cards are not embedded: concept + full text only")
 
     hits = [h for h in hits if h["kind"] in kinds]
     if not hits:

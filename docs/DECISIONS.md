@@ -3644,3 +3644,155 @@ This is GATE 2 and only GATE 2. `retrieval.by_concept()` reads `strategies`,
 retrievable than before. That bridge is GATE 3.
 
 The 20-video pilot stays closed. The blocker was never cost.
+
+
+## D52 — GATE 3: retrieval learns a second row source; the curated text never moves
+
+**Decided 2026-09-19.** Migrations `038`/`039`, `scripts/curated_concepts.py`,
+`retrieval.by_concept()` / `by_fts()` / `curated_trace()`.
+
+### The question
+
+GATE 1 (D50) preserved six Video 1 strategies with per-field, per-byte
+provenance and deliberately did NOT write them into `strategies`. That was
+correct and it left them unreachable: `retrieval.by_concept()` reads
+`strategies` and `implementation_patterns`, and neither contains a curated
+row. Either curated strategies get rows in `strategy_concepts`, or
+retrieval learns a second path.
+
+### What was decided
+
+**Retrieval learns a second row source, inside the functions it already
+has.** `curated_strategies` is queried alongside `strategies` and
+`implementation_patterns` in `by_concept()`, and alongside `strategies`,
+`knowledge_chunks` and `concepts` in `by_fts()`. A new result `kind`,
+`curated_strategy`, joins `KINDS`. Links live in a new table,
+`curated_strategy_concepts`.
+
+**ACCEPTED RISK: two row sources can diverge.** Mitigated by refusing to
+give the new one a pipeline: it shares the channel, the score
+normalization, the merge, the per-bucket cap and the rerank.
+`implementation_patterns` has been a second row source inside
+`by_concept()` since step 17 and has not drifted, because there is nowhere
+for it to drift TO.
+
+**REJECTED: one row source, reached by writing curated content into
+`strategies`.** It is the obvious fix and it undoes GATE 1. The moment the
+practitioner's words exist twice, the copy retrieval returns is the one
+with no span, no per-field provenance and no verbatim guarantee — and the
+column it would land in, `strategies.mechanism`, is the exact column D49
+measured K09 fabricating on this very document. A `strategies` row is also
+schema-legal with only a name, so the stub would sit there inviting
+somebody to fill the rest in later.
+
+**REJECTED: reusing `strategy_concepts`.** It foreign-keys `strategies`, it
+carries a clinical `link_role` (TARGETS, INDICATED_FOR, MECHANISM, …) that
+a curated document does not state, and it has **no span column at all**. A
+curated link stored there would have to invent a role and would lose the
+byte range that is the whole point of GATE 1.
+
+### A link is not provenance unless the range contains the phrase
+
+D48: every stored range in the D47 run looked right and six of seven did
+not contain the statement they cited. So a link carries the phrase AND the
+range, and two things stand behind it:
+
+* `ck_link_span_is_phrase` — the range's LENGTH is the phrase's length, so
+  a span that cannot possibly contain it is refused at insert;
+* `curated_concepts.verify()` — re-reads the PRESERVED RAW FILE and asserts
+  `source[start:end] == phrase` for every unit, before anything is stored,
+  exactly as `curated_parser.verify()` already does for fields.
+
+`test_curated.py` proves the second has teeth by moving a span three
+characters and asserting it is reported.
+
+### Which text units may be offered to the resolver
+
+`curated_concept_rules` (`039`), a registry in the style of
+`curated_grammar_rules`: every rule states the construct, an example, why
+the construct is REUSABLE across sections, and where else it is expected.
+Three rules exist — `CARD_NAME`, `BOLD_LABEL`, `BULLET_LABEL`. Two fired on
+Video 1.
+
+**A unit is a NAME, not a sentence, and the discriminator is grammatical.**
+The practitioner writes bold for two jobs: naming something
+(`**post-meal muscular activity**`) and emphasising a whole statement
+(`**Restriction should have a reason. …**`). Only the first is a concept
+candidate; sending the second to `normalize.resolve()` is D51's `mechanism`
+failure in a new costume. A unit qualifies if it carries no sentence-ending
+punctuation, no comma, no quotation mark and no arrow, does not end in a
+colon, and yields at least one lexeme from `to_tsvector('english', …)` —
+PostgreSQL's own dictionary, so "a run of stopwords names nothing" needs no
+stopword list invented here. **There is no character count anywhere in it**,
+because a length threshold is a number that can be moved until a fixture
+passes and "is this a sentence?" is not.
+
+**Nothing is summarised, shortened or invented.** No rule for a whole
+bullet ITEM: Video 1's decision-logic bullets are conditional clauses
+("sedentary behavior is substantial"), which carry real knowledge and are
+not names, so they stay unlinked and are reported. Turning a clause into a
+concept phrase needs a claim extractor, and the claim extractor for curated
+content is K09, which D49 measured fabricating.
+
+**`read_only=True`, `allowed_types=None`.** Read-only because a PROPOSED
+concept is not a retrieval anchor (D8), so the link it bought would be dead
+weight while the ontology damage would be real;
+`trg_curated_link_live_concept` is the backstop that makes it a property.
+`allowed_types=None` because a curated card does not structurally know a
+type — `Breakfast restructuring` is an intervention and `Preserve agency
+and reduce unnecessary deprivation` is a principle, and both arrive through
+the same rule (D51's measurement: a type set supplied without structural
+knowledge refused 12 phrases, ELEVEN of them correct resolutions).
+
+### Prominence is a relevance signal, and it is the existing score
+
+GATE 3 retrieves and ranks by relevance. **It does not decide what the
+client should do first** — that is E1 Pass B. So there is no band, no
+tier and no clinical ordering added here: the result carries the score the
+existing `merge`/`rerank` already computes, and its rank on the page. A
+PRIMARY/SECONDARY/LOW band would need cut-offs, and a cut-off chosen to
+make a fixture pass is a knob.
+
+`curated_strategy_concepts.weight` is **uniform at 1.0**, deliberately.
+`strategy_concepts.weight` grades how central a concept is to a strategy;
+nothing in a curated document states that, and a gradient invented here
+would be exactly such a knob. Relevance comes from the channels.
+
+### `client_decision_logic` DOES influence what comes back
+
+The full-text channel ranks a curated card as ONE DOCUMENT — name plus
+every preserved field — the way a `strategies` row is ranked as name plus
+summary plus mechanism. `client_decision_logic` is part of that document.
+The alternative, an allowlist of "descriptive" fields, is a per-field
+weighting nothing in the source justifies.
+
+**The cost, stated rather than discovered later: full text has no notion of
+negation.** A card saying "LOWER PRIORITY when the meal is already well
+structured" matches a query about meal structure exactly as a card saying
+"prioritize when" does. Distinguishing an indication from a
+contra-indication is reasoning, not retrieval, and it belongs to E1 Pass B.
+Making retrieval do it would need the decision logic parsed into typed
+positive/negative conditions — which is a claim extractor over curated
+text, i.e. the thing D49 forbids — so it is NOT attempted here.
+
+### Curated cards are not in the vector channel
+
+`curated_strategies` has no embedding column, so a curated card reaches a
+page through the concept spine and full text and never through cosine
+similarity. That is a real recall limitation and `diagnostics`
+["curated_vector"] says so on every retrieval, rather than letting a thin
+curated result read as a ranking decision.
+
+### Found while building this, fixed here
+
+`retrieval.by_vector()` guarded on `MODEL_EMBEDDING` and **not** on
+`LLM_API_KEY`, so a database with a model configured and no credential
+reached the live endpoint from inside retrieval and raised HTTP 404 — an
+exception where V3 requires a named degradation. `normalize._tier_semantic`
+has carried that guard since GATE 2; `by_vector` now does too.
+
+`curated_parser.ParsedCard` computed the card name's span and threw it
+away. It is kept (`name_start`/`name_end`), because re-deriving it by
+searching the document for the string would point at the wrong occurrence
+of a name that appears twice — a range that resolves cleanly to the wrong
+place is the D48 shape exactly.
