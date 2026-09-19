@@ -158,7 +158,7 @@ def main() -> int:
     # Everything else -- the units, their spans, the verification, the
     # insert -- is the production path.
     rules = CC.load_rules(conn)
-    _, parsed = CP.parse(text, CP.load_rules(conn))
+    _, parsed, _objs = CP.parse(text, CP.load_rules(conn))
     by_ordinal = {c.ordinal: c for c in parsed if c.kind == "STRATEGY"}
 
     anchor_a, anchor_b = live[0][1], live[1][1]

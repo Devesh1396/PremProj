@@ -491,7 +491,7 @@ def main() -> int:
 
     text_now = SOURCE.read_text(encoding="utf-8")
     c_rules = CC.load_rules(conn)
-    _, cards_now = CP.parse(text_now, CP.load_rules(conn))
+    _, cards_now, _objs_now = CP.parse(text_now, CP.load_rules(conn))
     all_units, all_refused = [], []
     for card in cards_now:
         if card.kind != "STRATEGY":

@@ -162,9 +162,11 @@ def attach_concepts(conn, envelope_id: str, text: str,
 # ---------------------------------------------------------------------
 
 def store(conn, envelope_id: str, text: str, blocks: list[CP.Block],
-          cards: list[CP.ParsedCard]) -> dict:
-    """Write blocks, cards and fields. Verify BEFORE anything is stored."""
-    all_fields = [f for c in cards for f in c.fields]
+          cards: list[CP.ParsedCard], objects: list[CP.ParsedObject],
+          verifications: list[CP.ParsedVerification]) -> dict:
+    """Write blocks, cards, objects and fields. Verify BEFORE storing."""
+    all_fields = [f for c in cards for f in c.fields] \
+               + [f for o in objects for f in o.fields]
     problems = CP.verify(text, all_fields)
     if problems:
         raise CuratedImportError(
@@ -202,8 +204,9 @@ def store(conn, envelope_id: str, text: str, blocks: list[CP.Block],
              b.failure_reason, b.heading_start, b.body_end,
              text[b.heading_start:b.body_end])).fetchone()[0])
 
-    counts = {"strategies": 0, "principles": 0, "fields": 0,
-              "verbatim": 0, "transformed": 0}
+    counts = {"strategies": 0, "principles": 0, "objects": 0, "fields": 0,
+              "verbatim": 0, "transformed": 0,
+              "verifications": 0, "verifications_unattached": 0}
     for card in cards:
         if card.kind == "STRATEGY":
             owner_col, owner_id = "curated_id", str(conn.execute(
@@ -252,20 +255,75 @@ def store(conn, envelope_id: str, text: str, blocks: list[CP.Block],
                on conflict do nothing""",
             (envelope_id, kind, owner_id, PROCESSING_VERSION))
 
-        for f in card.fields:
-            conn.execute(
-                f"""insert into curated_fields
-                     ({owner_col}, block_id, field_name, text_value, provenance,
-                      transformation_type, transformation_rule,
-                      source_start, source_end, heading_path)
-                   values (%s,%s,%s,%s,%s::curated_provenance,%s,%s,%s,%s,%s)""",
-                (owner_id, block_ids.get(f.block_ordinal), f.field_name,
-                 f.text_value, f.provenance, f.transformation_type,
-                 f.transformation_rule, f.source_start, f.source_end,
-                 f.heading_path))
-            counts["fields"] += 1
-            counts["verbatim" if f.provenance == "VERBATIM_SOURCE"
-                   else "transformed"] += 1
+        write_fields(conn, owner_col, owner_id, card.fields, block_ids, counts)
+
+    # ---- GATE 4: curated objects, and the verifications inside them ----
+    object_spans: list[tuple[int, int, str]] = []
+    for obj in objects:
+        object_id = str(conn.execute(
+            """insert into curated_objects
+                 (envelope_id, ordinal, disposition, name, heading_path,
+                  source_start, source_end, directive_start, directive_end,
+                  name_start, name_end, content_hash)
+               values (%s,%s,%s::curated_disposition,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+               on conflict (envelope_id, ordinal) do update set
+                 disposition = excluded.disposition,
+                 name = excluded.name,
+                 heading_path = excluded.heading_path,
+                 source_start = excluded.source_start,
+                 source_end = excluded.source_end,
+                 directive_start = excluded.directive_start,
+                 directive_end = excluded.directive_end,
+                 name_start = excluded.name_start,
+                 name_end = excluded.name_end,
+                 content_hash = excluded.content_hash
+               returning object_id""",
+            (envelope_id, obj.ordinal, obj.disposition, obj.name,
+             obj.heading_path, obj.source_start, obj.source_end,
+             obj.directive_start, obj.directive_end, obj.name_start,
+             obj.name_end, obj.content_hash)).fetchone()[0])
+        counts["objects"] += 1
+        counts[f"disposition_{obj.disposition}"] = \
+            counts.get(f"disposition_{obj.disposition}", 0) + 1
+        object_spans.append((obj.source_start, obj.source_end, object_id))
+
+        conn.execute(
+            """insert into envelope_derived_records
+                 (envelope_id, derived_kind, derived_id, discovery_only,
+                  processing_version)
+               values (%s,'CURATED_OBJECT'::derived_kind,%s,false,%s)
+               on conflict do nothing""",
+            (envelope_id, object_id, PROCESSING_VERSION))
+
+        write_fields(conn, "object_id", object_id, obj.fields, block_ids, counts)
+
+    # A verification attaches to the object whose span CONTAINS it, and to
+    # nothing else. Never the nearest, never the enclosing document: Video
+    # 14 states one personal verification and also discusses berberine and
+    # ACV evidence the practitioner did NOT claim to have checked, so an
+    # attachment rule based on proximity or on the document would promote
+    # those to PRACTITIONER_VERIFIED. A statement inside no object is
+    # REPORTED rather than attached to a guess.
+    for v in verifications:
+        owner = [oid for (s0, e0, oid) in object_spans
+                 if s0 <= v.source_start and v.source_end <= e0]
+        if len(owner) != 1:
+            counts["verifications_unattached"] += 1
+            continue
+        conn.execute(
+            """insert into curated_verifications
+                 (object_id, verification_actor, verification_status,
+                  statement_text, source_start, source_end, rule_id)
+               values (%s,%s::curated_verification_actor,
+                       %s::curated_verification_status,%s,%s,%s,%s)
+               on conflict (object_id, source_start, source_end) do update set
+                 verification_actor = excluded.verification_actor,
+                 verification_status = excluded.verification_status,
+                 statement_text = excluded.statement_text,
+                 rule_id = excluded.rule_id""",
+            (owner[0], v.verification_actor, v.verification_status,
+             v.statement_text, v.source_start, v.source_end, v.rule_id))
+        counts["verifications"] += 1
 
     conn.execute(
         "update source_envelopes set status='EXTRACTED', processed_at=now() "
@@ -273,13 +331,55 @@ def store(conn, envelope_id: str, text: str, blocks: list[CP.Block],
     return counts
 
 
+def write_fields(conn, owner_col: str, owner_id: str, fields, block_ids,
+                 counts: dict) -> None:
+    """One field-writing path for all three owner kinds.
+
+    Deliberately shared rather than copied per owner: the per-field
+    provenance contract -- VERBATIM_SOURCE, or TRANSFORMED with the rule
+    named, and no third option -- is what GATE 1 proved, and a second copy
+    would be a second place for it to be enforced differently.
+    """
+    for f in fields:
+        conn.execute(
+            f"""insert into curated_fields
+                 ({owner_col}, block_id, field_name, text_value, provenance,
+                  transformation_type, transformation_rule,
+                  source_start, source_end, heading_path)
+               values (%s,%s,%s,%s,%s::curated_provenance,%s,%s,%s,%s,%s)""",
+            (owner_id, block_ids.get(f.block_ordinal), f.field_name,
+             f.text_value, f.provenance, f.transformation_type,
+             f.transformation_rule, f.source_start, f.source_end,
+             f.heading_path))
+        counts["fields"] += 1
+        counts["verbatim" if f.provenance == "VERBATIM_SOURCE"
+               else "transformed"] += 1
+
+
+def verification_rules(conn) -> list[tuple]:
+    """Authored verification constructs, as registry rows (migration 041)."""
+    return [tuple(r) for r in conn.execute(
+        """select rule_id, pattern, verification_actor::text,
+                  verification_status::text
+             from curated_verification_rules where active
+            order by rule_id""").fetchall()]
+
+
 def import_one(conn, envelope: tuple, embed_call=None) -> dict:
     envelope_id, title, kind, raw_location = envelope
     text = source_text(raw_location)
     rules = CP.load_rules(conn)
-    blocks, cards = CP.parse(text, rules)
+    blocks, cards, objects = CP.parse(text, rules)
 
-    counts = store(conn, str(envelope_id), text, blocks, cards)
+    verifications = CP.find_verifications(text, verification_rules(conn))
+    bad = [v for v in verifications
+           if text[v.source_start:v.source_end] != v.statement_text]
+    if bad:
+        raise CuratedImportError(
+            f"{len(bad)} verification statement(s) do not match the span they "
+            "name. D48: a populated location is not provenance.")
+    counts = store(conn, str(envelope_id), text, blocks, cards, objects,
+                   verifications)
     review = [b for b in blocks if b.status == "REVIEW_REQUIRED"]
     concepts = attach_concepts(conn, str(envelope_id), text, cards,
                                embed_call=embed_call)

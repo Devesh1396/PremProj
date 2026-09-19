@@ -27,7 +27,15 @@ import psycopg
 import curated_parser as CP
 
 FIXTURE = ROOT / "testing" / "fixtures" / "curated" / "t2d_video14.md"
+SEED_033 = ROOT / "database" / "migrations" / "033_curated_grammar_seed.sql"
 EXPECTED_SHA = "03b6577d6190dfa53f1f13ea35b0957581fed2fc5dd5764a54841948fffd6bfd"
+
+
+def baseline_rule_ids() -> set[str]:
+    """The rule ids migration 033 seeds, read from the migration itself."""
+    import re
+    sql = SEED_033.read_text()
+    return set(re.findall(r"^\('([A-Z0-9_]+)',", sql, re.M))
 
 
 def main() -> int:
@@ -44,9 +52,20 @@ def main() -> int:
     text = raw.decode("utf-8")
     with psycopg.connect(os.environ["DATABASE_URL"]) as conn:
         rules = CP.load_rules(conn)
-    print(f"rules loaded {len(rules)} active (migration 033, unchanged)\n")
 
-    blocks, cards = CP.parse(text, rules)
+    # THE BASELINE IS A HISTORICAL MEASUREMENT AND MUST STAY REPRODUCIBLE.
+    #
+    # It was taken against migration `033`'s rules alone. Once `041` adds
+    # rules, loading "every active rule" would quietly re-measure something
+    # else and print it under the same heading. So the rule set is pinned
+    # to the ids `033` actually seeds, read out of the migration file
+    # rather than copied into a list here that would go stale.
+    baseline_ids = baseline_rule_ids()
+    rules = [r for r in rules if r.rule_id in baseline_ids]
+    print(f"rules loaded {len(rules)} active, pinned to the "
+          f"{len(baseline_ids)} seeded by migration 033\n")
+
+    blocks, cards, objects = CP.parse(text, rules)
 
     parsed = [b for b in blocks if b.status == "PARSED"]
     review = [b for b in blocks if b.status == "REVIEW_REQUIRED"]

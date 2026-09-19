@@ -75,6 +75,11 @@ class Rule:
     block_kind: str
     field_name: str | None
     priority: int
+    # GATE 4. Both are registry columns (migration `041`), not parser
+    # branches, because both decide how far a rule reaches and a branch
+    # here would be a second definition of the grammar.
+    field_name_source: str = "FIXED"
+    owner_kinds: tuple[str, ...] | None = None
     regex: re.Pattern = field(init=False)
 
     def __post_init__(self):
@@ -106,6 +111,10 @@ class Block:
     body_start: int             # first char after the heading line
     body_end: int               # start of the next heading, or EOF
     rule: Rule | None = None
+    # Every rule whose pattern matches, in priority order. `rule` is the
+    # one SELECTED. Keeping the others is what lets a rule that cannot
+    # apply hand over instead of ending the chain -- see `attach()`.
+    candidates: list[Rule] = field(default_factory=list)
     status: str = "REVIEW_REQUIRED"
     failure_reason: str | None = None
     parent_ordinal: int | None = None
@@ -118,7 +127,7 @@ class Block:
 def load_rules(conn) -> list[Rule]:
     rows = conn.execute(
         """select rule_id, construct, pattern, heading_level, block_kind,
-                  field_name, priority
+                  field_name, priority, field_name_source, owner_kinds
              from curated_grammar_rules where active
             order by priority, rule_id""").fetchall()
     if not rows:
@@ -126,7 +135,7 @@ def load_rules(conn) -> list[Rule]:
             "curated_grammar_rules is empty. The grammar is registry data "
             "(migration 033); a parser with no rules would mark the whole "
             "document REVIEW_REQUIRED and look like a parsing failure.")
-    return [Rule(*r) for r in rows]
+    return [Rule(*r[:8], tuple(r[8]) if r[8] else None) for r in rows]
 
 
 def strip_span(text: str, start: int, end: int) -> tuple[int, int]:
@@ -169,13 +178,12 @@ def segment(text: str) -> list[Block]:
 def classify(blocks: list[Block], rules: list[Rule]) -> None:
     """Attach a rule to each block, or a reason why none applies."""
     for b in blocks:
-        for rule in rules:                       # already priority-ordered
-            if rule.heading_level and rule.heading_level != b.level:
-                continue
-            if rule.regex.match(b.raw_heading):
-                b.rule = rule
-                b.status = "PARSED"
-                break
+        b.candidates = [r for r in rules                  # priority-ordered
+                        if not (r.heading_level and r.heading_level != b.level)
+                        and r.regex.match(b.raw_heading)]
+        if b.candidates:
+            b.rule = b.candidates[0]
+            b.status = "PARSED"
         else:
             b.failure_reason = (
                 f"no rule in curated_grammar_rules matches the heading "
@@ -184,36 +192,77 @@ def classify(blocks: list[Block], rules: list[Rule]) -> None:
                 "rather than needed for this document.")
 
 
-def attach(blocks: list[Block]) -> None:
-    """Bind each subsection to the strategy or principle that owns it.
+# Which enclosing kinds may own a subsection when the rule does not say.
+# `033`'s rules predate `owner_kinds` and mean exactly this.
+DEFAULT_OWNER_KINDS = ("STRATEGY", "PRINCIPLE")
 
-    A subsection whose enclosing block is not one of those has nowhere to
-    be stored, so it is REVIEW_REQUIRED rather than attached to whatever
+
+def attach(blocks: list[Block]) -> None:
+    """Bind each subsection to the block that owns it.
+
+    A subsection whose enclosing block is not an allowed owner has nowhere
+    to be stored, so it is REVIEW_REQUIRED rather than attached to whatever
     came before it. Video 1's `Final Engine 7 intelligence` section
     contains a `Decision intelligence` heading that matches the decision
     rule but belongs to no strategy — guessing an owner for it is exactly
     the kind of inference this parser exists to avoid.
+
+    GATE 4: WHICH kinds may own comes from the rule's `owner_kinds`
+    column, not from a tuple written here. The generic authored-subhead
+    rule is confined to `CURATED_OBJECT` that way, and confining it
+    matters: left unscoped it would match level-3 headings inside Video
+    1's strategy cards and rewrite rows GATE 1 proved byte-identical.
+    Data, so the scope travels with the rule that needs it.
     """
     for i, b in enumerate(blocks):
         if b.status != "PARSED" or b.block_kind != "SUBSECTION":
             continue
-        owner = None
+
+        # The enclosing block, whatever kind it turned out to be. Found
+        # once, because "which block encloses this one" does not depend on
+        # which rule we are considering.
+        enclosing = None
         for prev in reversed(blocks[:i]):
-            if prev.level < b.level and prev.status == "PARSED" \
-                    and prev.block_kind in ("STRATEGY", "PRINCIPLE"):
-                owner = prev
-                break
             if prev.level < b.level:
-                break                    # a nearer enclosing block, not a card
-        if owner is None:
+                enclosing = prev if prev.status == "PARSED" else None
+                break
+
+        # A RULE THAT CANNOT APPLY MUST NOT END THE CHAIN.
+        #
+        # `classify()` selects the highest-priority rule whose pattern
+        # matches, and ownership is only checked here. So a heading like
+        # `Why this is worth keeping` inside a curated object matched
+        # SUB_WHY -- a strategy-card rule -- and was then refused, with the
+        # generic authored-subhead rule never consulted although it matched
+        # too and would have applied. The block became REVIEW_REQUIRED
+        # because of the ORDER two rules were tried in, which is not a
+        # decision anybody made about the document.
+        #
+        # Same shape as the resolver's trigram tier ending the chain at a
+        # near-match and never reaching the semantic tier (D51). The fix is
+        # the same: keep the candidates and hand over.
+        chosen, allowed_seen = None, []
+        for rule in b.candidates:
+            allowed = rule.owner_kinds or DEFAULT_OWNER_KINDS
+            allowed_seen.append(allowed)
+            if enclosing is not None and enclosing.block_kind in allowed:
+                chosen = rule
+                break
+
+        if chosen is None:
+            wanted = sorted({k for a in allowed_seen for k in a})
             b.status = "REVIEW_REQUIRED"
             b.rule = None
             b.failure_reason = (
-                f"{b.raw_heading!r} matched a subsection rule but its "
-                "enclosing block is not a strategy or a principle, so it has "
-                "no owner. The parser will not infer one.")
+                f"{b.raw_heading!r} matched "
+                f"{len(b.candidates)} subsection rule(s), and none of them may "
+                f"be owned by the enclosing block "
+                f"({enclosing.block_kind if enclosing else 'nothing parsed'}). "
+                f"Those rules require one of {', '.join(wanted)}. The parser "
+                "will not infer an owner.")
         else:
-            b.parent_ordinal = owner.ordinal
+            b.rule = chosen
+            b.parent_ordinal = enclosing.ordinal
 
 
 def name_span(text: str, block: Block) -> tuple[str, int, int]:
@@ -274,7 +323,137 @@ class ParsedCard:
             f"{self.name}\n{body}".encode("utf-8")).hexdigest()
 
 
-def parse(text: str, rules: list[Rule]) -> tuple[list[Block], list[ParsedCard]]:
+@dataclass
+class ParsedObject:
+    """A curated block whose primary unit is a curation DIRECTIVE.
+
+    GATE 4. `ADD — …`, `MERGE — …`, `SKIP — …`. The disposition is the
+    literal word the practitioner wrote, and `directive_start/end` point
+    at those characters, so "this is a SKIP" is traceable to the source
+    rather than asserted by the parser. Nothing here decides what a block
+    MEANS; it records what the author already declared about it.
+    """
+    disposition: str
+    ordinal: int
+    name: str
+    heading_path: str
+    source_start: int
+    source_end: int
+    fields: list["ParsedField"]
+    directive_start: int
+    directive_end: int
+    name_start: int
+    name_end: int
+
+    @property
+    def content_hash(self) -> str:
+        body = "\n".join(f"{f.field_name}={f.text_value}" for f in self.fields)
+        return hashlib.sha256(
+            f"{self.disposition}\n{self.name}\n{body}".encode("utf-8")).hexdigest()
+
+
+@dataclass
+class ParsedVerification:
+    """A verification the PRACTITIONER stated, with the span that says so."""
+    rule_id: str
+    verification_actor: str
+    verification_status: str
+    statement_text: str
+    source_start: int
+    source_end: int
+
+
+def normalize_disposition(directive: str) -> str:
+    """`ADD / UPGRADE` -> `ADD_UPGRADE`. Mechanical, not interpretive.
+
+    Upper-case, collapse whitespace, and turn the separators the author
+    uses into underscores. The VERBATIM directive keeps its own span on
+    the row, so the enum is a classification of text that is still
+    pointed at rather than a replacement for it.
+    """
+    out = re.sub(r"\s*/\s*", "_", directive.strip().upper())
+    return re.sub(r"\s+", "_", out)
+
+
+def slug_field_name(heading: str) -> str:
+    """The author's own heading, as a field name. Deterministic.
+
+    Lower-case, non-alphanumerics to underscore, collapsed and trimmed.
+    The heading itself is preserved verbatim as the field's
+    `heading_path`, and the field text keeps its own span, so nothing
+    about the original wording is lost by naming it this way.
+    """
+    slug = re.sub(r"[^a-z0-9]+", "_", heading.strip().lower()).strip("_")
+    return slug or "unnamed"
+
+
+def _owned_fields(text: str, blocks: list[Block], owner: Block) -> list["ParsedField"]:
+    """The owner's own body, then every subsection bound to it.
+
+    A HEADING-named field whose slug collides with one already taken by
+    the same owner is REFUSED, not overwritten: `uq_curated_field_*` would
+    reject the second row anyway, and silently dropping one of two
+    differently-headed subsections is how content disappears.
+    """
+    fields: list[ParsedField] = []
+    taken: set[str] = set()
+
+    s, e = strip_span(text, owner.body_start, owner.body_end)
+    if e > s:
+        fields.append(ParsedField(
+            OPENING_FIELD, text[s:e], s, e, owner.heading_path, owner.ordinal))
+        taken.add(OPENING_FIELD)
+
+    for sub in blocks:
+        if sub.parent_ordinal != owner.ordinal:
+            continue
+        ss, se = strip_span(text, sub.body_start, sub.body_end)
+        if se <= ss:
+            continue
+        if sub.rule.field_name_source == "HEADING":
+            name = slug_field_name(sub.raw_heading)
+        else:
+            name = sub.rule.field_name
+        if name in taken:
+            sub.status = "REVIEW_REQUIRED"
+            sub.parent_ordinal = None
+            sub.rule = None
+            sub.failure_reason = (
+                f"the field name {name!r} derived from {sub.raw_heading!r} is "
+                "already used by another subsection of the same block. The "
+                "parser will not overwrite one with the other.")
+            continue
+        taken.add(name)
+        fields.append(ParsedField(
+            name, text[ss:se], ss, se, sub.heading_path, sub.ordinal))
+    return fields
+
+
+def find_verifications(text: str, rules: list[tuple]) -> list[ParsedVerification]:
+    """Authored verification statements, from the registry (migration 041).
+
+    `rules` is rows of (rule_id, pattern, actor, status). The pattern is
+    registry data for the same reason the heading grammar is: recognising
+    a new authored construct is an INSERT, not an edit here (hard rule 13).
+
+    The span is the matched line, stripped, and the stored text IS that
+    slice — `ck_verification_span_is_statement` checks the length and the
+    importer re-reads the characters. D48: a location field that is
+    populated is not provenance.
+    """
+    found: list[ParsedVerification] = []
+    for rule_id, pattern, actor, status in rules:
+        for m in re.finditer(pattern, text, re.IGNORECASE):
+            s, e = strip_span(text, m.start(), m.end())
+            if e <= s:
+                continue
+            found.append(ParsedVerification(
+                rule_id, actor, status, text[s:e], s, e))
+    return sorted(found, key=lambda v: v.source_start)
+
+
+def parse(text: str, rules: list[Rule]) \
+        -> tuple[list[Block], list[ParsedCard], list[ParsedObject]]:
     blocks = segment(text)
     classify(blocks, rules)
     attach(blocks)
@@ -282,38 +461,57 @@ def parse(text: str, rules: list[Rule]) -> tuple[list[Block], list[ParsedCard]]:
     by_ordinal = {b.ordinal: b for b in blocks}
     cards: list[ParsedCard] = []
 
-    for b in blocks:
-        if b.status != "PARSED" or b.block_kind not in ("STRATEGY", "PRINCIPLE"):
-            continue
-        name, n_start, n_end = name_span(text, b)
-        fields: list[ParsedField] = []
+    objects: list[ParsedObject] = []
 
-        # The card's own body, before its first subsection.
-        s, e = strip_span(text, b.body_start, b.body_end)
-        if e > s:
-            fields.append(ParsedField(
-                OPENING_FIELD, text[s:e], s, e, b.heading_path, b.ordinal))
-
-        for sub in blocks:
-            if sub.parent_ordinal != b.ordinal:
-                continue
-            ss, se = strip_span(text, sub.body_start, sub.body_end)
-            if se <= ss:
-                continue
-            fields.append(ParsedField(
-                sub.rule.field_name, text[ss:se], ss, se,
-                sub.heading_path, sub.ordinal))
-
-        # The card ends where its last owned block ends.
+    def extent(owner: Block) -> int:
+        """Where the block ends: after the last subsection bound to it."""
         owned = [by_ordinal[o.ordinal] for o in blocks
-                 if o.parent_ordinal == b.ordinal]
-        card_end = max([b.body_end] + [o.body_end for o in owned])
-        cards.append(ParsedCard(
-            kind=b.block_kind, ordinal=b.ordinal, name=name,
-            heading_path=b.heading_path,
-            source_start=b.heading_start, source_end=card_end,
-            fields=fields, name_start=n_start, name_end=n_end))
-    return blocks, cards
+                 if o.parent_ordinal == owner.ordinal]
+        return max([owner.body_end] + [o.body_end for o in owned])
+
+    for b in blocks:
+        if b.status != "PARSED":
+            continue
+
+        if b.block_kind in ("STRATEGY", "PRINCIPLE"):
+            name, n_start, n_end = name_span(text, b)
+            fields = _owned_fields(text, blocks, b)
+            cards.append(ParsedCard(
+                kind=b.block_kind, ordinal=b.ordinal, name=name,
+                heading_path=b.heading_path,
+                source_start=b.heading_start, source_end=extent(b),
+                fields=fields, name_start=n_start, name_end=n_end))
+
+        elif b.block_kind == "CURATED_OBJECT":
+            m = b.rule.regex.match(b.raw_heading)
+            groups = m.groupdict() or {}
+            head_at = text.index(b.raw_heading, b.heading_start)
+            directive = groups.get("directive")
+            if not directive:
+                # A CURATED_OBJECT rule with no `directive` group cannot
+                # say what disposition it read, and a disposition the
+                # parser picked rather than read is exactly what this
+                # construct exists to avoid.
+                b.status = "REVIEW_REQUIRED"
+                b.rule = None
+                b.failure_reason = (
+                    f"{b.raw_heading!r} matched a CURATED_OBJECT rule that "
+                    "captures no `directive` group, so the disposition would "
+                    "have to be guessed. The parser will not guess it.")
+                continue
+            d_at = head_at + b.raw_heading.index(directive)
+            name = groups.get("name") or b.raw_heading
+            n_at = head_at + b.raw_heading.index(name)
+            fields = _owned_fields(text, blocks, b)
+            objects.append(ParsedObject(
+                disposition=normalize_disposition(directive),
+                ordinal=b.ordinal, name=name, heading_path=b.heading_path,
+                source_start=b.heading_start, source_end=extent(b),
+                fields=fields,
+                directive_start=d_at, directive_end=d_at + len(directive),
+                name_start=n_at, name_end=n_at + len(name)))
+
+    return blocks, cards, objects
 
 
 def verify(text: str, fields: list[ParsedField]) -> list[str]:
