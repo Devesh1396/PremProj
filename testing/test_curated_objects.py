@@ -237,6 +237,45 @@ def main() -> int:
           inactive == {"REINFORCE", "SKIP", "PROVENANCE_ONLY"},
           str(sorted(inactive)))
 
+    # ==================================================================
+    print("\nSEMANTIC ROLES MUST NOT CLAIM MORE THAN THE GRAMMAR SAYS")
+    role = conn.execute(
+        "select semantic_role from curated_field_roles "
+        " where field_name='when_not_useful'").fetchone()
+    print(f"        when_not_useful -> {role[0] if role else None}")
+    check("`when_not_useful` has a registered role at all", role is not None)
+    check("...and it is NOT a contraindication",
+          role and "CONTRA" not in role[0].upper().replace("_", ""),
+          str(role))
+    check("...and it is NOT safety",
+          role and "SAFETY" not in role[0].upper(), str(role))
+    check("...it is the grammar's own word: negative indication",
+          role and role[0] == "NEGATIVE_INDICATION", str(role))
+
+    # The construct 033 actually describes, quoted from the registry rather
+    # than from memory. A role stronger than this text is an over-claim.
+    src = conn.execute(
+        "select construct, reusable_justification from curated_grammar_rules "
+        " where rule_id='SUB_WHEN_NOT_USEFUL'").fetchone()
+    check("033 describes it as NEGATIVE INDICATION, never contraindication",
+          src and "negative-indication" in src[0].lower()
+          and "contraindicat" not in (src[0] + src[1]).lower(), str(src))
+
+    # `safety_context` IS the safety construct and must keep that role --
+    # this check would also pass if safety had simply been deleted, so it
+    # is asserted positively.
+    safety = conn.execute(
+        "select semantic_role from curated_field_roles "
+        " where field_name='safety_context'").fetchone()
+    check("`safety_context` still carries SAFETY — the real one is untouched",
+          safety and safety[0] == "SAFETY", str(safety))
+
+    others = conn.execute(
+        "select field_name, semantic_role from curated_field_roles "
+        " where semantic_role ilike '%%contra%%'").fetchall()
+    check("NO field anywhere is registered as a contraindication",
+          others == [], str(others))
+
     print("\n" + ("=" * 60))
     if FAILS:
         print(f"FAILURES: {len(FAILS)}")

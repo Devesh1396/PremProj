@@ -381,9 +381,11 @@ def store(conn, envelope_id: str, text: str, blocks: list[CP.Block],
              v.statement_text, v.source_start, v.source_end, v.rule_id))
         counts["verifications"] += 1
 
-    conn.execute(
-        "update source_envelopes set status='EXTRACTED', processed_at=now() "
-        " where envelope_id=%s", (envelope_id,))
+    # THE STATUS TRANSITION IS NOT store()'s TO MAKE. It used to live here,
+    # which meant the envelope was marked EXTRACTED before `attach_concepts`
+    # had run at all -- so a failure there left a source claiming success
+    # that `pending()` would never offer again. It now happens at the true
+    # end of a successful import, inside the same transaction.
     return counts
 
 
@@ -435,11 +437,47 @@ def import_one(conn, envelope: tuple, embed_call=None) -> dict:
         raise CuratedImportError(
             f"{len(bad)} verification statement(s) do not match the span they "
             "name. D48: a populated location is not provenance.")
-    counts = store(conn, str(envelope_id), text, blocks, cards, objects,
-                   verifications)
+    # ==================================================================
+    # ONE TRANSACTION, AND THE STATUS MOVES LAST.
+    #
+    # Measured before this existed, injecting a failure into concept
+    # attachment on a real Video 14 import:
+    #
+    #   status=EXTRACTED  processed=True  objects=11  queued_for_retry=0
+    #
+    # The envelope claimed success, `pending()` stopped offering it, and the
+    # library held whatever the run had managed. Injecting a failure midway
+    # through `store()` instead left 3 objects and 61 blocks committed,
+    # because every statement on an autocommit connection is its own
+    # transaction.
+    #
+    # WHY CONCEPT ATTACHMENT IS INSIDE THE BOUNDARY, rather than being
+    # treated as optional. The architecture ALREADY distinguishes "this
+    # capability cannot run" from "this failed": missing pgvector, no
+    # MODEL_EMBEDDING, no credential or nothing embedded make
+    # `semantic_recomputation_authoritative()` return (False, reason) and
+    # `store_units()` return NOT_RECOMPUTED / FIRST_ATTACHMENT -- a
+    # REPORTED STATUS, never an exception (D52a, D52b). Degradation is
+    # therefore already expressible without raising, so an exception out of
+    # `attach_concepts` is a genuine failure of the import and not a
+    # environment being less capable. It belongs inside.
+    #
+    # `conn.transaction()` works on an autocommit connection in psycopg 3 --
+    # it opens an explicit block and commits at the end -- so the module's
+    # connection handling is unchanged and every other caller is unaffected.
+    # No exception is caught here: a failure propagates, the block rolls
+    # back, the envelope stays NORMALIZED, and `pending()` offers it again.
+    # ==================================================================
+    with conn.transaction():
+        counts = store(conn, str(envelope_id), text, blocks, cards, objects,
+                       verifications)
+        concepts = attach_concepts(conn, str(envelope_id), text, cards,
+                                   objects, embed_call=embed_call)
+        conn.execute(
+            "update source_envelopes set status='EXTRACTED', "
+            "       processed_at=now() where envelope_id=%s", (envelope_id,))
+
     review = [b for b in blocks if b.status == "REVIEW_REQUIRED"]
-    concepts = attach_concepts(conn, str(envelope_id), text, cards,
-                               objects, embed_call=embed_call)
 
     return {
         "envelope_id": str(envelope_id), "title": title, "kind": kind,

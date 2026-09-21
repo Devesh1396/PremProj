@@ -3284,3 +3284,35 @@ precondition for exposure.
 in this repository -- two extracts, 4,799 words, no parent document. The
 surveyor is built, read-only and calibrated on both extracts; the survey
 itself is recorded as NOT DONE and no corpus-wide rule estimate is offered.
+
+
+## GATE 4 review round 2 — atomicity, a real link, two over-claiming names (2026-09-21, D55)
+
+**A FAILED IMPORT COULD REPORT SUCCESS.** `store()` set the envelope
+EXTRACTED and `attach_concepts()` ran after it, on an autocommit connection.
+Injected failure, measured: `status=EXTRACTED objects=11 queued_for_retry=0`
+-- claimed success, invisible to retry. Now one transaction around storage,
+attachment and the status, with the status last; both failure shapes roll
+back to NORMALIZED with zero rows and retry queued.
+
+**THE LINK-PRESERVATION CLAIM WAS VACUOUS.** `l1 == l2` on Video 14 compared
+`[] == []`. A real link (`ADIPOKINES`, alias tier, score 1.0) is now captured
+with full provenance and proven to survive a degraded re-import under
+`NOT_RECOMPUTED`, with byte-identical phrase, span, field, rule, tier and
+score. The Video 14 comparison is explicitly marked as proving nothing.
+
+**`when_not_useful` WAS LABELLED `CONTRA_INDICATION`.** 033 calls the
+construct "an explicit negative-indication subsection". Corrected to
+`NEGATIVE_INDICATION` in `047`, append-only.
+
+**THE MARKDOWN HEADING LEVELS ARE NOT IN THE SOURCE.** `T2D_V_1.docx` has 0
+Heading styles and 0 outline levels; the `##`/`###` levels appeared during
+conversion, so every level-3 grammar rule keys on a level the author never
+wrote. `scripts/docx_structure.py` reports signals and refuses to assign a
+level where the document states none.
+
+**OPEN QUESTION, UNANSWERED: how were `t2d_video1.md` and `t2d_video14.md`
+produced -- by hand, by a script, or by a model?** If by a model, the heading
+hierarchy GATES 1 and 4 parse was INTERPRETED RATHER THAN AUTHORED. The text
+preservation guarantees are unaffected; the claim that the grammar reads
+authored structure is not.

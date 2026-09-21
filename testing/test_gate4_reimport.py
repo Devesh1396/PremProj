@@ -233,8 +233,26 @@ def main() -> int:
         check("no duplicate verification rows",
               len({(r[0], r[4], r[5]) for r in v2}) == len(v2))
 
-        check("concept links are not destroyed by the second import",
-              l1 == l2, f"{len(l1)} -> {len(l2)}")
+        # `l1 == l2` IS VACUOUS HERE AND MUST NOT READ AS PROOF.
+        # Video 14 resolves nothing against the K1 seed, so both sides are
+        # empty and the comparison passes having compared nothing. It is
+        # kept as a no-regression check -- if links ever DO appear here it
+        # still has to hold -- but the claim "an established link survives
+        # a degraded re-import" is proven in regression 3 below, on a
+        # source that actually has one.
+        if l1:
+            check("concept links are not destroyed by the second import",
+                  l1 == l2, f"{len(l1)} -> {len(l2)}")
+        else:
+            check("no link appeared out of nowhere on the second import",
+                  l2 == [], str(l2))
+            preflight.skip(
+                "a resolvable concept for any Video 14 unit",
+                "the K1 seed holds no concept for berberine, vinegar or "
+                "market intelligence, so this envelope has ZERO curated-object "
+                "links and its link comparison proves nothing about "
+                "preservation. Regression 3 proves that on a source with a "
+                "real link.")
 
         states = {a["status"] for a in second["concepts"]["attachment"].values()}
         print(f"        recomputation states, run 2: {sorted(states)}")
@@ -323,6 +341,77 @@ def main() -> int:
     check("...and the verification", len(synth_verifs()) == 1)
     check("...with the object's identity still unchanged",
           [r[0] for r in objects_state(conn, senv)] == before_ids)
+
+    # ==================================================================
+    print("\nREGRESSION 3 — a REAL concept link survives a degraded re-import")
+
+    real = links_state(conn, senv)
+    if not real:
+        # NOT a skip. The whole point of this regression is that a real
+        # link exists to protect; if the deterministic tiers stopped
+        # resolving `adipokines` the suite must go RED rather than quietly
+        # report nothing, because a silent skip here is indistinguishable
+        # from proof.
+        check("a REAL curated-object concept link exists to protect",
+              False,
+              "the synthetic object name no longer resolves through the "
+              "exact, alias or trigram tier. This regression cannot run and "
+              "must not be read as proof of link preservation. Fix the "
+              "prerequisite -- do NOT fabricate an embedding to force it.")
+    else:
+        # Full provenance, captured from the row itself.
+        full = conn.execute(
+            """select l.object_id::text, l.concept_id::text, l.source_phrase,
+                      l.source_start, l.source_end, l.field_name, l.rule_id,
+                      l.resolution_tier, l.resolution_score, l.weight,
+                      c.canonical_key, o.ordinal, o.disposition::text
+                 from curated_strategy_concepts l
+                 join curated_objects o on o.object_id = l.object_id
+                 join concepts c on c.concept_id = l.concept_id
+                where o.envelope_id=%s order by l.source_start""",
+            (senv,)).fetchall()
+        for r in full:
+            print(f"        link  object={r[0][:8]}… concept={r[10]} "
+                  f"phrase={r[2]!r} span=[{r[3]}:{r[4]}] field={r[5]} "
+                  f"rule={r[6]} tier={r[7]} score={r[8]}")
+        obj_before = [r[0] for r in objects_state(conn, senv)]
+
+        check("the link resolved through a DETERMINISTIC tier, not a provider",
+              all(r[7] in ("exact", "alias", "trigram", "canonical_key",
+                           "exact_name") for r in full),
+              str([r[7] for r in full]))
+
+        requeue(conn, senv)
+        again = run_import(conn, CI, senv)
+
+        states = {a["status"] for a in again["concepts"]["attachment"].values()}
+        print(f"        recomputation states: {sorted(states)}")
+        check("the environment really is the less-capable one",
+              not again["concepts"]["authoritative"],
+              str(again["concepts"]["authority_reason"]))
+        check("the contract reports NOT_RECOMPUTED, the state that PRESERVES",
+              states == {"NOT_RECOMPUTED"}, str(states))
+
+        after = conn.execute(
+            """select l.object_id::text, l.concept_id::text, l.source_phrase,
+                      l.source_start, l.source_end, l.field_name, l.rule_id,
+                      l.resolution_tier, l.resolution_score, l.weight,
+                      c.canonical_key, o.ordinal, o.disposition::text
+                 from curated_strategy_concepts l
+                 join curated_objects o on o.object_id = l.object_id
+                 join concepts c on c.concept_id = l.concept_id
+                where o.envelope_id=%s order by l.source_start""",
+            (senv,)).fetchall()
+
+        check("the owning object KEPT its identity",
+              [r[0] for r in objects_state(conn, senv)] == obj_before,
+              f"{obj_before} -> {[r[0] for r in objects_state(conn, senv)]}")
+        check("the established link STILL EXISTS", len(after) == len(full),
+              f"{len(full)} -> {len(after)}")
+        check("...with byte-identical provenance — phrase, span, field, "
+              "rule, tier and score", full == after)
+        check("...and was not silently duplicated",
+              len({(r[0], r[1], r[3], r[4]) for r in after}) == len(after))
 
     # ------------------------------------------------------------------
     # A stale OBJECT, not just a stale field. The upsert can only add or

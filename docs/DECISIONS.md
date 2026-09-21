@@ -4503,3 +4503,85 @@ surveyor is built, calibrated on both extracts and read-only
 (`scripts/curated_survey.py`), and the survey of the unseen region is
 recorded as NOT DONE rather than answered from the sections that happen to be
 on disk. No corpus-wide rule estimate is offered.
+
+---
+
+## D55 — the import's success boundary, and two names that claimed too much
+
+### A failed import could report success
+
+`import_one` ran `store()` — which set the envelope EXTRACTED — and then
+called `attach_concepts()`. On an autocommit connection. **Reproduced by
+injecting a failure into concept attachment on a real Video 14 import:**
+
+```
+status=EXTRACTED  processed=True  objects=11  queued_for_retry=0
+```
+
+The envelope claimed success, `pending()` never offered it again, and the
+library kept whatever that run had managed. Injecting a failure midway
+through `store()` instead committed 3 objects and 61 blocks.
+
+**Decision: one transaction around deterministic storage, concept
+attachment and the status transition, with the status LAST.** A failure
+anywhere rolls the whole thing back, the envelope stays NORMALIZED, and
+`pending()` offers it again. No exception is caught; failures propagate.
+
+**Why concept attachment is INSIDE the boundary rather than optional.** The
+architecture already distinguishes "this capability cannot run" from "this
+failed": missing pgvector, no `MODEL_EMBEDDING`, no credential or nothing
+embedded make `semantic_recomputation_authoritative()` return `(False,
+reason)` and `store_units()` return `NOT_RECOMPUTED` / `FIRST_ATTACHMENT` —
+a **reported status, never an exception** (D52a, D52b). Degradation is
+therefore already expressible without raising, so an exception out of
+`attach_concepts` is a genuine failure of the import. That is an existing
+contract being relied on, not a new decision made here.
+
+`conn.transaction()` opens an explicit block on an autocommit connection in
+psycopg 3, so the module's connection handling is unchanged. **Noted, not
+solved:** with a live provider configured, an embedding call inside the
+block holds the transaction open across network I/O. Acceptable for a
+curated import of a handful of phrases; it would not be for a bulk loader.
+
+### `when_not_useful` was labelled a contraindication
+
+`046` registered `when_not_useful → CONTRA_INDICATION`. The grammar rule it
+describes says no such thing. `033`'s SUB_WHEN_NOT_USEFUL is, verbatim, *"An
+explicit negative-indication subsection"*, kept separate because *"when this
+does not apply"* is the half most often lost when a decision layer is
+flattened.
+
+A strategy can be lower priority, not currently useful, or mismatched to the
+present bottleneck **without being clinically contraindicated**.
+`CONTRA_INDICATION` reads as the clinical term, and a reader looking for
+contraindications would have found a list of sequencing judgements and
+treated them as safety — the same failure class as D49's fabricated
+`mechanism`, and worse, because the over-claim is toward safety, which GATE 4
+has already recorded the system does **not** operationally know.
+
+**Corrected to `NEGATIVE_INDICATION`** (`047`, append-only — `046` is applied
+and is not edited, on this branch or anywhere). Nothing outside `046`
+referenced the old value. `safety_context → SAFETY` is the real safety
+construct and is untouched, asserted positively so the regression cannot pass
+by safety having been deleted.
+
+### The markdown heading levels are not in the source
+
+`T2D_V_1.docx` carries **0** Heading-styled paragraphs, **0** `w:outlineLvl`,
+no heading numbering, and 3,979 bold paragraphs whose formatting is identical
+whether section or subsection. **The `##` and `###` levels in the Video 1 and
+Video 14 fixtures appeared during conversion**, so `SUB_AUTHORED_SUBHEAD` —
+and every level-3 rule in `033` — keys on a level the author never wrote.
+
+`scripts/docx_structure.py` reports the signals a document actually carries
+and **assigns a level only where the document states one**. Where it states
+none it says `NO HEADING HIERARCHY` and infers nothing from bold, length,
+capitalisation, font size or spacing. Two fixtures, and the flat bold one is
+the one that matters: a reader validated only on a Heading 1/2/3 document
+passes there and finds nothing in the real corpus.
+
+How the corpus acquires a hierarchy is the practitioner's decision; three
+options are recorded in `docs/evidence/gate4_docx_structure.md` and none is
+chosen. **Open question, unanswered: how were the two markdown fixtures
+produced?** If by a model, the structure GATES 1 and 4 parse was interpreted
+rather than authored.
