@@ -4413,3 +4413,93 @@ named skip (pre-existing, V3-shaped).
 **The first implemented run was a MISS** and is kept: `040` added the
 `derived_kind` enum value without the registration trigger hard rule 12
 requires, and `fk_derived_entity` caught it at the first real insert.
+
+---
+
+## D54 — re-import reconciles; preservation is not understanding (GATE 4 review)
+
+### The re-import hole, and the trap under it
+
+**Re-importing the same curated envelope raised `UniqueViolation` on
+`uq_curated_field_object`** and left 30 object fields orphaned with
+`block_id` NULL. Reproduced before anything was changed.
+
+**Root cause: `curated_fields.block_id` was ON DELETE SET NULL.** `store()`
+clears an envelope's blocks on every re-import, and that delete did not
+remove the fields hanging off them — it nulled their `block_id` and left the
+rows. Strategy and principle fields were deleted explicitly by owner, so the
+trap was invisible until GATE 4 added a third owner and no third delete.
+
+**Decision: derived deterministic state is RECONCILED against the current
+parse, never accumulated.** Object fields and verifications are replaced
+wholesale; objects whose ordinal is no longer produced are removed *before*
+the upsert, which can otherwise only add or update. Object identity is
+preserved — the upsert is still `(envelope_id, ordinal)` and a surviving
+object keeps its `object_id`, so nothing downstream is invalidated to make a
+test pass.
+
+**`045` makes the FK CASCADE and the importer keeps its explicit delete.**
+Deliberately redundant: the cascade closes the structural trap so a fourth
+owner cannot re-set it, and the explicit delete covers a field with a NULL
+`block_id`, which no cascade can reach. Measured — either alone closes the
+hole; with neither, the original `UniqueViolation` returns.
+
+**A second bug that had never executed.** The object concept-link insert used
+`ON CONFLICT` against `uq_curated_link_object`, a PARTIAL unique index,
+without repeating its predicate. Video 14 resolves nothing against the K1
+seed, so that INSERT was never reached — the link-writing path for curated
+objects had never once run, and a green suite said nothing about it. A
+synthetic object named after a seeded concept reaches it.
+
+### Structurally preserved is not semantically classified
+
+`SUB_AUTHORED_SUBHEAD` is kept. It produces rows that look exactly like rows
+the grammar understands, and nothing in the schema said otherwise:
+`Berberine Safety / Gate` is preserved perfectly and **the system does not
+know it is safety**. Left alone, the first coverage report counting stored
+fields would read as comprehension at exactly the scale where that matters.
+
+Three states, visible: `SEMANTIC_ROLE_REGISTERED`,
+`SEMANTIC_ROLE_UNREGISTERED`, `STRUCTURALLY_PRESERVED_ONLY`.
+
+**THE CLASSIFICATION KEYS ON HOW A FIELD WAS NAMED, NEVER ON THE NAME.** An
+author heading `Monitoring` slugifies onto `monitoring`, which IS a
+registered role name, so a string match would report it understood on a
+coincidence of spelling. `curated_fields.name_source` (RULE / HEADING / BODY)
+carries the provenance and a test asserts the collision is still reachable
+and still not promoted.
+
+**Nothing infers a role** — no keyword rule, no heuristic, no model. Measured:
+Video 14 has 0 role-registered fields and 30 preserved-only; Video 1 has 20
+role-registered. The view discriminates rather than labelling everything.
+
+### Curated objects stay out of runtime retrieval, and why
+
+`MERGE`, `ADD_UPGRADE` and `REINFORCE` have no target semantics. MERGE means
+an existing object is being enriched; ADD_UPGRADE means prior candidate
+knowledge is being raised; REINFORCE says explicitly that **no new object
+should be created**. Treating every active curated object as an independent
+retrieval result would recreate the duplication the practitioner's curation
+exists to prevent.
+
+**Target resolution / merge resolution is UNRESOLVED WORK and is a
+precondition for runtime exposure.** No speculative matching was attempted.
+The objects, their dispositions and their concept links are preserved; the
+exclusion is now checked mechanically rather than claimed.
+
+**When retrieval IS widened, the guard must be replaced, not deleted.** The
+replacement must drive the real retrieval path with a SKIP object present and
+assert it is not returned. The current K5 check proves
+`curated_disposition_is_active()` classifies SKIP as inactive — it tests the
+predicate in isolation, and **nothing consults that predicate today** because
+nothing retrieves from the table. A widening that forgot to call it would put
+a rejected claim in front of a practitioner and K5 would stay green.
+
+### The structural survey could not be performed
+
+The post-`Video N` material — ~77,000 words — **is not in this repository**.
+It holds two extracts totalling 4,799 words and no parent document. The
+surveyor is built, calibrated on both extracts and read-only
+(`scripts/curated_survey.py`), and the survey of the unseen region is
+recorded as NOT DONE rather than answered from the sections that happen to be
+on disk. No corpus-wide rule estimate is offered.
