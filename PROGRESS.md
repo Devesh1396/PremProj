@@ -3245,3 +3245,42 @@ material belongs), Q3 (safety has no routable home -- a GAP).
 **NEXT IS NOT ANOTHER VIDEO.** The `Video N` heading stops at 14 and ~77,000
 words follow with no such heading -- ~30x this fixture. A structural survey of
 that material comes before any corpus-wide rule estimate.
+
+
+## GATE 4 review — re-import correctness and the semantic gap (2026-09-21, D54)
+
+Migrations `045`/`046`, `testing/test_gate4_reimport.py`,
+`scripts/curated_survey.py`, `docs/evidence/gate4_structural_survey.md`.
+
+**RE-IMPORTING THE SAME ENVELOPE RAISED `UniqueViolation`** and left 30 object
+fields orphaned with `block_id` NULL. Root cause: `curated_fields.block_id`
+was ON DELETE SET NULL, so clearing an envelope's blocks NULLED those fields
+instead of removing them -- invisible while only two owners existed, because
+both were deleted explicitly. Reproduced before fixing.
+
+Derived deterministic state is now RECONCILED: object fields and
+verifications replaced wholesale, objects whose ordinal is no longer produced
+removed before the upsert, object identity preserved throughout. `045` makes
+the FK CASCADE; the explicit delete stays, because a NULL block_id is not
+reachable by cascade. Either alone closes the hole; with neither, the
+original violation returns.
+
+**A SECOND BUG THAT HAD NEVER EXECUTED**: the object concept-link insert used
+ON CONFLICT against a PARTIAL unique index without its predicate. Video 14
+resolves nothing against the K1 seed, so the INSERT was never reached and the
+whole link-writing path for curated objects had never run once.
+
+**STRUCTURALLY PRESERVED != SEMANTICALLY CLASSIFIED (`046`).** Three visible
+states, keyed on HOW a field was named and never on the name -- an author
+heading `Monitoring` slugifies onto a registered role name. Video 14: 0
+role-registered, 30 preserved-only. Video 1: 20 role-registered. Nothing
+infers a role.
+
+**Curated objects stay OUT of runtime retrieval**, now checked mechanically.
+MERGE / ADD_UPGRADE / REINFORCE target resolution is unresolved work and is a
+precondition for exposure.
+
+**THE STRUCTURAL SURVEY COULD NOT BE RUN.** The post-Video-14 material is not
+in this repository -- two extracts, 4,799 words, no parent document. The
+surveyor is built, read-only and calibrated on both extracts; the survey
+itself is recorded as NOT DONE and no corpus-wide rule estimate is offered.
