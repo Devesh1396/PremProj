@@ -252,13 +252,23 @@ def store(conn, envelope_id: str, text: str, blocks: list[CP.Block],
             """insert into curated_blocks
                  (envelope_id, ordinal, heading_path, raw_heading, heading_level,
                   rule_id, block_kind, status, failure_reason,
-                  source_start, source_end, raw_text)
-               values (%s,%s,%s,%s,%s,%s,%s,%s::curated_block_status,%s,%s,%s,%s)
+                  source_start, source_end, raw_text, structural_provenance)
+               values (%s,%s,%s,%s,%s,%s,%s,%s::curated_block_status,%s,%s,%s,%s,
+                       %s::curated_structural_provenance)
                returning block_id""",
             (envelope_id, b.ordinal, b.heading_path, b.raw_heading, b.level,
              b.rule.rule_id if b.rule else None, b.block_kind, b.status,
              b.failure_reason, b.heading_start, b.body_end,
-             text[b.heading_start:b.body_end])).fetchone()[0])
+             text[b.heading_start:b.body_end],
+             # STRUCTURAL provenance, never TEXT provenance (048). A
+             # registered rule recognising the construct is a DERIVED
+             # classification; nothing recognising it is no hierarchy at
+             # all. AUTHORED_STRUCTURAL_SIGNAL is not reachable from this
+             # path and is not supposed to be: no source ingested today
+             # carries an authored heading level, and the markdown levels
+             # these fixtures do carry were assigned by a model.
+             "GRAMMAR_DERIVED_CLASSIFICATION" if b.rule
+             else "NO_HIERARCHY_AVAILABLE")).fetchone()[0])
 
     counts = {"strategies": 0, "principles": 0, "objects": 0, "fields": 0,
               "verbatim": 0, "transformed": 0,

@@ -50,13 +50,16 @@ The source argues for outdoor light within an hour of waking.
 
 I checked the underlying published trial.
 
-### Dose reasoning
-
-Ten to thirty minutes depending on cloud cover.
-
 ### Why this is worth keeping
 
 It is cheap, it is low-friction, and it has a plausible route to sleep onset.
+
+### Dose reasoning
+
+Ten to thirty minutes depending on cloud cover. This heading is NOT a
+registered construct, so it is REVIEW_REQUIRED -- and it closes the object,
+because without an authored level there is nothing that would say the next
+heading still belongs inside.
 
 ## MERGE — Evening Light Restriction Already Exists
 
@@ -114,13 +117,13 @@ def main() -> int:
     check("CURATION_DIRECTIVE is a CURATED_OBJECT block rule", row[0] == "CURATED_OBJECT")
     check("it states a substantial reusability justification", row[3] >= 200, str(row[3]))
     row2 = conn.execute(
-        "select block_kind, field_name_source, owner_kinds "
+        "select block_kind, field_name_source, owner_kinds, active, pattern "
         "  from curated_grammar_rules where rule_id='SUB_AUTHORED_SUBHEAD'"
     ).fetchone()
-    check("SUB_AUTHORED_SUBHEAD names its field from the HEADING",
-          row2[1] == "HEADING")
-    check("...and is confined to CURATED_OBJECT owners by a COLUMN",
-          row2[2] == ["CURATED_OBJECT"], str(row2[2]))
+    check("SUB_AUTHORED_SUBHEAD is RETIRED (048), not renamed",
+          row2 is not None and row2[3] is False, str(row2))
+    check("...and it was the catch-all, which is why level was its only guard",
+          row2 is not None and row2[4] == "^(?P<name>.+)$", str(row2))
 
     # ==================================================================
     print("\nPOSITIVE: the directive construct is recognised in unseen text")
@@ -151,8 +154,15 @@ def main() -> int:
 
     add = by_disp["ADD"][0]
     fields = {f.field_name for f in add.fields}
-    check("an authored subheading becomes a field named by the AUTHOR",
-          "dose_reasoning" in fields, str(sorted(fields)))
+    # `Dose reasoning` is NOT a registered construct, and since 048 there
+    # is no catch-all to adopt it. It stays REVIEW_REQUIRED, which is the
+    # whole point: an unregistered label is not silently turned into a
+    # field just because it sits inside an object.
+    check("an UNREGISTERED subheading does NOT become a field",
+          "dose_reasoning" not in fields, str(sorted(fields)))
+    closed = [b for b in blocks if b.raw_heading == "Dose reasoning"]
+    check("...it is REVIEW_REQUIRED", closed and closed[0].status == "REVIEW_REQUIRED",
+          str([(b.raw_heading, b.status) for b in closed]))
     # `Why this is worth keeping` matches SUB_WHY (a strategy-card rule)
     # AND the generic authored-subhead rule. SUB_WHY cannot be owned by a
     # curated object, so the chain hands over -- the block is kept, and it
@@ -160,10 +170,13 @@ def main() -> int:
     # card's `why_useful`. Asserting `why_useful` here would be asserting
     # that the two are the same field, which is exactly the flattening
     # decision the parser is not entitled to make.
-    check("a higher-priority rule that cannot be owned HANDS OVER",
-          "why_this_is_worth_keeping" in fields, str(sorted(fields)))
-    check("...and does not silently become a strategy-card field",
-          "why_useful" not in fields, str(sorted(fields)))
+    # `Why this is worth keeping` matches SUB_WHY, a REGISTERED construct,
+    # and 049 lets the 033 subsection rules be owned by a curated object --
+    # so it is recognised under its registered field name rather than under
+    # the author's wording. No label was invented to make that happen: the
+    # pattern and the field name are both 033's own.
+    check("a REGISTERED label inside an object is recognised (049)",
+          "why_useful" in fields, str(sorted(fields)))
     check("the object's own body is kept as opening_statement",
           "opening_statement" in fields, str(sorted(fields)))
     ok_field_spans = all(SYNTHETIC[f.source_start:f.source_end] == f.text_value
@@ -175,8 +188,9 @@ def main() -> int:
     print("\nan unregistered heading is still REVIEW_REQUIRED")
     unknown = [b for b in blocks if b.status == "REVIEW_REQUIRED"
                and b.raw_heading == "Something The Grammar Has Never Heard Of"]
-    check("the unknown level-2 heading is not silently adopted",
-          len(unknown) == 1 and unknown[0].failure_reason is not None)
+    check("the unknown heading is not silently adopted",
+          len(unknown) == 1 and unknown[0].failure_reason is not None,
+          str([(u.raw_heading, u.status) for u in unknown]))
 
     # ==================================================================
     print("\nNEGATIVE CONTROL: the generic rule cannot reach into a card")
@@ -186,14 +200,17 @@ def main() -> int:
     check("its known subsection is kept", "why_useful" in card_fields,
           str(sorted(card_fields)))
     check("an INVENTED heading inside a card is NOT adopted as a field",
-          "invented_heading_the_grammar_does_not_know" not in card_fields,
-          str(sorted(card_fields)))
+          "invented_heading_the_grammar_does_not_know" not in card_fields
+          and "invented_heading" not in card_fields, str(sorted(card_fields)))
     orphan = [b for b in b2 if b.raw_heading.startswith("Invented Heading")]
     check("...it is REVIEW_REQUIRED instead", len(orphan) == 1
           and orphan[0].status == "REVIEW_REQUIRED", str(orphan))
-    check("...and the reason names the owner kinds it needed",
+    # Since 048 retired the catch-all, an invented heading matches NO rule
+    # at all, so it fails in classify() rather than in attach(). Either way
+    # it is refused with a reason; the assertion names which.
+    check("...and the reason says no registered rule matched it",
           orphan and orphan[0].failure_reason
-          and "CURATED_OBJECT" in orphan[0].failure_reason,
+          and "no rule in curated_grammar_rules matches" in orphan[0].failure_reason,
           str(orphan[0].failure_reason if orphan else None))
 
     # ==================================================================

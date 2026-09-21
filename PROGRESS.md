@@ -3316,3 +3316,43 @@ produced -- by hand, by a script, or by a model?** If by a model, the heading
 hierarchy GATES 1 and 4 parse was INTERPRETED RATHER THAN AUTHORED. The text
 preservation guarantees are unaffected; the claim that the grammar reads
 authored structure is not.
+
+
+## GATE 4 review round 3 — the corpus is flat (2026-09-21, D56)
+
+**FIXTURE PROVENANCE, ANSWERED. TEXT: practitioner-authored, verified
+verbatim (218 and 245 content lines, 0 genuine differences). HIERARCHY:
+model-interpreted, not practitioner-authored.** The two markdown fixtures
+were produced by a Claude model from T2D_V_1.docx; their 42 and 61 heading
+markers correspond to no level stated in the source. The hierarchy is not
+described as authored anywhere.
+
+**The real source measured:** 13,763 paragraphs, 0 Heading-styled, 0
+w:outlineLvl, 351 w:numPr, 4,207 bold-only, longest bold-only 838 chars.
+
+**The grammar no longer reads a level.** Migrations `048`/`049`: subsection
+rules lose heading_level; SUB_AUTHORED_SUBHEAD is DEACTIVATED (its pattern
+matches any text and level was its only guard); registered labels become
+recognisable inside curated objects too. Containment is parser state, and
+anything unrecognised CLOSES the open container.
+
+**DELTA. Video 1: unchanged** -- 8 containers, 24 fields, identical names and
+text. **Video 14: 12 containers unchanged, 12 fields identical, 1
+reclassified to its registered label, 18 moved to REVIEW_REQUIRED** (29 ->
+48). That includes both safety blocks, and that is correct fail-closed
+behaviour: their text and spans are preserved, only the claim that the parser
+understood them is withdrawn.
+
+**Level independence is proven** by re-rendering every heading in both
+fixtures at `#`, `###` and `######` and comparing recognised knowledge by
+TEXT -- offsets shift when the marker length changes, so an offset comparison
+would prove nothing.
+
+**Structural provenance is now separate from text provenance** -- verbatim
+text stays VERBATIM_SOURCE; `curated_blocks.structural_provenance` says
+whether the STRUCTURE was authored, grammar-derived, or absent.
+AUTHORED_STRUCTURAL_SIGNAL is defined and unreachable today, which is the
+finding.
+
+**The private 524-page DOCX is NOT in this repository and must not be
+committed.**

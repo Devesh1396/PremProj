@@ -244,6 +244,8 @@ def main() -> int:
         "  from curated_blocks where envelope_id=%s", (env,)).fetchone()
     print(f"        {blocks[0]} blocks, {blocks[1]} REVIEW_REQUIRED")
     check("every block is stored, parsed or not", blocks[0] == 61, str(blocks))
+    check("REVIEW_REQUIRED rose to 48 -- the flat-structure result, reported",
+          blocks[1] == 48, str(blocks))
     noreason = conn.execute(
         "select count(*) from curated_blocks where envelope_id=%s "
         "  and status='REVIEW_REQUIRED' and failure_reason is null",
@@ -280,6 +282,13 @@ def main() -> int:
 
     # ---- K7: the adjunct nuance survives as separate fields -------------
     print("\nK7 — berberine and ACV keep their nuance as SEPARATE fields")
+    # SINCE 048 THE NUANCE IS NO LONGER SPLIT INTO FIELDS, and pretending
+    # otherwise would be the failure this gate exists to catch. Those
+    # subsections were recognised only by the retired catch-all. Their text
+    # is preserved intact -- inside the object's body and in their own
+    # REVIEW_REQUIRED blocks -- and the system no longer claims to know
+    # what any of it is. The check is therefore that NOTHING WAS LOST, not
+    # that the field split survived.
     for want in ("Berberine", "Vinegar"):
         fields = conn.execute(
             """select f.field_name from curated_fields f
@@ -287,8 +296,25 @@ def main() -> int:
                 where o.envelope_id=%s and o.name ilike %s
                 order by f.field_name""", (env, f"%{want}%")).fetchall()
         names = [f[0] for f in fields]
-        print(f"        {want}: {names}")
-        check(f"  {want} keeps more than one field", len(names) >= 2, str(names))
+        print(f"        {want}: fields={names}")
+        check(f"  {want} keeps its object body as a field",
+              names == ["opening_statement"], str(names))
+
+    # Named explicitly rather than matched on the object's name -- ACV's
+    # subsections are headed "ACV ...", so an ilike on "Vinegar" finds none
+    # of them and the check would pass or fail for the wrong reason.
+    moved = ["Berberine Safety / Gate", "ACV Protocol Guardrails",
+             "When potentially worth considering", "When not to prioritize",
+             "Final E7 status", "Strategy tier", "Best use"]
+    for head in moved:
+        row = conn.execute(
+            """select status::text, length(btrim(raw_text))
+                 from curated_blocks
+                where envelope_id=%s and raw_heading=%s
+                order by ordinal limit 1""", (env, head)).fetchone()
+        check(f"  {head!r} is REVIEW_REQUIRED with its text preserved",
+              row is not None and row[0] == "REVIEW_REQUIRED" and row[1] > 0,
+              str(row))
 
     # ---- K11: Video 1 unchanged, ROW BY ROW ----------------------------
     print("\nK11 — Video 1's rows, compared row by row")
@@ -366,11 +392,49 @@ def main() -> int:
              join curated_objects o on o.object_id = s.object_id
             where o.envelope_id=%s group by 1""", (env,)).fetchall())
     print(f"        Video 14 object fields: {v14}")
-    check("Video 14's author-named fields are PRESERVED, not understood",
-          v14.get("SEMANTIC_ROLE_REGISTERED", 0) == 0, str(v14))
-    check("...and they are all reported as STRUCTURALLY_PRESERVED_ONLY",
-          v14.get("STRUCTURALLY_PRESERVED_ONLY", 0) == sum(v14.values()),
-          str(v14))
+    # SINCE 048/049 the split changed, and the new numbers are the honest
+    # ones. The retired catch-all used to store 19 author-named fields that
+    # the system could not act on; they are now REVIEW_REQUIRED. What
+    # remains is 12 block bodies (preserved only) and ONE registered label,
+    # `Decision intelligence` -> client_decision_logic, which carries a
+    # registered role because 033 enumerated that construct itself.
+    check("the block bodies are PRESERVED, not understood",
+          v14.get("STRUCTURALLY_PRESERVED_ONLY", 0) == 11, str(v14))
+    check("exactly one Video 14 field carries a REGISTERED role",
+          v14.get("SEMANTIC_ROLE_REGISTERED", 0) == 1, str(v14))
+    reg = conn.execute(
+        """select s.field_name, s.semantic_role
+             from v_curated_field_semantics s
+             join curated_objects o on o.object_id = s.object_id
+            where o.envelope_id=%s and s.semantic_state='SEMANTIC_ROLE_REGISTERED'""",
+        (env,)).fetchall()
+    check("...and it is the construct 033 registered, under 033's own name",
+          reg == [("client_decision_logic", "PRIORITISATION")], str(reg))
+
+    # THE TWO SAFETY BLOCKS ARE NOW REVIEW_REQUIRED, AND THAT IS CORRECT.
+    # They were only ever recognised by the retired catch-all, which named
+    # them from the author's own wording and understood nothing. Their text
+    # and spans are preserved unchanged; what is withdrawn is the claim
+    # that the parser knew they were fields. Fail-closed on the first
+    # safety content in the corpus is the right direction to fail.
+    safety_blocks = conn.execute(
+        """select raw_heading, status::text, structural_provenance::text
+             from curated_blocks where envelope_id=%s
+              and raw_heading in ('Berberine Safety / Gate',
+                                  'ACV Protocol Guardrails')
+            order by raw_heading""", (env,)).fetchall()
+    print(f"        safety blocks now: {safety_blocks}")
+    check("the safety blocks are REVIEW_REQUIRED, not silently classified",
+          [r[1] for r in safety_blocks] == ["REVIEW_REQUIRED"] * 2,
+          str(safety_blocks))
+    check("...and their structural provenance says NO_HIERARCHY_AVAILABLE",
+          [r[2] for r in safety_blocks] == ["NO_HIERARCHY_AVAILABLE"] * 2,
+          str(safety_blocks))
+    check("...and their text is still stored verbatim in the block",
+          all(conn.execute(
+              "select length(btrim(raw_text))>0 from curated_blocks "
+              " where envelope_id=%s and raw_heading=%s",
+              (env, r[0])).fetchone()[0] for r in safety_blocks))
 
     safety_state = conn.execute(
         """select s.semantic_state from v_curated_field_semantics s
@@ -378,11 +442,9 @@ def main() -> int:
             where o.envelope_id=%s and s.field_name in
                   ('berberine_safety_gate','acv_protocol_guardrails')""",
         (env,)).fetchall()
-    print(f"        the two safety blocks: {[r[0] for r in safety_state]}")
-    check("the safety blocks are preserved and NOT claimed as safety",
-          len(safety_state) == 2
-          and all(r[0] == "STRUCTURALLY_PRESERVED_ONLY" for r in safety_state),
-          str(safety_state))
+    print(f"        the two safety blocks as FIELDS: {[r[0] for r in safety_state]}")
+    check("neither safety block is stored as a FIELD any more",
+          safety_state == [], str(safety_state))
 
     v1 = dict(conn.execute(
         """select s.semantic_state, count(*)

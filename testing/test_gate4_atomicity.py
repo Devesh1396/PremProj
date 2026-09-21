@@ -192,8 +192,14 @@ def main() -> int:
     check("...and is no longer queued", s["queued"] == 0)
     check("the complete import landed", s["objects"] == 11 and s["blocks"] == 61,
           str(s))
+    # 12 OBJECT fields since 048/049: 11 object bodies plus the one
+    # registered label (`Decision intelligence` -> client_decision_logic)
+    # that survives without the retired catch-all. (A 13th field belongs to
+    # the `E7 principle` card, which is not an object and is not counted
+    # here.) The rest of Video 14's
+    # subsections are REVIEW_REQUIRED, which is the flat-structure result.
     check("no duplicate derived rows from the earlier failures",
-          s["fields"] == 30 and s["verifications"] == 1, str(s))
+          s["fields"] == 12 and s["verifications"] == 1, str(s))
 
     dupes = conn.execute(
         """select count(*) from (

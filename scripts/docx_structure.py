@@ -53,6 +53,39 @@ def _text(p) -> str:
     return "".join(t.text or "" for t in p.iter(f"{W}t"))
 
 
+def numbering_formats(z: zipfile.ZipFile) -> dict[str, str]:
+    """numId -> the numbering FORMAT the document declares for it.
+
+    Opened because the earlier version reported 351 numbered paragraphs and
+    then printed "no heading numbering" -- a conclusion drawn from the
+    PRESENCE of `w:numPr` without ever looking at what the numbering was.
+    A count of numbered paragraphs says nothing about whether the numbering
+    expresses a heading hierarchy, and the verdict claimed it did not.
+    """
+    out: dict[str, str] = {}
+    try:
+        root = ET.fromstring(z.read("word/numbering.xml"))
+    except KeyError:
+        return out
+    # abstractNumId -> {ilvl: numFmt}
+    abstract: dict[str, dict[str, str]] = {}
+    for a in root.iter(f"{W}abstractNum"):
+        aid = a.get(f"{W}abstractNumId")
+        lv: dict[str, str] = {}
+        for l in a.iter(f"{W}lvl"):
+            fmt = l.find(f"{W}numFmt")
+            if fmt is not None and fmt.get(f"{W}val"):
+                lv[l.get(f"{W}ilvl") or "0"] = fmt.get(f"{W}val")
+        abstract[aid] = lv
+    for n in root.iter(f"{W}num"):
+        nid = n.get(f"{W}numId")
+        ab = n.find(f"{W}abstractNumId")
+        if ab is not None:
+            out[nid] = ",".join(
+                f"L{k}:{v}" for k, v in sorted(abstract.get(ab.get(f"{W}val"), {}).items()))
+    return out
+
+
 def heading_styles(z: zipfile.ZipFile) -> dict[str, int]:
     """styleId -> level, for styles that DECLARE they are headings."""
     out: dict[str, int] = {}
@@ -78,9 +111,38 @@ def heading_styles(z: zipfile.ZipFile) -> dict[str, int]:
     return out
 
 
+def bold_style_ids(z: zipfile.ZipFile) -> set[str]:
+    """Paragraph styles that make their text bold, so INHERITED bold counts.
+
+    Without this, a document whose headings are bold via a style rather
+    than via direct run formatting reports zero bold paragraphs -- the
+    reader would have been measuring one of the two ways Word expresses it.
+    """
+    out: set[str] = set()
+    try:
+        root = ET.fromstring(z.read("word/styles.xml"))
+    except KeyError:
+        return out
+    for st in root.iter(f"{W}style"):
+        b = st.find(f"./{W}rPr/{W}b")
+        if b is not None and b.get(f"{W}val") not in ("0", "false"):
+            out.add(st.get(f"{W}styleId") or "")
+    return out
+
+
+def run_is_bold(run) -> bool | None:
+    """True if the run states bold, False if it states NOT bold, None if silent."""
+    b = run.find(f"./{W}rPr/{W}b")
+    if b is None:
+        return None
+    return b.get(f"{W}val") not in ("0", "false")
+
+
 def analyse(path: Path) -> dict:
     with zipfile.ZipFile(path) as z:
         styles = heading_styles(z)
+        numbering = numbering_formats(z)
+        bold_styles = bold_style_ids(z)
         root = ET.fromstring(z.read("word/document.xml"))
 
     body = root.find(f"{W}body")
@@ -93,6 +155,12 @@ def analyse(path: Path) -> dict:
         "outline_levels": collections.Counter(),    # level -> n
         "numbered_paragraphs": 0,
         "bold_only_paragraphs": 0,
+        "bold_direct": 0,              # bold stated on the runs themselves
+        "bold_inherited": 0,           # bold coming from the paragraph style
+        "bold_explicitly_off": 0,      # <w:b w:val="0"/> -- NOT bold
+        "numbering_formats": {},
+        "numbered_by_format": collections.Counter(),
+        "conflicting_signals": [],
         # LENGTHS, NOT A THRESHOLDED COUNT. An earlier draft bucketed
         # "short" bold paragraphs at <= 120 characters, and the suite's own
         # no-inference guard caught it: a length threshold is a number that
@@ -124,15 +192,41 @@ def analyse(path: Path) -> dict:
                 lv = int(ol.get(f"{W}val")) + 1
                 r["outline_levels"][lv] += 1
                 level = level or lv
-            if pPr.find(f"{W}numPr") is not None:
+            num = pPr.find(f"{W}numPr")
+            if num is not None:
                 r["numbered_paragraphs"] += 1
-            for sz in pPr.iter(f"{W}sz"):
-                if sz.get(f"{W}val"):
-                    r["font_sizes"][sz.get(f"{W}val")] += 1
+                nid = num.find(f"{W}numId")
+                key = nid.get(f"{W}val") if nid is not None else None
+                r["numbered_by_format"][numbering.get(key, "UNDECLARED")] += 1
+
+        # FONT SIZE, read where it is actually declared: on the RUNS, not
+        # on pPr. The earlier version searched pPr and reported "0 distinct
+        # font sizes" for every document, which was a fact about where it
+        # looked.
+        for sz in p.iter(f"{W}sz"):
+            if sz.get(f"{W}val"):
+                r["font_sizes"][sz.get(f"{W}val")] += 1
 
         runs = [x for x in p.iter(f"{W}r")]
-        bold = bool(runs) and all(
-            x.find(f"./{W}rPr/{W}b") is not None for x in runs)
+        direct = bool(runs) and all(run_is_bold(x) is True for x in runs)
+        # `<w:b w:val="0"/>` is bold turned OFF. The earlier version tested
+        # only that the element EXISTED, so an explicit off would have been
+        # counted as bold. The real source contains none, so its 4,207
+        # stands -- but a document that used them would have been miscounted.
+        turned_off = any(run_is_bold(x) is False for x in runs)
+        if turned_off:
+            r["bold_explicitly_off"] += 1
+
+        st_el = pPr.find(f"{W}pStyle") if pPr is not None else None
+        inherited = (st_el is not None
+                     and st_el.get(f"{W}val") in bold_styles
+                     and not turned_off
+                     and bool(runs)
+                     and all(run_is_bold(x) is not False for x in runs))
+
+        bold = direct or inherited
+        if bold:
+            r["bold_direct" if direct else "bold_inherited"] += 1
         if bold:
             r["bold_only_paragraphs"] += 1
             r["bold_lengths"].append(len(txt))
@@ -142,6 +236,19 @@ def analyse(path: Path) -> dict:
         if level is not None:
             r["levels_assigned"].append((level, txt))
 
+        # CONFLICTING SIGNALS ARE REPORTED, NOT SILENTLY RESOLVED. A
+        # paragraph that is both styled a heading and explicitly numbered,
+        # or styled a heading while its runs turn bold off, is telling two
+        # stories; picking one quietly is how a reader starts inventing.
+        flags = []
+        if level is not None and num is not None:
+            flags.append("heading level AND list numbering")
+        if level is not None and turned_off:
+            flags.append("heading style AND bold explicitly off")
+        if flags:
+            r["conflicting_signals"].append((txt[:60], "; ".join(flags)))
+
+    r["numbering_formats"] = dict(numbering)
     return r
 
 
@@ -157,13 +264,31 @@ def report(path: Path) -> int:
         print(f"      level {lv}                 {r['styled_headings'][lv]:>6}")
     print(f"  explicit w:outlineLvl       {sum(r['outline_levels'].values()):>6}")
     print(f"  numbered paragraphs (numPr) {r['numbered_paragraphs']:>6}")
-    print(f"  bold-only paragraphs        {r['bold_only_paragraphs']:>6}")
+    for fmt, n in sorted(r["numbered_by_format"].items(), key=lambda kv: -kv[1]):
+        print(f"      {n:>6}  numFmt {fmt}")
+    if r["numbering_formats"]:
+        print(f"      numbering.xml declares {len(r['numbering_formats'])} "
+              "numId definition(s)")
+    print(f"  bold paragraphs             {r['bold_only_paragraphs']:>6}")
+    print(f"      direct run formatting   {r['bold_direct']:>6}")
+    print(f"      inherited from a style  {r['bold_inherited']:>6}")
+    print(f"      bold explicitly OFF     {r['bold_explicitly_off']:>6}"
+          "   (w:val=0/false; not counted as bold)")
     if r["bold_lengths"]:
         bl = sorted(r["bold_lengths"])
         print(f"    their lengths (chars)     min {bl[0]}, "
               f"median {bl[len(bl)//2]}, max {bl[-1]}")
-    print(f"  distinct font sizes declared{len(r['font_sizes']):>6}"
-          f"   {dict(r['font_sizes']) if r['font_sizes'] else ''}")
+    if r["font_sizes"]:
+        print(f"  font sizes declared on runs {len(r['font_sizes']):>6}"
+              f"   {dict(r['font_sizes'])}")
+    else:
+        print("  font sizes                  none declared on any run "
+              "(inherited from styles; not resolved here)")
+
+    if r["conflicting_signals"]:
+        print(f"\n  CONFLICTING SIGNALS         {len(r['conflicting_signals']):>6}")
+        for t, why in r["conflicting_signals"][:8]:
+            print(f"      {t!r}: {why}")
 
     print("\n  VERDICT")
     if r["levels_assigned"]:
@@ -172,11 +297,20 @@ def report(path: Path) -> int:
         for lv, t in r["levels_assigned"][:12]:
             print(f"      L{lv}  {t[:60]!r}")
     else:
-        print("    NO HEADING HIERARCHY.")
-        print("    This document states no level anywhere: no Heading style, no")
-        print("    w:outlineLvl, no heading numbering. NO LEVEL HAS BEEN")
-        print("    ASSIGNED, and none will be inferred from bold, length,")
-        print("    capitalisation, font size or spacing.")
+        # THE NARROWER, PROVEN STATEMENT. The earlier wording said "no
+        # heading numbering", which was never established: the reader
+        # counted `w:numPr` and never opened numbering.xml. What IS proven
+        # is the absence of authored LEVELS.
+        print("    NO AUTHORED HEADING LEVELS.")
+        print("    No paragraph carries a Heading style or an explicit")
+        print("    w:outlineLvl, so the document states no level anywhere. NO")
+        print("    LEVEL HAS BEEN ASSIGNED, and none will be inferred from")
+        print("    bold, numbering, length, capitalisation, font size or")
+        print("    spacing.")
+        if r["numbered_paragraphs"]:
+            print(f"\n    {r['numbered_paragraphs']} paragraph(s) ARE numbered, "
+                  "and their formats are listed above. Numbering is reported")
+            print("    as a signal; it is not read as a hierarchy.")
         if r["bold_only_paragraphs"]:
             print(f"\n    {r['bold_only_paragraphs']} bold-only paragraph(s) are "
                   "present and are reported as a SIGNAL, not a level:")

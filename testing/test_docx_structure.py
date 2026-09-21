@@ -43,7 +43,7 @@ def check(name: str, condition: bool, detail: str = "") -> None:
 
 def main() -> int:
     print("\nthe fixtures are real .docx packages, not stubs")
-    for n in ("headed.docx", "flat_bold.docx"):
+    for n in ("headed.docx", "flat_bold.docx", "signals.docx"):
         p = FIX / n
         check(f"{n} exists", p.exists())
         with zipfile.ZipFile(p) as z:
@@ -108,18 +108,62 @@ def main() -> int:
     with contextlib.redirect_stdout(buf):
         DX.report(FIX / "flat_bold.docx")
     out = buf.getvalue()
-    check("it prints NO HEADING HIERARCHY", "NO HEADING HIERARCHY" in out)
+    # THE NARROWER, PROVEN CLAIM. The earlier wording said "no heading
+    # numbering" while the reader had only counted `w:numPr` and never
+    # opened numbering.xml.
+    check("it prints NO AUTHORED HEADING LEVELS", "NO AUTHORED HEADING LEVELS" in out)
+    check("...and does NOT claim anything about numbering it did not check",
+          "no heading numbering" not in out)
+    # Whitespace-normalised: the wording wraps across printed lines, and a
+    # substring test on the raw text would fail for the wrong reason.
+    flat_out = " ".join(out.split())
     check("...and says no level was assigned",
-          "NO LEVEL HAS BEEN" in out and "ASSIGNED" in out)
+          "NO LEVEL HAS BEEN ASSIGNED" in flat_out, flat_out[-260:])
     check("...and names what it refuses to infer from",
-          all(w in out for w in ("bold", "length", "capitalisation")), out[:200])
+          all(w in flat_out for w in
+              ("bold", "numbering", "length", "capitalisation", "font size")),
+          flat_out[-260:])
 
     buf2 = io.StringIO()
     with contextlib.redirect_stdout(buf2):
         DX.report(FIX / "headed.docx")
     out2 = buf2.getvalue()
     check("the headed document does NOT print that verdict",
-          "NO HEADING HIERARCHY" not in out2 and "HIERARCHY PRESENT" in out2)
+          "NO AUTHORED HEADING LEVELS" not in out2 and "HIERARCHY PRESENT" in out2)
+
+    # ==================================================================
+    print("\nFIXTURE 3 — the signals the reader used to get wrong")
+    g = DX.analyse(FIX / "signals.docx")
+
+    print(f"        numbering by format: {dict(g['numbered_by_format'])}")
+    check("numbering.xml is actually opened, and formats reported",
+          dict(g["numbered_by_format"]) == {"L0:bullet": 1, "L0:decimal": 2},
+          str(dict(g["numbered_by_format"])))
+    check("...and the numId definitions are read",
+          len(g["numbering_formats"]) == 2, str(g["numbering_formats"]))
+
+    print(f"        bold: direct={g['bold_direct']} inherited={g['bold_inherited']}"
+          f" explicitly_off={g['bold_explicitly_off']}")
+    check("<w:b w:val=\"0\"> is NOT counted as bold",
+          g["bold_explicitly_off"] == 2, str(g["bold_explicitly_off"]))
+    check("...and neither is w:val=\"false\"",
+          g["bold_only_paragraphs"] == 1, str(g["bold_only_paragraphs"]))
+    check("bold INHERITED from a paragraph style is counted",
+          g["bold_inherited"] == 1, str(g["bold_inherited"]))
+    check("...and is distinguished from direct run formatting",
+          g["bold_direct"] == 0, str(g["bold_direct"]))
+
+    check("font sizes are read from the RUNS, where they are declared",
+          dict(g["font_sizes"]) == {"28": 1, "22": 1}, str(dict(g["font_sizes"])))
+
+    print(f"        conflicts: {g['conflicting_signals']}")
+    check("a paragraph that is BOTH a heading and numbered is REPORTED",
+          len(g["conflicting_signals"]) == 1
+          and "list numbering" in g["conflicting_signals"][0][1],
+          str(g["conflicting_signals"]))
+    check("...rather than one signal being silently chosen",
+          len(g["levels_assigned"]) == 1 and g["numbered_paragraphs"] == 3,
+          f"{g['levels_assigned']} {g['numbered_paragraphs']}")
 
     # ==================================================================
     # The reader must not acquire an inference path later. These strings

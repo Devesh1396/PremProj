@@ -4585,3 +4585,103 @@ options are recorded in `docs/evidence/gate4_docx_structure.md` and none is
 chosen. **Open question, unanswered: how were the two markdown fixtures
 produced?** If by a model, the structure GATES 1 and 4 parse was interpreted
 rather than authored.
+
+---
+
+## D56 — the corpus is flat; the grammar stops reading a level nobody wrote
+
+**Decision (the practitioner's): OPTION 2.** The canonical `T2D_V_1.docx` is
+structurally flat and the grammar must stop depending on converted Markdown
+levels. Not option 1 (apply Heading styles to 524 pages) and not option 3 (a
+converter rule recorded as a transformation).
+
+**Measured on the real source:** 13,763 paragraphs, **0** Heading-styled,
+**0** `w:outlineLvl`, 351 with `w:numPr`, 4,207 bold-only, longest bold-only
+**838 characters**. Bold is not even a reliable heading signal: at 838
+characters that paragraph is body prose, and section titles, subsection
+labels and full sentences are formatted identically.
+
+### Fixture provenance, now answered
+
+`t2d_video1.md` and `t2d_video14.md` were produced **by a Claude model** from
+the docx. Their text was independently verified — 218 and 245 content lines,
+**0 genuine differences** after normalising Markdown syntax only.
+
+> **TEXT: practitioner-authored, verified verbatim.**
+> **HIERARCHY: model-interpreted, not practitioner-authored.**
+
+42 and 61 heading markers, none corresponding to a level stated in the
+source. The hierarchy is not called authored anywhere.
+
+### What changed
+
+**Level stops being a matching condition** (`048`): every SUBSECTION rule
+loses `heading_level = 3`. A construct is recognised by its registered
+LABEL.
+
+**Containment becomes parser STATE, not a level comparison.** A
+STRATEGY/PRINCIPLE/CURATED_OBJECT opens a container; a recognised subsection
+attaches to it; **anything else closes it.** That last clause is the safety
+property: without levels there is nothing to say a heading after an
+unrecognised block still belongs to the card three blocks back. Measured
+before the change — zero recognised subsections follow an unrecognised block
+inside the same container on either fixture, so closing on unknown loses
+nothing level comparison was keeping. Proven load-bearing: disabling it
+gives Video 1 two fields it should not have.
+
+**`SUB_AUTHORED_SUBHEAD` is DEACTIVATED, not renamed** (`048`). Its pattern
+is `^(?P<name>.+)$` — it matches any text, and **level 3 was its only
+discriminator**. Freed of the level it would match every line.
+
+**A registered label is recognised wherever it appears** (`049`): the `033`
+subsection rules become ownable by a curated object too. This adds no label
+and invents no mapping — every pattern and field name is `033`'s own. It does
+not decide Q1: `033` already enumerated `Decision intelligence` itself, while
+`When potentially worth considering` and `When not to prioritize` appear in
+no rule, are given none, and stay REVIEW_REQUIRED.
+
+### The delta, reported rather than engineered away
+
+**Video 1: entirely unchanged** — 8 containers, 24 fields, every name and
+every text identical. It was always registered-label driven.
+
+**Video 14: 12 containers unchanged; 12 fields identical; 1 reclassified**
+(`decision_intelligence` → `client_decision_logic`, text identical);
+**18 fields moved to REVIEW_REQUIRED**, and REVIEW_REQUIRED rose 29 → 48.
+
+**That includes `Berberine Safety / Gate` and `ACV Protocol Guardrails` — the
+first safety content in the corpus — and their move is CORRECT.** They were
+only ever recognised by the catch-all, which named them from the author's own
+wording and understood nothing about them. Their text and spans are preserved
+unchanged in their blocks; what is withdrawn is the claim that the parser knew
+they were fields. Failing closed on safety is the right direction to fail.
+
+Bold was **not** made a field-header signal to keep those fields. That is the
+hack the review warned against and it would reintroduce exactly the bold-body
+failure the adversarial tests now guard against.
+
+### Structural provenance is separate from text provenance
+
+`curated_fields.provenance` answers "is this the source's own characters?"
+and keeps answering only that — verbatim text stays `VERBATIM_SOURCE` even
+where its classification was derived. `curated_blocks.structural_provenance`
+(`048`) answers the different question:
+`AUTHORED_STRUCTURAL_SIGNAL` / `GRAMMAR_DERIVED_CLASSIFICATION` /
+`NO_HIERARCHY_AVAILABLE`. The first is **defined and unreachable from any
+current ingestion path**, because no source this build ingests carries an
+authored level — and that absence is the finding, not an oversight.
+
+### Reader defects fixed in the same pass
+
+`numbering.xml` had never been opened: the reader counted 351 numbered
+paragraphs and then printed "no heading numbering". It now parses the
+formats, and the verdict claims only **NO AUTHORED HEADING LEVELS**. Also:
+`<w:b w:val="0">` was counted as bold; bold inherited from a style was
+invisible; font sizes were read from `pPr` where they are not declared;
+conflicting signals were silently resolved. All four corrected and tested.
+
+**A test-suite defect found by this work:** `test_gate4_reimport` deactivated
+`SUB_AUTHORED_SUBHEAD` and restored it to `active = true` in its cleanup —
+**reviving, in a test's teardown, the rule `048` had retired**, and handing
+every later suite a grammar that no longer exists. It now toggles a
+registered rule and asserts the catch-all stays retired.

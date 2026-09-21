@@ -178,6 +178,9 @@ def segment(text: str) -> list[Block]:
 def classify(blocks: list[Block], rules: list[Rule]) -> None:
     """Attach a rule to each block, or a reason why none applies."""
     for b in blocks:
+        # `heading_level` is NULL for every active rule since 048, so this
+        # is inert and kept only so an old row cannot silently widen. A
+        # rule must recognise its construct by its registered LABEL.
         b.candidates = [r for r in rules                  # priority-ordered
                         if not (r.heading_level and r.heading_level != b.level)
                         and r.regex.match(b.raw_heading)]
@@ -196,73 +199,89 @@ def classify(blocks: list[Block], rules: list[Rule]) -> None:
 # `033`'s rules predate `owner_kinds` and mean exactly this.
 DEFAULT_OWNER_KINDS = ("STRATEGY", "PRINCIPLE")
 
+# The kinds that OPEN a container. Anything else closes the one that is open.
+CONTAINER_KINDS = ("STRATEGY", "PRINCIPLE", "CURATED_OBJECT")
+
 
 def attach(blocks: list[Block]) -> None:
-    """Bind each subsection to the block that owns it.
+    """Bind each subsection to the container that is open when it appears.
 
-    A subsection whose enclosing block is not an allowed owner has nowhere
-    to be stored, so it is REVIEW_REQUIRED rather than attached to whatever
-    came before it. Video 1's `Final Engine 7 intelligence` section
-    contains a `Decision intelligence` heading that matches the decision
-    rule but belongs to no strategy — guessing an owner for it is exactly
-    the kind of inference this parser exists to avoid.
+    CONTAINMENT IS PARSER STATE, NOT A LEVEL COMPARISON (048). The
+    canonical source states no heading level anywhere -- 0 Heading styles
+    and 0 `w:outlineLvl` across 13,763 paragraphs -- so the `##`/`###` in
+    the converted fixtures were assigned by a model, and a grammar that
+    compares them is reading structure the practitioner never wrote.
 
-    GATE 4: WHICH kinds may own comes from the rule's `owner_kinds`
-    column, not from a tuple written here. The generic authored-subhead
-    rule is confined to `CURATED_OBJECT` that way, and confining it
-    matters: left unscoped it would match level-3 headings inside Video
-    1's strategy cards and rewrite rows GATE 1 proved byte-identical.
-    Data, so the scope travels with the rule that needs it.
+    One forward pass:
+
+      * a STRATEGY / PRINCIPLE / CURATED_OBJECT block OPENS a container
+        (closing any previous one);
+      * a recognised SUBSECTION attaches to the open container, if that
+        container is a kind its rule may be owned by;
+      * ANYTHING ELSE CLOSES THE CONTAINER.
+
+    That last clause is the whole safety property. Without levels there is
+    nothing to say a heading after an unrecognised block still belongs to
+    the card three blocks back, so the parser stops claiming it does.
+    Video 1's `Final Engine 7 intelligence` section contains a `Decision
+    intelligence` heading that matches the decision rule and belongs to no
+    strategy; the unrecognised section heading before it closes the
+    container, and it becomes REVIEW_REQUIRED rather than being attached
+    to whatever came earlier.
+
+    Measured on both fixtures before the change: zero recognised
+    subsections follow an unrecognised block inside the same container, so
+    closing on unknown loses nothing that level comparison was keeping.
+
+    A RULE THAT CANNOT APPLY MUST NOT END THE CHAIN. `classify()` selects
+    the highest-priority rule whose pattern matches and ownership is only
+    checked here, so a heading matching a strategy-card rule inside a
+    curated object used to be refused although another matching rule would
+    have applied. The candidates are kept and handed over -- the same
+    shape as the trigram tier ending the chain at a near-match and never
+    reaching the semantic tier (D51).
     """
-    for i, b in enumerate(blocks):
-        if b.status != "PARSED" or b.block_kind != "SUBSECTION":
+    open_container: Block | None = None
+
+    for b in blocks:
+        kind = b.block_kind
+
+        if b.status == "PARSED" and kind in CONTAINER_KINDS:
+            open_container = b
             continue
 
-        # The enclosing block, whatever kind it turned out to be. Found
-        # once, because "which block encloses this one" does not depend on
-        # which rule we are considering.
-        enclosing = None
-        for prev in reversed(blocks[:i]):
-            if prev.level < b.level:
-                enclosing = prev if prev.status == "PARSED" else None
-                break
+        if b.status != "PARSED" or kind != "SUBSECTION":
+            # Unrecognised structure, or a container-level construct that
+            # is not a container (a strategy FAMILY heading). Either way
+            # the parser no longer knows where it is.
+            open_container = None
+            continue
 
-        # A RULE THAT CANNOT APPLY MUST NOT END THE CHAIN.
-        #
-        # `classify()` selects the highest-priority rule whose pattern
-        # matches, and ownership is only checked here. So a heading like
-        # `Why this is worth keeping` inside a curated object matched
-        # SUB_WHY -- a strategy-card rule -- and was then refused, with the
-        # generic authored-subhead rule never consulted although it matched
-        # too and would have applied. The block became REVIEW_REQUIRED
-        # because of the ORDER two rules were tried in, which is not a
-        # decision anybody made about the document.
-        #
-        # Same shape as the resolver's trigram tier ending the chain at a
-        # near-match and never reaching the semantic tier (D51). The fix is
-        # the same: keep the candidates and hand over.
-        chosen, allowed_seen = None, []
+        chosen, wanted = None, []
         for rule in b.candidates:
             allowed = rule.owner_kinds or DEFAULT_OWNER_KINDS
-            allowed_seen.append(allowed)
-            if enclosing is not None and enclosing.block_kind in allowed:
+            wanted.append(allowed)
+            if open_container is not None \
+                    and open_container.block_kind in allowed:
                 chosen = rule
                 break
 
         if chosen is None:
-            wanted = sorted({k for a in allowed_seen for k in a})
+            need = sorted({k for a in wanted for k in a})
             b.status = "REVIEW_REQUIRED"
             b.rule = None
             b.failure_reason = (
-                f"{b.raw_heading!r} matched "
-                f"{len(b.candidates)} subsection rule(s), and none of them may "
-                f"be owned by the enclosing block "
-                f"({enclosing.block_kind if enclosing else 'nothing parsed'}). "
-                f"Those rules require one of {', '.join(wanted)}. The parser "
-                "will not infer an owner.")
+                f"{b.raw_heading!r} matched {len(b.candidates)} subsection "
+                f"rule(s), and the container open at that point "
+                f"({open_container.block_kind if open_container else 'none'}) "
+                f"is not one of {', '.join(need)}. The parser will not infer "
+                "an owner: without an authored heading level there is nothing "
+                "that would make one correct.")
+            # An unownable subsection is unknown structure too.
+            open_container = None
         else:
             b.rule = chosen
-            b.parent_ordinal = enclosing.ordinal
+            b.parent_ordinal = open_container.ordinal
 
 
 def name_span(text: str, block: Block) -> tuple[str, int, int]:

@@ -161,9 +161,13 @@ An object whose name the seed already knows.
 
 I checked the underlying published study.
 
-### Escalation logic
+## Monitoring
 
-This subsection exists only so that a rule can stop producing it.
+A REGISTERED label, so this subsection exists only for a rule to stop
+producing it. It used to be an author-named subheading, which meant the
+suite deactivated SUB_AUTHORED_SUBHEAD and then restored it -- reviving in
+its cleanup the catch-all that migration 048 retired, and silently handing
+every later suite a grammar 048 had removed.
 """
 
 
@@ -279,8 +283,8 @@ def main() -> int:
 
     before_ids = [r[0] for r in objects_state(conn, senv)]
     check("the synthetic object exists", len(before_ids) == 1, str(before_ids))
-    check("an AUTHORED field was produced", "escalation_logic" in synth_fields(),
-          str(sorted(synth_fields())))
+    check("a REGISTERED-label field was produced",
+          "monitoring" in synth_fields(), str(sorted(synth_fields())))
     check("a practitioner verification was produced", len(synth_verifs()) == 1)
 
     linked = links_state(conn, senv)
@@ -301,7 +305,7 @@ def main() -> int:
     restored = False
     try:
         conn.execute("update curated_grammar_rules set active=false "
-                     " where rule_id='SUB_AUTHORED_SUBHEAD'")
+                     " where rule_id='SUB_MONITORING'")
         conn.execute("update curated_verification_rules set active=false "
                      " where rule_id='PRACTITIONER_CHECKED_SOURCE'")
 
@@ -312,8 +316,8 @@ def main() -> int:
         now_fields = synth_fields()
         now_verifs = synth_verifs()
 
-        check("the obsolete AUTHORED field is GONE, not immortal",
-              "escalation_logic" not in now_fields, str(sorted(now_fields)))
+        check("the obsolete field is GONE, not immortal",
+              "monitoring" not in now_fields, str(sorted(now_fields)))
         check("the obsolete VERIFICATION is GONE, not immortal",
               now_verifs == [], str(now_verifs))
         check("the parent object KEPT its identity — not delete-and-recreate",
@@ -322,14 +326,22 @@ def main() -> int:
               "opening_statement" in now_fields, str(sorted(now_fields)))
     finally:
         conn.execute("update curated_grammar_rules set active=true "
-                     " where rule_id='SUB_AUTHORED_SUBHEAD'")
+                     " where rule_id='SUB_MONITORING'")
         conn.execute("update curated_verification_rules set active=true "
                      " where rule_id='PRACTITIONER_CHECKED_SOURCE'")
         restored = True
     check("the rule registry is restored, so the suite is idempotent",
           restored and conn.execute(
               "select active from curated_grammar_rules where "
-              "rule_id='SUB_AUTHORED_SUBHEAD'").fetchone()[0])
+              "rule_id='SUB_MONITORING'").fetchone()[0])
+    # AND THE RETIRED CATCH-ALL STAYS RETIRED. This suite used to restore
+    # SUB_AUTHORED_SUBHEAD in its own cleanup, which reactivated a rule
+    # migration 048 had deliberately retired and left every later suite
+    # running against a grammar that no longer exists.
+    check("SUB_AUTHORED_SUBHEAD was NOT revived by this suite",
+          conn.execute(
+              "select active from curated_grammar_rules where "
+              "rule_id='SUB_AUTHORED_SUBHEAD'").fetchone()[0] is False)
 
     # A third import, with the rules back, must put the field and the
     # verification back -- proving the removal was RECONCILIATION against
@@ -337,7 +349,7 @@ def main() -> int:
     requeue(conn, senv)
     run_import(conn, CI, senv)
     check("restoring the rule restores the field — reconciliation, not deletion",
-          "escalation_logic" in synth_fields(), str(sorted(synth_fields())))
+          "monitoring" in synth_fields(), str(sorted(synth_fields())))
     check("...and the verification", len(synth_verifs()) == 1)
     check("...with the object's identity still unchanged",
           [r[0] for r in objects_state(conn, senv)] == before_ids)
