@@ -358,6 +358,58 @@ def main() -> int:
     print("  ASSESSMENT: a GAP. Video 14's safety content is preserved with its")
     print("  span, and is NOT reachable as safety. Reported, not closed.")
 
+    # ---- E. structurally preserved != semantically classified ----------
+    print("\nSTRUCTURAL PRESERVATION IS NOT SEMANTIC UNDERSTANDING")
+    v14 = dict(conn.execute(
+        """select s.semantic_state, count(*)
+             from v_curated_field_semantics s
+             join curated_objects o on o.object_id = s.object_id
+            where o.envelope_id=%s group by 1""", (env,)).fetchall())
+    print(f"        Video 14 object fields: {v14}")
+    check("Video 14's author-named fields are PRESERVED, not understood",
+          v14.get("SEMANTIC_ROLE_REGISTERED", 0) == 0, str(v14))
+    check("...and they are all reported as STRUCTURALLY_PRESERVED_ONLY",
+          v14.get("STRUCTURALLY_PRESERVED_ONLY", 0) == sum(v14.values()),
+          str(v14))
+
+    safety_state = conn.execute(
+        """select s.semantic_state from v_curated_field_semantics s
+             join curated_objects o on o.object_id = s.object_id
+            where o.envelope_id=%s and s.field_name in
+                  ('berberine_safety_gate','acv_protocol_guardrails')""",
+        (env,)).fetchall()
+    print(f"        the two safety blocks: {[r[0] for r in safety_state]}")
+    check("the safety blocks are preserved and NOT claimed as safety",
+          len(safety_state) == 2
+          and all(r[0] == "STRUCTURALLY_PRESERVED_ONLY" for r in safety_state),
+          str(safety_state))
+
+    v1 = dict(conn.execute(
+        """select s.semantic_state, count(*)
+             from v_curated_field_semantics s
+             join curated_strategies c on c.curated_id = s.curated_id
+            where c.envelope_id=%s group by 1""", (v1_env,)).fetchall())
+    print(f"        Video 1 strategy fields: {v1}")
+    check("the view DISCRIMINATES — Video 1 has registered roles",
+          v1.get("SEMANTIC_ROLE_REGISTERED", 0) > 0, str(v1))
+
+    # THE COLLISION THAT WOULD HAVE MADE THIS DECORATIVE. An author
+    # heading `Monitoring` slugifies to `monitoring`, which IS a
+    # registered role name. If the view matched on the string, that field
+    # would be reported as understood on a coincidence of spelling.
+    probe = conn.execute(
+        """select case when 'monitoring' in
+                       (select field_name from curated_field_roles)
+                  then true else false end""").fetchone()[0]
+    check("a registered role name IS reachable by an author heading slug",
+          probe, "the collision this guard exists for no longer exists")
+    mis = conn.execute(
+        """select count(*) from v_curated_field_semantics
+            where name_source <> 'RULE' and semantic_state
+                  = 'SEMANTIC_ROLE_REGISTERED'""").fetchone()[0]
+    check("no author-named field is ever reported as role-registered",
+          mis == 0, f"{mis} promoted by spelling")
+
     # ---- concept audit --------------------------------------------------
     print("\n" + "=" * 68)
     print("CONCEPT AUDIT")

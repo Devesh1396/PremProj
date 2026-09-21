@@ -199,12 +199,51 @@ def store(conn, envelope_id: str, text: str, blocks: list[CP.Block],
     #
     # Fields are replaced wholesale per card because a field can legitimately
     # disappear when the source is edited; the card keeps its identity.
+    #
+    # THE THIRD OWNER NEEDS THE THIRD DELETE. GATE 4 added object-owned
+    # fields and not this line, and the omission was invisible because
+    # `curated_fields.block_id` was ON DELETE SET NULL -- clearing the
+    # envelope's blocks NULLED those fields' block_id and left the rows
+    # in place, so the next insert collided on `uq_curated_field_object`.
+    # Measured: 30 orphans, all with block_id NULL, then UniqueViolation.
+    # `045` makes the FK CASCADE so the trap cannot be re-set by a fourth
+    # owner; this delete stays because a field with a NULL block_id is not
+    # reachable by cascade at all.
     conn.execute("delete from curated_fields where curated_id in "
                  " (select curated_id from curated_strategies where envelope_id=%s)",
                  (envelope_id,))
     conn.execute("delete from curated_fields where principle_id in "
                  " (select principle_id from curated_principles where envelope_id=%s)",
                  (envelope_id,))
+    conn.execute("delete from curated_fields where object_id in "
+                 " (select object_id from curated_objects where envelope_id=%s)",
+                 (envelope_id,))
+
+    # Verifications are DERIVED DETERMINISTIC STATE, exactly like fields:
+    # they come from a registry pattern run over the source text, and a
+    # statement the current rules no longer find must not survive because
+    # an older run found it. Replaced wholesale, for the same reason and
+    # at the same moment.
+    conn.execute("delete from curated_verifications where object_id in "
+                 " (select object_id from curated_objects where envelope_id=%s)",
+                 (envelope_id,))
+
+    # AN OBJECT WHOSE ORDINAL IS NO LONGER PRODUCED IS STALE, and the
+    # upsert below can only ever ADD or UPDATE -- it has no way to notice
+    # that ordinal 27 stopped existing. Computed from the parse, before
+    # any write, so surviving objects keep their identity: this removes
+    # the ones the source no longer yields and touches nothing else.
+    #
+    # Their fields and concept links go with them by cascade, which is
+    # correct -- a link to an object that is gone is not a link worth
+    # keeping. Links belonging to SURVIVING objects are untouched here and
+    # are left to `attach_concepts`, where the authoritative / degraded
+    # contract decides (D52a, D52b).
+    produced = [o.ordinal for o in objects]
+    conn.execute(
+        "delete from curated_objects where envelope_id=%s "
+        "  and not (ordinal = any(%s))", (envelope_id, produced))
+
     conn.execute("delete from curated_blocks where envelope_id=%s", (envelope_id,))
 
     block_ids: dict[int, str] = {}
@@ -362,12 +401,13 @@ def write_fields(conn, owner_col: str, owner_id: str, fields, block_ids,
             f"""insert into curated_fields
                  ({owner_col}, block_id, field_name, text_value, provenance,
                   transformation_type, transformation_rule,
-                  source_start, source_end, heading_path)
-               values (%s,%s,%s,%s,%s::curated_provenance,%s,%s,%s,%s,%s)""",
+                  source_start, source_end, heading_path, name_source)
+               values (%s,%s,%s,%s,%s::curated_provenance,%s,%s,%s,%s,%s,
+                       %s::curated_field_name_source)""",
             (owner_id, block_ids.get(f.block_ordinal), f.field_name,
              f.text_value, f.provenance, f.transformation_type,
              f.transformation_rule, f.source_start, f.source_end,
-             f.heading_path))
+             f.heading_path, f.name_source))
         counts["fields"] += 1
         counts["verbatim" if f.provenance == "VERBATIM_SOURCE"
                else "transformed"] += 1

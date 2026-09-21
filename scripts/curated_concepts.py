@@ -398,6 +398,22 @@ def semantic_recomputation_authoritative(conn, embed_call=None) -> tuple[bool, s
 # callers name which one they are, so neither is inferred from the id.
 OWNER_COLUMNS = ("curated_id", "object_id")
 
+# ON CONFLICT has to name an inferable constraint, and the two owners do
+# not have the same kind. `curated_id`'s is a plain UNIQUE CONSTRAINT;
+# `object_id`'s is a PARTIAL unique index (`... WHERE object_id IS NOT
+# NULL`, migration 044), and PostgreSQL will only infer a partial index if
+# the statement repeats its predicate.
+#
+# This was dead code until a synthetic source with a resolvable name ran
+# through it: Video 14 resolves nothing against the K1 seed, so the insert
+# was never reached and the omission could not show up. The link-writing
+# path for curated objects had never once executed.
+CONFLICT_TARGET = {
+    "curated_id": "(curated_id, concept_id, source_start, source_end)",
+    "object_id": ("(object_id, concept_id, source_start, source_end) "
+                  "where object_id is not null"),
+}
+
 
 def prior_links(conn, curated_id: str, owner_col: str = "curated_id") -> list[dict]:
     if owner_col not in OWNER_COLUMNS:
@@ -473,7 +489,7 @@ def store_units(conn, curated_id: str, source_text: str,
                  ({owner_col}, concept_id, rule_id, field_name, source_phrase,
                   source_start, source_end, resolution_tier, resolution_score)
                values (%s,%s,%s,%s,%s,%s,%s,%s,%s)
-               on conflict ({owner_col}, concept_id, source_start, source_end)
+               on conflict {CONFLICT_TARGET[owner_col]}
                do nothing""",
             (curated_id, r["concept_id"], u.rule_id, u.field_name, u.phrase,
              u.source_start, u.source_end, r["tier"], r["score"]))

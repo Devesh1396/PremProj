@@ -295,6 +295,15 @@ class ParsedField:
     provenance: str = "VERBATIM_SOURCE"
     transformation_type: str | None = None
     transformation_rule: str | None = None
+    # Where the field's NAME came from: RULE (a grammar rule recognised the
+    # construct), HEADING (the AUTHOR named it and the grammar does not
+    # know what it holds), BODY (the block's own opening text).
+    #
+    # Carried on the row rather than derived from the name, because an
+    # author heading `Monitoring` slugifies onto `monitoring`, which IS a
+    # registered role name. Classifying by string would report that field
+    # as understood on a coincidence of spelling (migration 046).
+    name_source: str = "RULE"
 
 
 @dataclass
@@ -401,7 +410,8 @@ def _owned_fields(text: str, blocks: list[Block], owner: Block) -> list["ParsedF
     s, e = strip_span(text, owner.body_start, owner.body_end)
     if e > s:
         fields.append(ParsedField(
-            OPENING_FIELD, text[s:e], s, e, owner.heading_path, owner.ordinal))
+            OPENING_FIELD, text[s:e], s, e, owner.heading_path, owner.ordinal,
+            name_source="BODY"))
         taken.add(OPENING_FIELD)
 
     for sub in blocks:
@@ -411,9 +421,9 @@ def _owned_fields(text: str, blocks: list[Block], owner: Block) -> list["ParsedF
         if se <= ss:
             continue
         if sub.rule.field_name_source == "HEADING":
-            name = slug_field_name(sub.raw_heading)
+            name, name_source = slug_field_name(sub.raw_heading), "HEADING"
         else:
-            name = sub.rule.field_name
+            name, name_source = sub.rule.field_name, "RULE"
         if name in taken:
             sub.status = "REVIEW_REQUIRED"
             sub.parent_ordinal = None
@@ -425,7 +435,8 @@ def _owned_fields(text: str, blocks: list[Block], owner: Block) -> list["ParsedF
             continue
         taken.add(name)
         fields.append(ParsedField(
-            name, text[ss:se], ss, se, sub.heading_path, sub.ordinal))
+            name, text[ss:se], ss, se, sub.heading_path, sub.ordinal,
+            name_source=name_source))
     return fields
 
 
