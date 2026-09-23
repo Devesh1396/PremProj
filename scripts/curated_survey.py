@@ -1,24 +1,39 @@
 #!/usr/bin/env python3
-"""Structural survey of a curated document. READ ONLY. NO MODEL.
+"""Structural survey of a FLAT curated corpus. READ ONLY. NO MODEL.
 
-    python3 scripts/curated_survey.py <file.md> [--after "<heading>"]
+    python3 scripts/curated_survey.py <file> [<file> ...]
 
-This is NOT ingestion. It writes nothing to the knowledge library, creates
-no envelope, no block, no field, no concept and no grammar rule. It opens a
-file, counts shapes, and prints. The only database access is an OPTIONAL
-read of `curated_grammar_rules` to report which headings the CURRENT
-grammar would already match; with no `DATABASE_URL` that section degrades
-to a named skip (V3) and everything else still runs.
+Accepts `.md` and `.docx`. Several files may be given, and SHOULD be,
+because the most important finding -- a label that means different things
+in different containers -- only appears across sections.
 
-It reports STRUCTURE, never meaning. It does not say what a section is
-about, does not group headings by topic, and does not propose rules. A
-family here is a repeated SYNTACTIC shape -- same prefix token, same
-level, same punctuation -- and nothing more.
+### What changed, and why (D57)
 
-Why it exists: GATE 4 recommended a structural survey of the corpus after
-the recognised `Video N` region before any corpus-wide rule estimate,
-because two samples from inside that region cannot describe material
-outside it.
+The previous survey reported Markdown heading LEVELS, level-to-level
+nesting transitions and parent/child level templates. The canonical source
+states no level anywhere (0 Heading styles, 0 `w:outlineLvl` across 13,763
+paragraphs); the fixture levels were assigned by a Claude model during
+conversion. A survey built on them was describing the converter, and
+presenting it as corpus structure.
+
+This survey reports NO DEPTH OF ANY KIND. A Markdown heading's `#` count is
+discarded on read. A `.docx` paragraph is a CANDIDATE BOUNDARY only if it
+is bold-only, and bold never assigns a level -- in the real source the
+longest bold-only paragraph is 838 characters, which is body prose.
+
+### It reuses the production grammar rather than copying it
+
+Candidates become `curated_parser.Block` objects and go through the REAL
+`classify()`, `attach()` and `derive_paths()`. A survey with its own
+matching logic would report what a second implementation believes the
+grammar does (V2).
+
+### What it writes
+
+Nothing. No envelope, block, field, concept or rule. Its only database
+access is a READ of `curated_grammar_rules`; with no `DATABASE_URL` the
+rule-dependent sections degrade to a named skip and the signal counts
+still print.
 """
 from __future__ import annotations
 
@@ -29,203 +44,196 @@ import re
 import sys
 from pathlib import Path
 
-HEADING = re.compile(r'^(?P<hashes>#{1,6})[ \t]+(?P<text>.*\S)[ \t]*$', re.M)
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
 
-# A "prefix token" is the leading run before a dash/colon separator. It is
-# a SYNTACTIC observation -- the shape `WORD — rest` -- not a claim that
-# the word means anything.
-PREFIX = re.compile(r'^(?P<prefix>[A-Za-z][A-Za-z0-9 /]{0,24}?)\s*[—–:-]\s+\S')
+import curated_parser as CP
 
-# A prose region with no heading at all. 1,200 characters is roughly a
-# page of text; it is a REPORTING bucket, not a threshold anything branches
-# on, and the raw distribution is printed beside it.
-LARGE_GAP = 1200
+MD_HEADING = re.compile(r'^#{1,6}[ \t]+(?P<text>.*\S)[ \t]*$')
+MD_LIST = re.compile(r'^\s*(?:[-*+]|\d+[.)])\s+\S')
+MD_BOLD_LINE = re.compile(r'^\s*\*\*[^*]+\*\*\s*$')
 
 
-def headings(text: str):
-    out = []
-    ms = list(HEADING.finditer(text))
-    for i, m in enumerate(ms):
-        end = ms[i + 1].start() if i + 1 < len(ms) else len(text)
-        out.append({
-            "level": len(m.group("hashes")),
-            "text": m.group("text").strip(),
-            "start": m.start(),
-            "body_start": m.end(),
-            "end": end,
-        })
-    return out
-
-
-def shape(h: str) -> str:
-    """A heading reduced to its SYNTACTIC skeleton.
-
-    Words become W, numbers N, and separators are kept. `Strategy 1 —
-    Breakfast restructuring` and `Strategy 4 — Meal-linked movement` both
-    become `W N — W W`, so identical constructs collapse and genuinely
-    different ones do not.
-    """
-    toks = []
-    for t in h.split():
-        if re.fullmatch(r'\d+[.)]?', t):
-            toks.append("N")
-        elif t in ("—", "–", "-", ":", "/", "|"):
-            toks.append(t)
-        else:
-            toks.append("W")
-    return " ".join(toks)
-
-
-def survey(path: Path, after: str | None) -> int:
-    raw = path.read_bytes()
-    text = raw.decode("utf-8")
-    hs = headings(text)
-
-    region_note = ""
-    if after:
-        idx = next((i for i, h in enumerate(hs)
-                    if after.lower() in h["text"].lower()), None)
-        if idx is None:
-            print(f"--after {after!r} matched no heading; surveying the whole file")
-        else:
-            cut = hs[idx]["end"]
-            text = text[cut:]
-            hs = [h for h in headings(text)]
-            region_note = f"  (region AFTER the heading matching {after!r})"
-
-    words = len(text.split())
-    print("=" * 70)
-    print(f"STRUCTURAL SURVEY — {path.name}{region_note}")
-    print("=" * 70)
-    print(f"  characters {len(text):>8}")
-    print(f"  words      {words:>8}")
-    print(f"  headings   {len(hs):>8}")
-    if not hs:
-        print("\n  NO HEADINGS AT ALL. This region is prose-only and a heading")
-        print("  grammar has nothing to attach to.")
-        return 0
-    print(f"  words per heading (mean) {words / len(hs):>8.1f}")
-
-    print("\n-- heading LEVELS " + "-" * 51)
-    lv = collections.Counter(h["level"] for h in hs)
-    for k in sorted(lv):
-        print(f"  L{k}  {lv[k]:>5}")
-
-    print("\n-- NESTING SHAPES (parent level -> child level) " + "-" * 22)
-    pairs = collections.Counter()
-    for a, b in zip(hs, hs[1:]):
-        pairs[(a["level"], b["level"])] += 1
-    for (a, b), n in sorted(pairs.items(), key=lambda kv: -kv[1])[:10]:
-        print(f"  L{a} -> L{b}   {n:>5}")
-
-    print("\n-- REPEATED PREFIX TOKENS (syntactic, before a dash/colon) " + "-" * 11)
-    pref = collections.Counter()
-    for h in hs:
-        m = PREFIX.match(h["text"])
+def md_candidates(path: Path) -> tuple[list[CP.Block], dict]:
+    """Every Markdown heading LINE is a candidate. Its depth is DISCARDED."""
+    lines = path.read_text(encoding="utf-8").splitlines()
+    blocks: list[CP.Block] = []
+    sig = {"lines": len(lines), "list_items": 0, "bold_only_lines": 0,
+           "candidate_signal": "MARKDOWN_HEADING_MARKER (depth discarded)"}
+    for i, line in enumerate(lines):
+        if MD_LIST.match(line):
+            sig["list_items"] += 1
+        if MD_BOLD_LINE.match(line):
+            sig["bold_only_lines"] += 1
+        m = MD_HEADING.match(line)
         if m:
-            pref[(h["level"], m.group("prefix").strip().upper())] += 1
-    if not pref:
-        print("  (none)")
-    for (l, p), n in sorted(pref.items(), key=lambda kv: (-kv[1], kv[0])):
-        if n >= 2:
-            print(f"  {n:>5}x  L{l}  {p!r}")
-    singles = sum(1 for v in pref.values() if v == 1)
-    print(f"  ...plus {singles} prefix token(s) seen exactly once")
+            t = m.group("text").strip()
+            # level=0 for every candidate: there is no depth to carry.
+            blocks.append(CP.Block(ordinal=len(blocks), level=0, raw_heading=t,
+                                   heading_path=t, heading_start=i,
+                                   body_start=i, body_end=i))
+    return blocks, sig
 
-    print("\n-- SYNTACTIC SHAPE FAMILIES " + "-" * 42)
-    sh = collections.Counter((h["level"], shape(h["text"])) for h in hs)
-    rep = [(k, v) for k, v in sh.items() if v >= 2]
-    one = [(k, v) for k, v in sh.items() if v == 1]
-    print(f"  distinct shapes {len(sh)};  repeated {len(rep)};  one-offs {len(one)}")
-    covered = sum(v for _, v in rep)
-    print(f"  headings inside a REPEATED shape: {covered} of {len(hs)}"
-          f"  ({100.0 * covered / len(hs):.0f}%)")
-    for (l, s), n in sorted(rep, key=lambda kv: -kv[1])[:12]:
-        print(f"  {n:>5}x  L{l}  {s}")
 
-    print("\n-- EXACT HEADING TEXT REPEATED " + "-" * 39)
-    txt = collections.Counter(h["text"] for h in hs)
-    rep_txt = [(t, n) for t, n in txt.items() if n >= 2]
-    if not rep_txt:
-        print("  (none)")
-    for t, n in sorted(rep_txt, key=lambda kv: -kv[1])[:15]:
-        print(f"  {n:>5}x  {t[:60]!r}")
+def docx_candidates(path: Path) -> tuple[list[CP.Block], dict]:
+    """Every BOLD-ONLY paragraph is a candidate boundary. Never a level."""
+    import docx_structure as DX
+    r = DX.analyse(path)
+    blocks = [CP.Block(ordinal=i, level=0, raw_heading=t, heading_path=t,
+                       heading_start=i, body_start=i, body_end=i)
+              for i, t in enumerate(r["bold_texts"])]
+    sig = {"paragraphs": r["paragraphs"],
+           "heading_styled": sum(r["styled_headings"].values()),
+           "outline_levels": sum(r["outline_levels"].values()),
+           "numbered": r["numbered_paragraphs"],
+           "numbered_by_format": dict(r["numbered_by_format"]),
+           "bold_only": r["bold_only_paragraphs"],
+           "bold_direct": r["bold_direct"],
+           "bold_via_paragraph_style": r["bold_inherited"],
+           "bold_lengths": r["bold_lengths"],
+           "conflicting_signals": len(r["conflicting_signals"]),
+           "candidate_signal": "BOLD_ONLY_PARAGRAPH (candidate boundary, NOT a heading)"}
+    return blocks, sig
 
-    print("\n-- REPEATED SECTION TEMPLATES (a parent's child-heading set) " + "-" * 9)
-    tmpl = collections.Counter()
-    for i, h in enumerate(hs):
-        kids = []
-        for j in range(i + 1, len(hs)):
-            if hs[j]["level"] <= h["level"]:
-                break
-            if hs[j]["level"] == h["level"] + 1:
-                kids.append(hs[j]["text"])
-        if kids:
-            tmpl[tuple(kids)] += 1
-    rep_t = [(k, v) for k, v in tmpl.items() if v >= 2]
-    print(f"  distinct child-sets {len(tmpl)};  repeated {len(rep_t)}")
-    for k, v in sorted(rep_t, key=lambda kv: -kv[1])[:6]:
-        print(f"  {v:>5}x  {list(k)[:5]}")
 
-    print("\n-- PROSE REGIONS WITH NO HEADING " + "-" * 37)
-    gaps = sorted((h["end"] - h["body_start"]) for h in hs)
-    big = [g for g in gaps if g >= LARGE_GAP]
-    print(f"  body-length distribution (chars): min {gaps[0]}, "
-          f"median {gaps[len(gaps)//2]}, max {gaps[-1]}")
-    print(f"  bodies >= {LARGE_GAP} chars: {len(big)}  "
-          f"({100.0 * len(big) / len(gaps):.0f}% of headings), "
-          f"holding {sum(big)} chars "
-          f"({100.0 * sum(big) / len(text):.0f}% of the region)")
-
-    print("\n-- WHAT THE CURRENT GRAMMAR WOULD ALREADY MATCH " + "-" * 22)
+def survey(paths: list[Path]) -> int:
+    rules = None
     dsn = os.environ.get("DATABASE_URL")
-    if not dsn:
-        print("  SKIP  curated_grammar_rules is not available — DATABASE_URL is "
-              "not set, so rule coverage cannot be reported. Every section "
-              "above is unaffected.")
-    else:
-        sys.path.insert(0, str(Path(__file__).resolve().parent))
+    if dsn:
         import psycopg
-        import curated_parser as CP
         with psycopg.connect(dsn) as conn:
             rules = CP.load_rules(conn)
-        hit = collections.Counter()
-        miss = 0
-        for h in hs:
-            for r in rules:
-                if r.heading_level and r.heading_level != h["level"]:
-                    continue
-                if r.regex.match(h["text"]):
-                    hit[r.rule_id] += 1
-                    break
-            else:
-                miss += 1
-        matched = sum(hit.values())
-        print(f"  matched by a rule: {matched} of {len(hs)} "
-              f"({100.0 * matched / len(hs):.0f}%)")
+
+    # label (case-folded) -> {container kind or None} across ALL files
+    label_contexts: dict[str, dict] = collections.defaultdict(
+        lambda: collections.Counter())
+    label_forms: dict[str, str] = {}
+    label_files: dict[str, set] = collections.defaultdict(set)
+
+    for path in paths:
+        suffix = path.suffix.lower()
+        if suffix == ".docx":
+            blocks, sig = docx_candidates(path)
+        else:
+            blocks, sig = md_candidates(path)
+
+        print("=" * 70)
+        print(f"FLAT STRUCTURAL SURVEY — {path.name}")
+        print("=" * 70)
+        print("  NO DEPTH IS REPORTED. The source states no heading level, so")
+        print("  any depth a converter emitted is not corpus structure.")
+        print(f"\n-- SIGNALS {'-' * 58}")
+        for k, v in sig.items():
+            if k == "bold_lengths":
+                if v:
+                    bl = sorted(v)
+                    print(f"  {'bold paragraph lengths':<28} min {bl[0]}, "
+                          f"median {bl[len(bl)//2]}, max {bl[-1]}")
+                continue
+            print(f"  {k:<28} {v}")
+
+        print(f"\n-- CANDIDATE LABELS, IN ORDER {'-' * 40}")
+        print(f"  {len(blocks)} candidate(s)")
+        for b in blocks[:12]:
+            print(f"    {b.ordinal:>4}  {b.raw_heading[:62]!r}")
+        if len(blocks) > 12:
+            print(f"    ... {len(blocks) - 12} more")
+
+        forms = collections.Counter(b.raw_heading for b in blocks)
+        rep = [(t, n) for t, n in forms.items() if n > 1]
+        print(f"\n-- EXACT LABEL FORMS REPEATED {'-' * 40}")
+        print(f"  distinct {len(forms)};  repeated {len(rep)};  "
+              f"once-only {len(forms) - len(rep)}")
+        for t, n in sorted(rep, key=lambda kv: -kv[1])[:12]:
+            print(f"    {n:>4}x  {t[:60]!r}")
+
+        if rules is None:
+            print("\n  SKIP  curated_grammar_rules is not available — DATABASE_URL "
+                  "is not set, so rule matches, containers and cross-container "
+                  "label recurrence cannot be reported. Signals above are "
+                  "unaffected.")
+            continue
+
+        # THE PRODUCTION GRAMMAR, not a copy of it.
+        CP.classify(blocks, rules)
+        CP.attach(blocks)
+        CP.derive_paths(blocks)
+
+        hit = collections.Counter(b.rule.rule_id for b in blocks if b.rule)
+        print(f"\n-- REGISTERED-RULE MATCHES {'-' * 44}")
+        print(f"  recognised {sum(hit.values())} of {len(blocks)}")
         for rid, n in sorted(hit.items(), key=lambda kv: -kv[1]):
-            print(f"    {n:>5}x  {rid}")
-        print(f"  matched by NOTHING: {miss}")
-        print("  NOTE: a pattern match is not ownership. A subsection rule can")
-        print("  match and still be refused by attach() for want of an owner.")
+            print(f"    {n:>4}x  {rid}")
+
+        unrec = collections.Counter(b.raw_heading for b in blocks
+                                    if b.status == "REVIEW_REQUIRED")
+        print(f"\n-- UNRECOGNISED CANDIDATES {'-' * 44}")
+        print(f"  {sum(unrec.values())} unrecognised, {len(unrec)} distinct form(s)")
+        for t, n in sorted(unrec.items(), key=lambda kv: -kv[1])[:10]:
+            print(f"    {n:>4}x  {t[:60]!r}")
+
+        print(f"\n-- RECOGNISED CONTAINER -> FOLLOWING REGISTERED LABELS {'-' * 15}")
+        seqs = collections.Counter()
+        by_ord = {b.ordinal: b for b in blocks}
+        kids: dict[int, list[str]] = collections.defaultdict(list)
+        for b in blocks:
+            if b.parent_ordinal is not None:
+                kids[b.parent_ordinal].append(b.rule.rule_id)
+        for b in blocks:
+            if b.status == "PARSED" and b.block_kind in CP.CONTAINER_KINDS:
+                seqs[(b.block_kind, tuple(kids.get(b.ordinal, [])))] += 1
+        for (k, seq), n in sorted(seqs.items(), key=lambda kv: -kv[1])[:10]:
+            print(f"    {n:>4}x  {k:<15} -> {list(seq) if seq else '(none)'}")
+
+        # Record, for the cross-file check, every candidate whose text is a
+        # REGISTERED subsection label -- owned or not -- with the kind of
+        # container that was open when the parser reached it.
+        for b in blocks:
+            sub = [r for r in b.candidates if r.block_kind == "SUBSECTION"]
+            if not sub:
+                continue
+            key = b.raw_heading.casefold()
+            label_forms.setdefault(key, b.raw_heading)
+            label_contexts[key][b.context_kind or "NONE"] += 1
+            label_files[key].add(path.name)
+
+    if rules is None:
+        return 0
 
     print("\n" + "=" * 70)
-    print("Structure only. No heading above was interpreted, grouped by")
-    print("meaning, or turned into a rule. Nothing was written anywhere.")
+    print("LABELS WHOSE SURFACE FORM RECURS IN MORE THAN ONE KIND OF CONTAINER")
+    print("=" * 70)
+    print("  Under the flat design a label is the ONLY structural signal, so a")
+    print("  label seen in two kinds of container may carry two meanings. Each")
+    print("  one below needs a practitioner decision before it maps to a single")
+    print("  field. This list does NOT judge meaning; it finds the candidates.")
+    flagged = 0
+    for key, ctx in sorted(label_contexts.items()):
+        kinds = {k for k in ctx if k != "NONE"}
+        if len(kinds) > 1:
+            flagged += 1
+            print(f"\n  {label_forms[key]!r}")
+            for k, n in sorted(ctx.items()):
+                print(f"      {n:>3}x  inside {k}")
+            print(f"      files: {', '.join(sorted(label_files[key]))}")
+    if not flagged:
+        print("\n  (none across the files given)")
+    print(f"\n  {flagged} label(s) flagged")
+    print("\n" + "=" * 70)
+    print("Structure only. No depth reported, no meaning interpreted, no rule")
+    print("proposed, nothing written.")
     return 0
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("path", type=Path)
-    ap.add_argument("--after", default=None,
-                    help="survey only the region AFTER the first heading "
-                         "containing this text")
+    ap.add_argument("paths", type=Path, nargs="+")
     a = ap.parse_args()
-    if not a.path.exists():
-        print(f"no such file: {a.path}")
-        return 2
-    return survey(a.path, a.after)
+    for p in a.paths:
+        if not p.exists():
+            print(f"no such file: {p}")
+            return 2
+    return survey(a.paths)
 
 
 if __name__ == "__main__":

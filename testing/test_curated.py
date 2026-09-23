@@ -241,8 +241,24 @@ def main() -> int:
               S6["expected_verbatim_text"] in stored[0],
               f"stored {len(stored[0])} chars, expected span "
               f"{len(S6['expected_verbatim_text'])}")
-        check("...at the heading path the fixture named",
-              stored[1] == S6["expected_heading_path"], stored[1])
+        # THE FIXTURE IS NOT EDITED. strategy6_routing.json was frozen
+        # before the importer existed, and its `expected_heading_path` was
+        # built by the old depth stack, so it begins with the document
+        # title -- an ancestor that exists only because a Claude model
+        # emitted a `#` above everything else during conversion (D56). Since
+        # D57 a path is derived from parser state: container > subsection,
+        # with no inferred ancestor.
+        #
+        # So the assertion is that the stored path is EXACTLY the frozen
+        # path with ONLY that converted ancestor removed. Container and
+        # subsection must be byte-identical; nothing else may change.
+        frozen = S6["expected_heading_path"].split(" > ")
+        check("...at the frozen heading path, minus ONLY the converted ancestor",
+              stored[1] == " > ".join(frozen[-2:]),
+              f"{stored[1]!r} vs {' > '.join(frozen[-2:])!r}")
+        check("...and the part removed is the document title, nothing else",
+              len(frozen) == 3 and frozen[0].startswith("T2D / Insulin Resistance"),
+              str(frozen))
         check("...and the routing table itself is present, not summarised",
               all(k in stored[0] for k in
                   ("High-carb breakfast", "Diet-change resistance",

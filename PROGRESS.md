@@ -3320,12 +3320,17 @@ authored structure is not.
 
 ## GATE 4 review round 3 — the corpus is flat (2026-09-21, D56)
 
-**FIXTURE PROVENANCE, ANSWERED. TEXT: practitioner-authored, verified
-verbatim (218 and 245 content lines, 0 genuine differences). HIERARCHY:
-model-interpreted, not practitioner-authored.** The two markdown fixtures
-were produced by a Claude model from T2D_V_1.docx; their 42 and 61 heading
-markers correspond to no level stated in the source. The hierarchy is not
-described as authored anywhere.
+**FIXTURE PROVENANCE, ANSWERED** (attribution corrected in D57):
+
+> **TEXT: practitioner-authored, verified verbatim against T2D_V_1.docx.**
+> **HIERARCHY: model-interpreted. The Markdown fixtures were generated using
+> a Claude model, as confirmed by the developer who produced them. No
+> deterministic converter or manifest records how heading depths were
+> chosen. Not practitioner-authored.**
+
+Verified: 218 and 245 content lines, 0 genuine differences. The 42 and 61
+heading markers correspond to no level stated in the source. The hierarchy is
+not described as authored anywhere.
 
 **The real source measured:** 13,763 paragraphs, 0 Heading-styled, 0
 w:outlineLvl, 351 w:numPr, 4,207 bold-only, longest bold-only 838 chars.
@@ -3356,3 +3361,31 @@ finding.
 
 **The private 524-page DOCX is NOT in this repository and must not be
 committed.**
+
+
+## GATE 4 review round 4 — stored structure, and an unstable label (2026-09-23, D57)
+
+**Heading paths no longer come from Markdown depth.** `segment()` builds no
+path; `derive_paths()` gives a container its own heading, an owned subsection
+`container > subsection`, and anything else its own heading only. Paths that
+change under re-rendering: Video 1 **41/42 -> 0/42**, Video 14 **60/61 ->
+0/61**. Persisted rows and `curated_expansion()` are identical across `#`,
+`###` and `######` apart from raw offsets (`test_gate4_renderings`).
+
+**Structural provenance is returned** by trace and expansion, on the card and
+every field. Never AUTHORED for any current source.
+
+**The markup depth is `curated_blocks.source_markup_depth` (051)**, not
+`heading_level`, never returned by retrieval. **A rule level is refused by
+`CHECK (heading_level IS NULL)`**, and the parser no longer compares one.
+
+**`Decision intelligence` is REVIEW_REQUIRED inside curated objects (050).**
+In Video 14 it is prognosis; in Video 1 it is selection. Video 1 unchanged.
+033's "without changing meaning" premise is refuted. Video 14 is now **49 of
+61 REVIEW_REQUIRED, 11 object fields, 0 registered roles.** Q1 stays open.
+
+**The survey reports no depth** and flags labels recurring across container
+kinds -- exactly `Decision intelligence` across the two fixtures.
+
+**Attribution corrected everywhere:** the conversion method was confirmed by
+the developer who generated the fixtures, not by the practitioner.

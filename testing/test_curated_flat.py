@@ -68,6 +68,35 @@ def recognised(text: str, rules) -> dict:
     return out
 
 
+def full_shape(text: str, rules) -> dict:
+    """The COMPLETE semantic shape: every block, card, object and field.
+
+    D57. `recognised()` above compares fields by name and text and ignores
+    heading_path -- so it proved level-independent RECOGNITION and said
+    nothing about the structure that is persisted and retrieved. This
+    compares ownership, heading paths, failure reasons, the open-container
+    context and name provenance too. Offsets are left out on purpose:
+    changing the marker length moves every offset, so they are not a
+    property of the structure.
+    """
+    blocks, cards, objs = CP.parse(text, rules)
+    head = {b.ordinal: b.raw_heading for b in blocks}
+    return {
+        "blocks": [(b.ordinal, b.raw_heading, b.status,
+                    b.rule.rule_id if b.rule else None,
+                    head.get(b.parent_ordinal), b.heading_path,
+                    b.failure_reason, b.context_kind) for b in blocks],
+        "cards": [(c.kind, c.name, c.heading_path) for c in cards],
+        "objects": [(o.disposition, o.name, o.heading_path) for o in objs],
+        "fields": [(c.name, f.field_name, f.heading_path, f.name_source,
+                    text[f.source_start:f.source_end]) for c in cards
+                   for f in c.fields]
+                  + [(o.name, f.field_name, f.heading_path, f.name_source,
+                      text[f.source_start:f.source_end]) for o in objs
+                     for f in o.fields],
+    }
+
+
 def reflatten(text: str, marker: str) -> str:
     """Every heading to the SAME depth: the level distinction removed."""
     return re.sub(r"^#{1,6}(?=[ \t])", marker, text, flags=re.M)
@@ -131,6 +160,33 @@ A second object opens, which closes the first.
 ## Monitoring
 
 A registered label inside the second object.
+"""
+
+
+# ONE LABEL, TWO MEANINGS, TWO KINDS OF CONTAINER. Synthetic. In the card
+# it is selection logic; in the object it is a statement about how fast a
+# response might come. Under the flat design the label is the only signal,
+# so mapping both to one field by surface form would unify two things the
+# author did not say were the same.
+SAME_LABEL_TWO_MEANINGS = """# Widget Maintenance — Update
+
+## Strategy 1 — Rotor balancing
+
+Balance the rotor before anything else.
+
+## Decision intelligence
+
+Pick this option first when vibration is the dominant complaint, and choose
+a different one when the housing is cracked.
+
+## ADD — Faster recovery is possible
+
+Some rotors settle within a week.
+
+## Decision intelligence
+
+A short settling time is more plausible when the rotor is new and the
+bearings are recent. This says nothing about which option to choose.
 """
 
 
@@ -233,6 +289,80 @@ def main() -> int:
           f"{sorted(f0)} {sorted(f1)}")
 
     # ==================================================================
+    # ==================================================================
+    print("\n4. THE COMPLETE SHAPE, not just recognised fields (D57)")
+    for name in ("t2d_video1", "t2d_video14"):
+        text = (FIXTURES / f"{name}.md").read_text(encoding="utf-8")
+        shapes = {m: full_shape(reflatten(text, m) if m else text, rules)
+                  for m in ("", "#", "###", "######")}
+        base = shapes[""]
+        for m in ("#", "###", "######"):
+            for part in ("blocks", "cards", "objects", "fields"):
+                check(f"  {name} {m!r:>8}: {part} identical — incl. heading_path"
+                      " and ownership", shapes[m][part] == base[part],
+                      f"{sum(1 for a, b in zip(shapes[m][part], base[part]) if a != b)} differ")
+        depth = max(b[5].count(" > ") + 1 for b in base["blocks"])
+        check(f"  {name}: no path is deeper than container > subsection",
+              depth <= 2, str(depth))
+        orphans = [b for b in base["blocks"]
+                   if b[4] is None and " > " in b[5]]
+        check(f"  {name}: an unowned block has NO inferred parent in its path",
+              orphans == [], str(orphans[:2]))
+        check(f"  {name}: no persisted failure reason mentions a markup depth",
+              not any(b[6] and re.search(r"at level \d", b[6])
+                      for b in base["blocks"]))
+
+    # ==================================================================
+    print("\n5. ONE LABEL, TWO MEANINGS — NOT SILENTLY UNIFIED")
+    blocks, cards, objs = CP.parse(SAME_LABEL_TWO_MEANINGS, rules)
+    di = [b for b in blocks if b.raw_heading == "Decision intelligence"]
+    check("the label occurs twice, in two kinds of container",
+          [b.context_kind for b in di] == ["STRATEGY", "CURATED_OBJECT"],
+          str([b.context_kind for b in di]))
+    check("inside the STRATEGY card it maps to client_decision_logic",
+          cards and "client_decision_logic" in {f.field_name for f in cards[0].fields},
+          str([f.field_name for c in cards for f in c.fields]))
+    check("inside the CURATED OBJECT it is REVIEW_REQUIRED",
+          di[1].status == "REVIEW_REQUIRED", di[1].status)
+    check("...so the two meanings did NOT land in one field",
+          all("client_decision_logic" not in {f.field_name for f in o.fields}
+              for o in objs), str([f.field_name for o in objs for f in o.fields]))
+    obj_rule = conn.execute(
+        "select pattern, owner_kinds from curated_grammar_rules "
+        " where rule_id='SUB_DECISION_LOGIC' and active").fetchone()
+    check("SUB_DECISION_LOGIC exists for objects and does NOT match it",
+          obj_rule is not None
+          and not re.match(obj_rule[0], "Decision intelligence", re.I),
+          str(obj_rule))
+    sd = conn.execute("select owner_kinds from curated_grammar_rules "
+                      " where rule_id='SUB_DECISION'").fetchone()[0]
+    check("SUB_DECISION is card-only again", "CURATED_OBJECT" not in sd, str(sd))
+
+    # ==================================================================
+    print("\n6. A LEVEL CANNOT COME BACK THROUGH DATA")
+    refused = False
+    try:
+        with conn.transaction():
+            conn.execute(
+                """insert into curated_grammar_rules
+                     (rule_id, construct, pattern, heading_level, block_kind,
+                      field_name, field_name_source, example_heading,
+                      reusable_justification, expected_elsewhere, priority)
+                   values ('FLAT_TEETH_L3','x','^Monitoring$',3,'SUBSECTION',
+                           'monitoring','FIXED','Monitoring',
+                           'a justification long enough for the length check',
+                           'anywhere at all', 500)""")
+    except psycopg.errors.CheckViolation as exc:
+        refused = "ck_rule_no_heading_level" in str(exc)
+    check("a rule with heading_level = 3 is REFUSED by the registry", refused)
+    check("...and nothing was inserted",
+          conn.execute("select count(*) from curated_grammar_rules "
+                       " where rule_id='FLAT_TEETH_L3'").fetchone()[0] == 0)
+    src = (REPO / "scripts" / "curated_parser.py").read_text(encoding="utf-8")
+    code = "\n".join(l for l in src.splitlines() if not l.strip().startswith("#"))
+    check("the parser no longer compares a rule level at all",
+          "r.heading_level" not in code and "stack.pop()" not in code)
+
     print("\nspans and text survive all of it")
     for doc in (BOLD_BODY, AMBIGUOUS, NESTED_OK):
         _, cards, objs = CP.parse(doc, rules)

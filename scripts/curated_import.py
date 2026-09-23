@@ -250,12 +250,15 @@ def store(conn, envelope_id: str, text: str, blocks: list[CP.Block],
     for b in blocks:
         block_ids[b.ordinal] = str(conn.execute(
             """insert into curated_blocks
-                 (envelope_id, ordinal, heading_path, raw_heading, heading_level,
+                 (envelope_id, ordinal, heading_path, raw_heading,
+                  source_markup_depth,
                   rule_id, block_kind, status, failure_reason,
                   source_start, source_end, raw_text, structural_provenance)
                values (%s,%s,%s,%s,%s,%s,%s,%s::curated_block_status,%s,%s,%s,%s,
                        %s::curated_structural_provenance)
                returning block_id""",
+            # `b.level` is the converter's `#` count. Stored under the name
+            # that says so (051), never as a heading level.
             (envelope_id, b.ordinal, b.heading_path, b.raw_heading, b.level,
              b.rule.rule_id if b.rule else None, b.block_kind, b.status,
              b.failure_reason, b.heading_start, b.body_end,

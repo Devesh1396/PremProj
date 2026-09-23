@@ -530,12 +530,19 @@ def curated_trace(conn, curated_id: str) -> dict:
     and a verifier that compares the database against the database has
     constructed both halves of its own comparison (V2).
     """
+    # STRUCTURAL PROVENANCE TRAVELS WITH THE STRUCTURE (D57). `heading_path`
+    # is structure, and a consumer handed a path with nothing saying where
+    # it came from cannot tell a grammar-derived container name from an
+    # authored hierarchy. The card's block carries it; so does each field's.
     card = conn.execute(
         """select s.curated_id::text, s.ordinal, s.name, s.heading_path,
                   s.source_start, s.source_end, e.envelope_id::text,
-                  e.raw_location, e.source_title
+                  e.raw_location, e.source_title,
+                  b.structural_provenance::text
              from curated_strategies s
              join source_envelopes e on e.envelope_id = s.envelope_id
+             left join curated_blocks b
+                    on b.envelope_id = s.envelope_id and b.ordinal = s.ordinal
             where s.curated_id = %s""", (curated_id,)).fetchone()
     if card is None:
         return {}
@@ -547,13 +554,16 @@ def curated_trace(conn, curated_id: str) -> dict:
             where curated_id = %s
             order by source_start""", (curated_id,)).fetchall()
     fields = conn.execute(
-        """select field_name, provenance::text, source_start, source_end,
-                  text_value, heading_path
-             from curated_fields where curated_id = %s
-            order by source_start""", (curated_id,)).fetchall()
+        """select f.field_name, f.provenance::text, f.source_start,
+                  f.source_end, f.text_value, f.heading_path,
+                  b.structural_provenance::text
+             from curated_fields f
+             left join curated_blocks b on b.block_id = f.block_id
+            where f.curated_id = %s
+            order by f.source_start""", (curated_id,)).fetchall()
     keys = ("curated_id", "ordinal", "name", "heading_path",
             "source_start", "source_end", "envelope_id", "raw_location",
-            "source_title")
+            "source_title", "structural_provenance")
     return {
         **dict(zip(keys, card)),
         "concept_links": [dict(zip(
@@ -562,7 +572,8 @@ def curated_trace(conn, curated_id: str) -> dict:
              "tier", "score"), r)) for r in links],
         "fields": [dict(zip(
             ("field_name", "provenance", "source_start", "source_end",
-             "text_value", "heading_path"), r)) for r in fields],
+             "text_value", "heading_path", "structural_provenance"), r))
+            for r in fields],
     }
 
 
@@ -604,6 +615,11 @@ def curated_expansion(conn, curated_id: str) -> dict:
     return {
         "card_name": tr["name"],
         "heading_path": tr["heading_path"],
+        # Where the path's structure came from. Never AUTHORED for any
+        # source ingested today: the canonical document states no heading
+        # level, so the path names the container the grammar recognised and
+        # nothing more.
+        "structural_provenance": tr["structural_provenance"],
         "source_title": tr["source_title"],
         "raw_location": tr["raw_location"],
         "card_source_start": tr["source_start"],
@@ -612,6 +628,8 @@ def curated_expansion(conn, curated_id: str) -> dict:
         # the span that make it checkable against the original.
         "fields": [{"field_name": f["field_name"],
                     "provenance": f["provenance"],
+                    "structural_provenance": f["structural_provenance"],
+                    "heading_path": f["heading_path"],
                     "source_start": f["source_start"],
                     "source_end": f["source_end"],
                     "text": f["text_value"]}

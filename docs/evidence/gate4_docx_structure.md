@@ -111,7 +111,7 @@ breaking each independently.
 
 ## How the corpus gets a hierarchy — three options, none chosen
 
-This is the practitioner's decision, not the tool's.
+This is a human decision, not the tool's.
 
 1. **Prem applies Heading styles in Word.** The structure becomes authored in
    the canonical source, the reader finds it, and every level-keyed grammar
@@ -127,8 +127,11 @@ This is the practitioner's decision, not the tool's.
 
 ## FIXTURE PROVENANCE — ANSWERED
 
-The practitioner confirms `t2d_video1.md` and `t2d_video14.md` were produced
-**by a Claude model** from `T2D_V_1.docx`.
+`t2d_video1.md` and `t2d_video14.md` were generated from `T2D_V_1.docx` using
+a Claude model. **That was confirmed by the developer who produced them — not
+by the practitioner.** An earlier version of this file said "the practitioner
+confirms", which was wrong: Prem did not generate the fixtures and did not
+make this statement.
 
 Their TEXT was independently verified against the docx:
 
@@ -141,8 +144,11 @@ dashes, curly versus straight quotes, and `[text](url)` hyperlinks.
 
 So:
 
-> **TEXT: practitioner-authored, verified verbatim.**
-> **HIERARCHY: model-interpreted, not practitioner-authored.**
+> **TEXT: practitioner-authored, verified verbatim against T2D_V_1.docx.**
+> **HIERARCHY: model-interpreted. The Markdown fixtures were generated using
+> a Claude model, as confirmed by the developer who produced them. No
+> deterministic converter or manifest records how heading depths were
+> chosen. Not practitioner-authored.**
 
 42 heading markers in Video 1 and 61 in Video 14, **none** corresponding to a
 level stated in the docx. The hierarchy is not described as authored anywhere
@@ -150,7 +156,8 @@ in this repository.
 
 ## THE DECISION — OPTION 2, THE CORPUS IS FLAT
 
-Taken by the practitioner. The grammar no longer depends on a converted
+Taken by the developer, on independent review — not by the practitioner.
+The grammar no longer depends on a converted
 Markdown level; see `DECISIONS.md` D56 and migrations `048`/`049`. Options 1
 and 3 were not chosen: no Heading styles are being applied to 524 pages, and
 no converter rule is being recorded as a transformation.

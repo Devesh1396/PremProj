@@ -4590,7 +4590,7 @@ rather than authored.
 
 ## D56 — the corpus is flat; the grammar stops reading a level nobody wrote
 
-**Decision (the practitioner's): OPTION 2.** The canonical `T2D_V_1.docx` is
+**Decision (the developer's, on independent review — not the practitioner's; corrected in D57): OPTION 2.** The canonical `T2D_V_1.docx` is
 structurally flat and the grammar must stop depending on converted Markdown
 levels. Not option 1 (apply Heading styles to 524 pages) and not option 3 (a
 converter rule recorded as a transformation).
@@ -4603,12 +4603,17 @@ labels and full sentences are formatted identically.
 
 ### Fixture provenance, now answered
 
-`t2d_video1.md` and `t2d_video14.md` were produced **by a Claude model** from
-the docx. Their text was independently verified — 218 and 245 content lines,
-**0 genuine differences** after normalising Markdown syntax only.
+`t2d_video1.md` and `t2d_video14.md` were generated from the docx using a
+Claude model, **as confirmed by the developer who produced them** (attribution
+corrected in D57). Their text was independently verified — 218 and 245
+content lines, **0 genuine differences** after normalising Markdown syntax
+only.
 
-> **TEXT: practitioner-authored, verified verbatim.**
-> **HIERARCHY: model-interpreted, not practitioner-authored.**
+> **TEXT: practitioner-authored, verified verbatim against T2D_V_1.docx.**
+> **HIERARCHY: model-interpreted. The Markdown fixtures were generated using
+> a Claude model, as confirmed by the developer who produced them. No
+> deterministic converter or manifest records how heading depths were
+> chosen. Not practitioner-authored.**
 
 42 and 61 heading markers, none corresponding to a level stated in the
 source. The hierarchy is not called authored anywhere.
@@ -4685,3 +4690,123 @@ conflicting signals were silently resolved. All four corrected and tested.
 **reviving, in a test's teardown, the rule `048` had retired**, and handing
 every later suite a grammar that no longer exists. It now toggles a
 registered rule and asserts the catch-all stays retired.
+
+---
+
+## D57 — stored structure is level-independent too, and one label is not one meaning
+
+### Heading paths came from Markdown depth
+
+`0df47bf` made RECOGNITION level-independent and left `segment()` building
+`heading_path` with a stack on `#` count. That path was persisted into blocks,
+strategies, principles, objects and fields and returned by `curated_trace()`
+and `curated_expansion()`. Measured: rewriting every heading marker changed
+**41 of Video 1's 42 paths and 60 of Video 14's 61**. The flat suite compared
+fields by name and text and ignored the path, so it proved recognition and
+nothing about stored structure.
+
+**Decision: a path states only what the parser knows.** A recognised
+container's path is its own heading; a subsection it owns is
+`container > subsection`; anything else is its own heading with no inferred
+parent. `segment()` builds no path at all. After the change, **0 of 42 and 0
+of 61** paths change under re-rendering, and persisted rows and retrieved
+expansions are identical across `#`, `###` and `######` apart from raw
+offsets.
+
+**One GATE 1 assertion changed, and its fixture did not.**
+`strategy6_routing.json` was frozen before the importer existed and its
+`expected_heading_path` came from the old stack, so it began with the document
+title — an ancestor that exists only because the converter emitted a `#`
+above everything. The test now asserts the stored path is exactly the frozen
+path with **only that ancestor** removed. The fixture is untouched, and the
+verbatim-text, span and field assertions are unchanged.
+
+### Structural provenance travels with structure
+
+`curated_trace()` and `curated_expansion()` return `structural_provenance` for
+the card and every field. A consumer handed a path with nothing saying where
+it came from cannot tell a grammar-derived container name from an authored
+hierarchy.
+
+### Model-assigned depth could still pass as structure, twice
+
+- **It was persisted as `curated_blocks.heading_level`** — a name that reads
+  as an authored level. Renamed `source_markup_depth` (`051`). Kept for
+  forensic audit, never returned by retrieval, asserted absent from every
+  expansion.
+- **It could come back through DATA.** `048` set rule levels to NULL and added
+  no constraint, and registering a rule is an INSERT. `051` adds
+  `CHECK (heading_level IS NULL)`, and the parser's comparison is removed
+  rather than left inert. An INSERT with `heading_level = 3` is refused.
+- **The persisted failure reason said "at level N"**, presenting the model's
+  depth to whoever triages REVIEW_REQUIRED. Removed.
+
+### A label whose meaning is not stable must not map by surface form
+
+`049` let `033`'s SUB_DECISION be owned by a curated object, so Video 14's
+`Decision intelligence` was stored as `client_decision_logic` (role
+PRIORITISATION) and would reach Engine 1 Pass B as a rule for choosing what to
+do first. Its text is **prognosis** — *"a short timeline may be more plausible
+when diabetes is relatively recent … sufficient beta-cell capacity remains"* —
+and says nothing about which intervention to choose. Video 1's stored
+`Decision intelligence` (Strategy 6) **is** selection logic.
+
+**`033`'s premise that these surface forms "vary by section without changing
+meaning" is refuted by the corpus.** Its stated provenance — "the practitioner
+listed them together" — traces to a prompt that listed headings to
+**recognise**, and a list of headings to recognise is not a statement that
+they are synonyms.
+
+**Evidence note, recorded because the review quoted it:** the review's Video 1
+quotation (*"choose strategies according to the client's actual bottleneck;
+do not recommend something simply because it exists in the library"*) is from
+the `Decision intelligence` block under `Final Engine 7 intelligence`, which
+is **REVIEW_REQUIRED** with no owner — not a stored field. The stored one is
+under Strategy 6 and reads *"use the options according to the client's actual
+bottleneck"*. Both are selection logic, so the conclusion holds.
+
+**Fix (`050`):** SUB_DECISION is card-only again, so every Video 1 row is
+unchanged. `SUB_DECISION_LOGIC` carries into curated objects only
+`Client decision logic` and `Decision logic`, the two forms with no
+counter-evidence. Video 14's `Decision intelligence` is REVIEW_REQUIRED, text
+and span preserved. **Q1 remains the practitioner's**: this withdraws the
+answer the grammar gave, and does not give another.
+
+**The rule going forward.** Under the flat design a label is the ONLY
+structural signal, so a label whose meaning is not stable across sections
+must not map to a single field by surface form alone. The survey now lists
+every label whose surface form recurs in more than one kind of container;
+across both fixtures it flags exactly `Decision intelligence`.
+
+### The survey no longer reports depth
+
+It reported heading levels, level-to-level nesting and level templates, all
+model-assigned. It now reads Markdown headings with depth discarded, or DOCX
+bold-only paragraphs as candidate boundaries — never levels — and runs them
+through the production `classify()`, `attach()` and `derive_paths()` rather
+than a copy. `attach()` records the kind of container open at each block
+(`context_kind`) so the cross-container report reads the production decision.
+
+### An attribution error, corrected
+
+"The practitioner confirmed" was wrong in three places. The fixtures'
+conversion method was confirmed by the **developer** who generated them, not
+by Prem, and the Option 2 decision was the developer's too. The record now
+reads, verbatim:
+
+> TEXT: practitioner-authored, verified verbatim against T2D_V_1.docx.
+> HIERARCHY: model-interpreted. The Markdown fixtures were generated using a
+> Claude model, as confirmed by the developer who produced them. No
+> deterministic converter or manifest records how heading depths were chosen.
+> Not practitioner-authored.
+
+`048`'s header carries the old wording and is applied, so the correction is a
+`COMMENT ON TYPE` in `050`.
+
+### Reader hygiene
+
+`num` in `docx_structure.analyse()` is reset per paragraph. The stale value
+was **not reachable** — `level` is set only where `num` is, so the conflict
+test short-circuited first — so this removes a hazard rather than fixing a
+crash. "Inherited bold" now states its scope: bold declared by the paragraph's
+own style, with `basedOn`, `docDefaults` and character styles NOT resolved.

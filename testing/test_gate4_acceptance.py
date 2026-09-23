@@ -244,8 +244,8 @@ def main() -> int:
         "  from curated_blocks where envelope_id=%s", (env,)).fetchone()
     print(f"        {blocks[0]} blocks, {blocks[1]} REVIEW_REQUIRED")
     check("every block is stored, parsed or not", blocks[0] == 61, str(blocks))
-    check("REVIEW_REQUIRED rose to 48 -- the flat-structure result, reported",
-          blocks[1] == 48, str(blocks))
+    check("REVIEW_REQUIRED is 49 -- the flat-structure result, reported",
+          blocks[1] == 49, str(blocks))
     noreason = conn.execute(
         "select count(*) from curated_blocks where envelope_id=%s "
         "  and status='REVIEW_REQUIRED' and failure_reason is null",
@@ -400,16 +400,25 @@ def main() -> int:
     # registered role because 033 enumerated that construct itself.
     check("the block bodies are PRESERVED, not understood",
           v14.get("STRUCTURALLY_PRESERVED_ONLY", 0) == 11, str(v14))
-    check("exactly one Video 14 field carries a REGISTERED role",
-          v14.get("SEMANTIC_ROLE_REGISTERED", 0) == 1, str(v14))
+    # 050 withdrew the one registered role Video 14 had: `Decision
+    # intelligence` means prognosis in a curated object, so storing it as
+    # client_decision_logic (PRIORITISATION) answered Q1 by surface form.
+    check("NO Video 14 field carries a registered role",
+          v14.get("SEMANTIC_ROLE_REGISTERED", 0) == 0, str(v14))
     reg = conn.execute(
         """select s.field_name, s.semantic_role
              from v_curated_field_semantics s
              join curated_objects o on o.object_id = s.object_id
             where o.envelope_id=%s and s.semantic_state='SEMANTIC_ROLE_REGISTERED'""",
         (env,)).fetchall()
-    check("...and it is the construct 033 registered, under 033's own name",
-          reg == [("client_decision_logic", "PRIORITISATION")], str(reg))
+    check("...so no prognosis is presented to Pass B as prioritisation",
+          reg == [], str(reg))
+    di = conn.execute(
+        """select status::text, rule_id from curated_blocks
+            where envelope_id=%s and raw_heading='Decision intelligence'""",
+        (env,)).fetchall()
+    check("Video 14's `Decision intelligence` is REVIEW_REQUIRED, unmapped",
+          di == [("REVIEW_REQUIRED", None)], str(di))
 
     # THE TWO SAFETY BLOCKS ARE NOW REVIEW_REQUIRED, AND THAT IS CORRECT.
     # They were only ever recognised by the retired catch-all, which named

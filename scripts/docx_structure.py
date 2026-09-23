@@ -112,11 +112,18 @@ def heading_styles(z: zipfile.ZipFile) -> dict[str, int]:
 
 
 def bold_style_ids(z: zipfile.ZipFile) -> set[str]:
-    """Paragraph styles that make their text bold, so INHERITED bold counts.
+    """Paragraph styles that DIRECTLY declare bold in their own `w:rPr`.
 
     Without this, a document whose headings are bold via a style rather
-    than via direct run formatting reports zero bold paragraphs -- the
-    reader would have been measuring one of the two ways Word expresses it.
+    than via direct run formatting reports zero bold paragraphs.
+
+    SCOPE, STATED NARROWLY. This reads only the bold a style declares
+    itself. It does NOT follow `w:basedOn` chains, does NOT read
+    `w:docDefaults`, and does NOT resolve character styles (`w:rStyle`) or
+    table styles. So "inherited" in this reader means "declared by the
+    paragraph's own selected style" and nothing more. A style that is bold
+    only because its parent is will be counted as not bold, and the report
+    must not be read as claiming full style resolution.
     """
     out: set[str] = set()
     try:
@@ -181,6 +188,14 @@ def analyse(path: Path) -> dict:
 
         pPr = p.find(f"{W}pPr")
         level = None
+        # Per paragraph, deliberately. `num` used to be assigned only inside
+        # the `pPr is not None` branch and read after it. That was not a
+        # live crash -- `level` is only set in the same branch, so the later
+        # `level is not None and num is not None` short-circuits first for a
+        # paragraph with no pPr -- but it carried the PREVIOUS paragraph's
+        # value across iterations, a stale-value hazard one refactor away
+        # from a wrong conflict report.
+        num = None
 
         if pPr is not None:
             st = pPr.find(f"{W}pStyle")
@@ -271,7 +286,8 @@ def report(path: Path) -> int:
               "numId definition(s)")
     print(f"  bold paragraphs             {r['bold_only_paragraphs']:>6}")
     print(f"      direct run formatting   {r['bold_direct']:>6}")
-    print(f"      inherited from a style  {r['bold_inherited']:>6}")
+    print(f"      via paragraph's own style {r['bold_inherited']:>4}"
+          "   (declared by that style; basedOn/docDefaults NOT resolved)")
     print(f"      bold explicitly OFF     {r['bold_explicitly_off']:>6}"
           "   (w:val=0/false; not counted as bold)")
     if r["bold_lengths"]:

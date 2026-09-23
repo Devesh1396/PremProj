@@ -161,6 +161,22 @@ def main() -> int:
           len(g["conflicting_signals"]) == 1
           and "list numbering" in g["conflicting_signals"][0][1],
           str(g["conflicting_signals"]))
+    # A paragraph with NO pPr at all, placed straight after a numbered one --
+    # where a `num` carried over from the previous paragraph would sit.
+    check("a paragraph with no pPr is read, and counted",
+          g["paragraphs"] == 9, str(g["paragraphs"]))
+    check("...and is NOT counted as numbered", g["numbered_paragraphs"] == 3,
+          str(g["numbered_paragraphs"]))
+    # The stale value was UNREACHABLE -- `level` is set only where `num` is,
+    # so the conflict test short-circuited first -- which means no behaviour
+    # changes and there is nothing observable for a test to break. The only
+    # honest assertion left is structural: `num` is reset per paragraph.
+    src = (REPO / "scripts" / "docx_structure.py").read_text(encoding="utf-8")
+    loop = src[src.index("for p in paras:"):src.index("r[\"numbering_formats\"]")]
+    check("`num` is reset for EVERY paragraph (stale-value hazard removed)",
+          "        num = None" in loop.split("pPr = p.find")[1][:600])
+    check("the inherited-bold claim is stated narrowly",
+          "basedOn" in src and "docDefaults" in src and "NOT resolved" in src)
     check("...rather than one signal being silently chosen",
           len(g["levels_assigned"]) == 1 and g["numbered_paragraphs"] == 3,
           f"{g['levels_assigned']} {g['numbered_paragraphs']}")

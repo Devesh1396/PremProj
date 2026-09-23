@@ -118,6 +118,11 @@ class Block:
     status: str = "REVIEW_REQUIRED"
     failure_reason: str | None = None
     parent_ordinal: int | None = None
+    # The kind of container that was OPEN when attach() reached this block,
+    # or None. Recorded from state attach() already holds, so a survey
+    # asking "which labels recur across container kinds" reads the
+    # production decision instead of re-implementing it (V2).
+    context_kind: str | None = None
 
     @property
     def block_kind(self) -> str | None:
@@ -152,22 +157,35 @@ def strip_span(text: str, start: int, end: int) -> tuple[int, int]:
 
 
 def segment(text: str) -> list[Block]:
-    """Every heading block in the document, with real offsets."""
+    """Every heading block in the document, with real offsets.
+
+    NO SEMANTIC PATH IS BUILT HERE (D57). This used to push and pop a
+    stack on Markdown `#` depth to produce `A > B > C`, and that path was
+    persisted into blocks, cards, objects and fields and returned by
+    retrieval. The canonical source states no level anywhere, so the depth
+    it was built from was assigned by a model during conversion: measured,
+    flattening the markers changed 41 of Video 1's 42 paths and 60 of
+    Video 14's 61. Recognition had been made level-independent and the
+    STORED STRUCTURE had not.
+
+    Each block's `heading_path` starts as its own heading and nothing more.
+    `derive_paths()` rebuilds it after classification from what the parser
+    actually KNOWS -- which container is open -- never from depth.
+
+    `level` survives only as SOURCE-MARKUP METADATA: the number of `#`
+    characters the converter emitted. It is persisted for forensic audit
+    as `curated_blocks.source_markup_depth` (051), and nothing in
+    recognition, containment, paths or retrieval reads it.
+    """
     heads = list(HEADING.finditer(text))
     blocks: list[Block] = []
-    stack: list[tuple[int, str]] = []          # (level, heading text)
-
     for i, m in enumerate(heads):
-        level = len(m.group("hashes"))
         raw = m.group("text").strip()
-        while stack and stack[-1][0] >= level:
-            stack.pop()
-        stack.append((level, raw))
         blocks.append(Block(
             ordinal=i,
-            level=level,
+            level=len(m.group("hashes")),        # markup metadata only
             raw_heading=raw,
-            heading_path=" > ".join(h for _, h in stack),
+            heading_path=raw,                    # provisional; see derive_paths
             heading_start=m.start(),
             body_start=m.end(),
             body_end=heads[i + 1].start() if i + 1 < len(heads) else len(text),
@@ -175,22 +193,52 @@ def segment(text: str) -> list[Block]:
     return blocks
 
 
+PATH_SEPARATOR = " > "
+
+
+def derive_paths(blocks: list[Block]) -> None:
+    """Heading paths from PARSER STATE, after classification.
+
+    Three cases and no others:
+
+      * a recognised CONTAINER      -> its own heading
+      * a subsection OWNED by one   -> container heading > its heading
+      * anything else               -> its own heading, no parent
+
+    The third case is deliberate. An unrecognised block has no owner the
+    parser can name, and giving it the path of whatever came before would
+    be inferring a hierarchy -- exactly what a converted `#` depth used to
+    do silently. So the path it gets states no more than the parser knows.
+    """
+    by_ordinal = {b.ordinal: b for b in blocks}
+    for b in blocks:
+        if b.parent_ordinal is not None and b.parent_ordinal in by_ordinal:
+            parent = by_ordinal[b.parent_ordinal]
+            b.heading_path = parent.raw_heading + PATH_SEPARATOR + b.raw_heading
+        else:
+            b.heading_path = b.raw_heading
+
+
 def classify(blocks: list[Block], rules: list[Rule]) -> None:
     """Attach a rule to each block, or a reason why none applies."""
     for b in blocks:
-        # `heading_level` is NULL for every active rule since 048, so this
-        # is inert and kept only so an old row cannot silently widen. A
-        # rule must recognise its construct by its registered LABEL.
+        # RECOGNITION READS THE LABEL AND NOTHING ELSE (D56, D57). The old
+        # `heading_level` filter is gone rather than left inert: a filter
+        # that happens to do nothing today is one migration away from
+        # gating recognition on a depth the author never wrote again, and
+        # `test_curated_flat` asserts no active rule carries a level.
         b.candidates = [r for r in rules                  # priority-ordered
-                        if not (r.heading_level and r.heading_level != b.level)
-                        and r.regex.match(b.raw_heading)]
+                        if r.regex.match(b.raw_heading)]
         if b.candidates:
             b.rule = b.candidates[0]
             b.status = "PARSED"
         else:
             b.failure_reason = (
+                # No depth in this message: it is PERSISTED, and a failure
+                # reason that changes with the converter's `#` count would
+                # make the stored structure depend on markup after all.
                 f"no rule in curated_grammar_rules matches the heading "
-                f"{b.raw_heading!r} at level {b.level}. Adding one is an "
+                f"{b.raw_heading!r}. Adding one is an "
                 "INSERT, and it must state why the construct is reusable "
                 "rather than needed for this document.")
 
@@ -245,6 +293,7 @@ def attach(blocks: list[Block]) -> None:
 
     for b in blocks:
         kind = b.block_kind
+        b.context_kind = open_container.block_kind if open_container else None
 
         if b.status == "PARSED" and kind in CONTAINER_KINDS:
             open_container = b
@@ -487,6 +536,7 @@ def parse(text: str, rules: list[Rule]) \
     blocks = segment(text)
     classify(blocks, rules)
     attach(blocks)
+    derive_paths(blocks)
 
     by_ordinal = {b.ordinal: b for b in blocks}
     cards: list[ParsedCard] = []
