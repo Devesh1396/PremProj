@@ -253,9 +253,10 @@ def store(conn, envelope_id: str, text: str, blocks: list[CP.Block],
                  (envelope_id, ordinal, heading_path, raw_heading,
                   source_markup_depth,
                   rule_id, block_kind, status, failure_reason,
-                  source_start, source_end, raw_text, structural_provenance)
+                  source_start, source_end, raw_text, structural_provenance,
+                  absorbed_into_ordinal, review_class)
                values (%s,%s,%s,%s,%s,%s,%s,%s::curated_block_status,%s,%s,%s,%s,
-                       %s::curated_structural_provenance)
+                       %s::curated_structural_provenance,%s,%s)
                returning block_id""",
             # `b.level` is the converter's `#` count. Stored under the name
             # that says so (051), never as a heading level.
@@ -271,7 +272,9 @@ def store(conn, envelope_id: str, text: str, blocks: list[CP.Block],
              # carries an authored heading level, and the markdown levels
              # these fixtures do carry were assigned by a model.
              "GRAMMAR_DERIVED_CLASSIFICATION" if b.rule
-             else "NO_HIERARCHY_AVAILABLE")).fetchone()[0])
+             else "NO_HIERARCHY_AVAILABLE",
+             # D58: where an unowned block's text went, and why it is unowned.
+             b.absorbed_into, b.review_class)).fetchone()[0])
 
     counts = {"strategies": 0, "principles": 0, "objects": 0, "fields": 0,
               "verbatim": 0, "transformed": 0,

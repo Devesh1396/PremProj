@@ -199,8 +199,15 @@ def main() -> int:
     # the `E7 principle` card, which is not an object and is not counted
     # here.) The rest of Video 14's
     # subsections are REVIEW_REQUIRED, which is the flat-structure result.
+    #
+    # 12 SINCE D58, and this is why: `Market claim observed` matches no rule
+    # and used to CLOSE the Market object, orphaning the registered
+    # `Why it attracts clients` below it. Under D58 an unregistered block
+    # changes no ownership, so that SUB_WHY label attaches as `why_useful`:
+    # 11 object bodies + 1. What this check exists for -- no duplicate row
+    # after two failed imports and a retry -- is unchanged by it.
     check("no duplicate derived rows from the earlier failures",
-          s["fields"] == 11 and s["verifications"] == 1, str(s))
+          s["fields"] == 12 and s["verifications"] == 1, str(s))
 
     dupes = conn.execute(
         """select count(*) from (

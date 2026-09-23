@@ -18,6 +18,15 @@ file, so those differ by construction and are not structure. Everything
 else -- ownership, heading paths, structural provenance, failure reasons,
 field names, name provenance, text provenance and TEXT -- must match.
 
+ONE exception in TEXT, and it is the rendering itself (D58). A field now
+keeps, as body, any unrecognised heading that falls inside it -- verbatim,
+so WITH that file's own `#` run in front of it, because VERBATIM_SOURCE
+means findable at the stored span in the file it came from. Those markers
+are exactly the model-assigned depth this suite proves meaningless, so text
+is compared with line-start heading markers removed, and nothing else. The
+exception is BOUNDED, not trusted: a field that absorbed no heading must
+still be byte-identical, raw.
+
 Also asserts the model-assigned markup depth cannot reach retrieval: it is
 stored as `source_markup_depth` (051), and no expansion may carry it.
 
@@ -44,6 +53,12 @@ FIXTURES = REPO / "testing" / "fixtures" / "curated"
 MARKERS = ("", "#", "###", "######")
 OFFSET_KEYS = {"source_start", "source_end", "card_source_start",
                "card_source_end", "raw_location", "source_title"}
+MARKUP = re.compile(r"^#{1,6}(?=[ \t])", re.M)
+
+
+def unmarked(text):
+    """Remove the rendering's line-start heading markers. Nothing else."""
+    return MARKUP.sub("", text) if isinstance(text, str) else text
 
 
 def check(name: str, condition: bool, detail: str = "") -> None:
@@ -62,7 +77,8 @@ def render(text: str, marker: str) -> str:
 
 def strip_offsets(obj):
     if isinstance(obj, dict):
-        return {k: strip_offsets(v) for k, v in obj.items() if k not in OFFSET_KEYS}
+        return {k: (unmarked(v) if k == "text" else strip_offsets(v))
+                for k, v in obj.items() if k not in OFFSET_KEYS}
     if isinstance(obj, list):
         return [strip_offsets(v) for v in obj]
     return obj
@@ -110,7 +126,7 @@ def main() -> int:
             "blocks": conn.execute(
                 """select ordinal, raw_heading, status::text, rule_id,
                           heading_path, structural_provenance::text,
-                          failure_reason
+                          failure_reason, absorbed_into_ordinal, review_class
                      from curated_blocks where envelope_id=%s
                     order by ordinal""", (env,)).fetchall(),
             "strategies": conn.execute(
@@ -127,7 +143,10 @@ def main() -> int:
                 """select coalesce(s.name, p.name, o.name), f.field_name,
                           f.heading_path, f.name_source::text,
                           f.provenance::text, f.text_value,
-                          b.structural_provenance::text
+                          b.structural_provenance::text,
+                          exists(select 1 from curated_blocks a
+                                  where a.envelope_id=b.envelope_id
+                                    and a.absorbed_into_ordinal=b.ordinal)
                      from curated_fields f
                      left join curated_strategies s on s.curated_id=f.curated_id
                      left join curated_principles p on p.principle_id=f.principle_id
@@ -167,14 +186,26 @@ def main() -> int:
 
             check("four distinct envelopes, not one deduplicated",
                   len(set(envs.values())) == 4, str(envs))
+            def comparable(part, rows):
+                if part != "fields":
+                    return rows
+                return [r[:5] + (unmarked(r[5]),) + r[6:] for r in rows]
+
             for m in ("#", "###", "######"):
+                raw_diff = [a for a, b in zip(p[m]["fields"], p[""]["fields"])
+                            if a[5] != b[5]]
+                check(f"  {m!r:>8} raw text differs ONLY in fields that absorbed "
+                      "a heading",
+                      all(r[7] for r in raw_diff),
+                      str([r[:2] for r in raw_diff if not r[7]]))
                 for part in ("blocks", "strategies", "principles", "objects",
                              "fields"):
-                    diff = sum(1 for a, b in zip(p[m][part], p[""][part]) if a != b)
+                    a_rows = comparable(part, p[m][part])
+                    b_rows = comparable(part, p[""][part])
+                    diff = sum(1 for a, b in zip(a_rows, b_rows) if a != b)
                     check(f"  {m!r:>8} persisted {part} identical (paths, "
                           "provenance, ownership, text)",
-                          p[m][part] == p[""][part]
-                          and len(p[m][part]) == len(p[""][part]),
+                          a_rows == b_rows and len(a_rows) == len(b_rows),
                           f"{diff} differ; {len(p[m][part])} vs {len(p[''][part])}")
                 check(f"  {m!r:>8} retrieved expansion identical apart from offsets",
                       strip_offsets(x[m]) == strip_offsets(x[""]),

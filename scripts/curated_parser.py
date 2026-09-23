@@ -91,13 +91,22 @@ class Rule:
         # failure this parser exists to prevent, reproduced by the parser.
         # `Future alternatives` was lost the same way.
         #
-        # Heading capitalisation carries no meaning in this document:
-        # `Decision logic`, `Client decision logic` and `Decision
-        # intelligence` are one construct however they are cased, and a
+        # Heading CAPITALISATION carries no meaning in this document, and a
         # practitioner writing the next section will not be consistent about
-        # it. This is a property of heading grammars, not a patch for one
+        # it: `Client decision logic` and `Client Decision Logic` are one
+        # label. This is a property of heading grammars, not a patch for one
         # fixture, which is why it is applied to every rule at compile time
         # rather than as a capitalisation variant inside one pattern.
+        #
+        # Case-insensitivity makes two CASINGS one label. It does NOT make two
+        # different LABELS one construct. This comment used to say `Decision
+        # logic`, `Client decision logic` and `Decision intelligence` were
+        # one construct -- Video 14 refuted that (050, D56): `Decision
+        # intelligence` there is prognosis, in Video 1 it is selection, and
+        # what it means is the practitioner's decision (Q1). The two
+        # `decision logic` forms are SUB_DECISION_LOGIC; `Decision
+        # intelligence` is SUB_DECISION, owned by strategy and principle
+        # containers only.
         self.regex = re.compile(self.pattern, re.IGNORECASE)
 
 
@@ -123,6 +132,19 @@ class Block:
     # asking "which labels recur across container kinds" reads the
     # production decision instead of re-implementing it (V2).
     context_kind: str | None = None
+    # D58. The ordinal of the FIELD-BEARING block (the open container itself,
+    # or a subsection it owns) whose field text absorbed this block, or None.
+    # Set only for a block that could not change ownership: its text becomes
+    # body of that field -- span and characters preserved -- and the block
+    # itself stays REVIEW_REQUIRED, so the absorption is on the record
+    # rather than silent.
+    absorbed_into: int | None = None
+    # Why a block is not recognised structure, when it is not:
+    # NO_RULE, REGISTERED_NO_CONTAINER, REGISTERED_NOT_OWNABLE or
+    # REGISTERED_DUPLICATE_FIELD. "Matches no rule" and "matches a registered
+    # label whose container was not there" are different findings, and the
+    # survey used to report both as unrecognised.
+    review_class: str | None = None
 
     @property
     def block_kind(self) -> str | None:
@@ -251,86 +273,143 @@ DEFAULT_OWNER_KINDS = ("STRATEGY", "PRINCIPLE")
 CONTAINER_KINDS = ("STRATEGY", "PRINCIPLE", "CURATED_OBJECT")
 
 
+def field_name_for(rule: Rule, block: Block) -> str:
+    """The field a subsection rule would store its block under."""
+    if rule.field_name_source == "HEADING":
+        return slug_field_name(block.raw_heading)
+    return rule.field_name
+
+
 def attach(blocks: list[Block]) -> None:
-    """Bind each subsection to the container that is open when it appears.
+    """Bind subsections to containers, and body to fields, by parser STATE.
 
-    CONTAINMENT IS PARSER STATE, NOT A LEVEL COMPARISON (048). The
-    canonical source states no heading level anywhere -- 0 Heading styles
-    and 0 `w:outlineLvl` across 13,763 paragraphs -- so the `##`/`###` in
-    the converted fixtures were assigned by a model, and a grammar that
-    compares them is reading structure the practitioner never wrote.
+    D58 -- THE RULE CHANGED, BECAUSE THE CANONICAL SOURCE REFUTED THE OLD ONE.
 
-    One forward pass:
+    `0df47bf` closed the open container on ANY unrecognised block. That was
+    validated on the Markdown fixtures, where it held: zero recognised
+    subsections followed an unrecognised block inside the same container.
+    On the canonical .docx it is catastrophic. There, an emphasised BODY
+    sentence is a bold paragraph exactly like a label, so
 
-      * a STRATEGY / PRINCIPLE / CURATED_OBJECT block OPENS a container
-        (closing any previous one);
-      * a recognised SUBSECTION attaches to the open container, if that
-        container is a kind its rule may be owned by;
-      * ANYTHING ELSE CLOSES THE CONTAINER.
+        Strategy 1 — ...            registered container  -> opens
+        What the strategy means     registered            -> attaches
+        <emphasised body sentence>  unrecognised          -> CLOSED IT
+        Why this can be useful      orphaned
+        Client decision logic       orphaned
 
-    That last clause is the whole safety property. Without levels there is
-    nothing to say a heading after an unrecognised block still belongs to
-    the card three blocks back, so the parser stops claiming it does.
-    Video 1's `Final Engine 7 intelligence` section contains a `Decision
-    intelligence` heading that matches the decision rule and belongs to no
-    strategy; the unrecognised section heading before it closes the
-    container, and it becomes REVIEW_REQUIRED rather than being attached
-    to whatever came earlier.
+    Independent review measured it on the real document: 21 STRATEGY
+    containers attached nothing, and NONE kept `client_decision_logic` --
+    the field GATE 1 exists to protect. The Markdown hid it because the
+    model that produced the fixtures rendered those sentences as inline
+    bold inside a paragraph rather than as boundaries.
 
-    Measured on both fixtures before the change: zero recognised
-    subsections follow an unrecognised block inside the same container, so
-    closing on unknown loses nothing that level comparison was keeping.
+    So ONLY REGISTERED STRUCTURE MAY CHANGE OWNERSHIP:
 
-    A RULE THAT CANNOT APPLY MUST NOT END THE CHAIN. `classify()` selects
-    the highest-priority rule whose pattern matches and ownership is only
-    checked here, so a heading matching a strategy-card rule inside a
-    curated object used to be refused although another matching rule would
-    have applied. The candidates are kept and handed over -- the same
-    shape as the trigram tier ending the chain at a near-match and never
-    reaching the semantic tier (D51).
+      * a registered CONTAINER opens one (closing any previous);
+      * a registered SUBSECTION ownable by the open container attaches to it
+        and becomes the field that subsequent body text belongs to;
+      * a registered block that is neither (a strategy FAMILY heading)
+        closes the container -- it is a stated boundary, not emphasis;
+      * EVERYTHING ELSE inside an open container is ABSORBED as body of the
+        current field. Its characters and span stay exactly where they are;
+        the block stays REVIEW_REQUIRED with `absorbed_into` set, so an
+        audit can list every unowned bold paragraph that now sits inside a
+        field instead of it disappearing into one.
+
+    What this deliberately does NOT do: tell a label from emphasis by
+    length, punctuation, a trailing colon or capitalisation. Those are the
+    heuristics Option 2 forbids, and nothing else in a flat document can
+    tell them apart. The cost is stated rather than hidden: an unregistered
+    SECTION heading is absorbed into the field before it just as an
+    emphasised sentence is. That over-absorption is visible in the audit;
+    the under-attachment it replaces was silent.
+
+    A registered subsection that cannot be owned here -- a rule not
+    permitted for this container kind, or a second occurrence of a field
+    the container already holds -- does not change ownership either. It is
+    absorbed and recorded, never attached.
+
+    A RULE THAT CANNOT APPLY MUST NOT END THE CHAIN: every matching
+    candidate is tried before a subsection is refused (D51's shape).
     """
     open_container: Block | None = None
+    current: Block | None = None             # whose field body is growing
+    taken: dict[int, set[str]] = {}
+
+    def absorb(b: Block, why: str, klass: str) -> None:
+        b.status = "REVIEW_REQUIRED"
+        b.rule = None
+        b.review_class = klass
+        if current is not None:
+            b.absorbed_into = current.ordinal
+            b.failure_reason = (
+                f"{why} It changes no ownership, so its text is kept as body "
+                f"of the field it follows (block {current.ordinal}, "
+                f"{current.raw_heading!r}), span and characters unchanged.")
+        else:
+            b.failure_reason = why
 
     for b in blocks:
         kind = b.block_kind
         b.context_kind = open_container.block_kind if open_container else None
 
         if b.status == "PARSED" and kind in CONTAINER_KINDS:
-            open_container = b
+            open_container, current = b, b
+            taken[b.ordinal] = {OPENING_FIELD}
             continue
 
-        if b.status != "PARSED" or kind != "SUBSECTION":
-            # Unrecognised structure, or a container-level construct that
-            # is not a container (a strategy FAMILY heading). Either way
-            # the parser no longer knows where it is.
-            open_container = None
-            continue
+        if b.status == "PARSED" and kind == "SUBSECTION":
+            if open_container is None:
+                b.status, b.rule = "REVIEW_REQUIRED", None
+                b.review_class = "REGISTERED_NO_CONTAINER"
+                b.failure_reason = (
+                    f"{b.raw_heading!r} matches a REGISTERED subsection label, "
+                    "but no container was open when it appeared, so it has "
+                    "no owner. The label is known; its container is missing.")
+                continue
 
-        chosen, wanted = None, []
-        for rule in b.candidates:
-            allowed = rule.owner_kinds or DEFAULT_OWNER_KINDS
-            wanted.append(allowed)
-            if open_container is not None \
-                    and open_container.block_kind in allowed:
-                chosen = rule
-                break
+            chosen, wanted = None, []
+            for rule in b.candidates:
+                allowed = rule.owner_kinds or DEFAULT_OWNER_KINDS
+                wanted.append(allowed)
+                if open_container.block_kind in allowed:
+                    chosen = rule
+                    break
 
-        if chosen is None:
-            need = sorted({k for a in wanted for k in a})
-            b.status = "REVIEW_REQUIRED"
-            b.rule = None
-            b.failure_reason = (
-                f"{b.raw_heading!r} matched {len(b.candidates)} subsection "
-                f"rule(s), and the container open at that point "
-                f"({open_container.block_kind if open_container else 'none'}) "
-                f"is not one of {', '.join(need)}. The parser will not infer "
-                "an owner: without an authored heading level there is nothing "
-                "that would make one correct.")
-            # An unownable subsection is unknown structure too.
-            open_container = None
-        else:
+            if chosen is None:
+                need = sorted({k for a in wanted for k in a})
+                absorb(b, f"{b.raw_heading!r} matches a registered subsection "
+                          f"label that may be owned by {', '.join(need)}, and the "
+                          f"open container is a {open_container.block_kind}.",
+                       "REGISTERED_NOT_OWNABLE")
+                continue
+
+            name = field_name_for(chosen, b)
+            if name in taken[open_container.ordinal]:
+                absorb(b, f"{b.raw_heading!r} would be a second {name!r} field "
+                          f"in {open_container.raw_heading!r}, which already "
+                          "holds one. The parser will not overwrite either.",
+                       "REGISTERED_DUPLICATE_FIELD")
+                continue
+
+            taken[open_container.ordinal].add(name)
             b.rule = chosen
             b.parent_ordinal = open_container.ordinal
+            current = b
+            continue
+
+        if b.status == "PARSED":
+            # Registered, but neither a container nor a subsection: a stated
+            # boundary (a strategy FAMILY heading). It closes the container.
+            open_container, current = None, None
+            continue
+
+        # Matches no rule.
+        if open_container is not None:
+            absorb(b, f"no rule in curated_grammar_rules matches {b.raw_heading!r}.",
+                   "NO_RULE")
+        else:
+            b.review_class = "NO_RULE"
 
 
 def name_span(text: str, block: Block) -> tuple[str, int, int]:
@@ -464,18 +543,32 @@ def slug_field_name(heading: str) -> str:
     return slug or "unnamed"
 
 
+def field_end(blocks: list[Block], field_block: Block) -> int:
+    """Where a field's text ends: its own body, plus everything absorbed.
+
+    D58. A block absorbed into a field (see `attach`) extends that field to
+    the end of the absorbed block. Absorbed blocks always follow their field
+    block directly -- any registered structure resets the field that grows --
+    so the resulting span is one contiguous slice of the source and the
+    stored text is still exactly that slice.
+    """
+    ends = [b.body_end for b in blocks if b.absorbed_into == field_block.ordinal]
+    return max([field_block.body_end] + ends)
+
+
 def _owned_fields(text: str, blocks: list[Block], owner: Block) -> list["ParsedField"]:
     """The owner's own body, then every subsection bound to it.
 
-    A HEADING-named field whose slug collides with one already taken by
-    the same owner is REFUSED, not overwritten: `uq_curated_field_*` would
-    reject the second row anyway, and silently dropping one of two
-    differently-headed subsections is how content disappears.
+    Field-name uniqueness is decided ONCE, in `attach()`: a second occurrence
+    of a field the container already holds is absorbed there, with a reason,
+    rather than being attached and then dropped here. The check below is a
+    guard that the two stayed in agreement, and it raises instead of
+    silently refusing.
     """
     fields: list[ParsedField] = []
     taken: set[str] = set()
 
-    s, e = strip_span(text, owner.body_start, owner.body_end)
+    s, e = strip_span(text, owner.body_start, field_end(blocks, owner))
     if e > s:
         fields.append(ParsedField(
             OPENING_FIELD, text[s:e], s, e, owner.heading_path, owner.ordinal,
@@ -485,22 +578,16 @@ def _owned_fields(text: str, blocks: list[Block], owner: Block) -> list["ParsedF
     for sub in blocks:
         if sub.parent_ordinal != owner.ordinal:
             continue
-        ss, se = strip_span(text, sub.body_start, sub.body_end)
+        ss, se = strip_span(text, sub.body_start, field_end(blocks, sub))
         if se <= ss:
             continue
-        if sub.rule.field_name_source == "HEADING":
-            name, name_source = slug_field_name(sub.raw_heading), "HEADING"
-        else:
-            name, name_source = sub.rule.field_name, "RULE"
+        name = field_name_for(sub.rule, sub)
+        name_source = "HEADING" if sub.rule.field_name_source == "HEADING" else "RULE"
         if name in taken:
-            sub.status = "REVIEW_REQUIRED"
-            sub.parent_ordinal = None
-            sub.rule = None
-            sub.failure_reason = (
-                f"the field name {name!r} derived from {sub.raw_heading!r} is "
-                "already used by another subsection of the same block. The "
-                "parser will not overwrite one with the other.")
-            continue
+            raise RuntimeError(
+                f"attach() let a second {name!r} field into "
+                f"{owner.raw_heading!r}; field uniqueness is decided there and "
+                "the two have disagreed.")
         taken.add(name)
         fields.append(ParsedField(
             name, text[ss:se], ss, se, sub.heading_path, sub.ordinal,
@@ -544,10 +631,11 @@ def parse(text: str, rules: list[Rule]) \
     objects: list[ParsedObject] = []
 
     def extent(owner: Block) -> int:
-        """Where the block ends: after the last subsection bound to it."""
+        """Where the block ends: after its last owned or absorbed text (D58)."""
         owned = [by_ordinal[o.ordinal] for o in blocks
                  if o.parent_ordinal == owner.ordinal]
-        return max([owner.body_end] + [o.body_end for o in owned])
+        return max([field_end(blocks, owner)]
+                   + [field_end(blocks, o) for o in owned])
 
     for b in blocks:
         if b.status != "PARSED":

@@ -19,8 +19,11 @@ Three things are proven here:
      looks exactly like a label.
 
   3. AMBIGUITY FAILS CLOSED. Synthetic documents where a label cannot be
-     placed, and must become REVIEW_REQUIRED rather than be attached to
-     whatever came before it.
+     placed -- no container open, a container kind that may not own it, a
+     field the container already holds -- and must become REVIEW_REQUIRED
+     rather than be attached. Since D58, ONLY registered structure moves
+     ownership: an unregistered heading inside a container is absorbed as
+     body of the current field, never a reason to close it.
 
 EVERY DOCUMENT IN THIS SUITE IS SYNTHETIC AND WRITTEN HERE. The repository
 is public; no practitioner text is copied in. The two committed fixtures
@@ -55,16 +58,32 @@ def check(name: str, condition: bool, detail: str = "") -> None:
         FAILS.append(name)
 
 
+MARKUP = re.compile(r"^#{1,6}(?=[ \t])", re.M)
+
+
+def unmarked(text: str) -> str:
+    """Remove line-start heading markers from a field's text. Nothing else.
+
+    D58. A field keeps as body any unregistered heading inside it, verbatim --
+    so WITH that rendering's own `#` run. That run is the model-assigned depth
+    this suite proves meaningless, and it is the ONLY thing removed. Section
+    4 bounds it: a field that absorbed no heading must match byte for byte.
+    """
+    return MARKUP.sub("", text)
+
+
 def recognised(text: str, rules) -> dict:
     """What the parser recognises, keyed by identity and compared by TEXT."""
     _, cards, objs = CP.parse(text, rules)
     out: dict = {}
     for c in cards:
         out[("CARD", c.kind, c.name)] = {
-            f.field_name: text[f.source_start:f.source_end] for f in c.fields}
+            f.field_name: unmarked(text[f.source_start:f.source_end])
+            for f in c.fields}
     for o in objs:
         out[("OBJ", o.disposition, o.name)] = {
-            f.field_name: text[f.source_start:f.source_end] for f in o.fields}
+            f.field_name: unmarked(text[f.source_start:f.source_end])
+            for f in o.fields}
     return out
 
 
@@ -81,19 +100,23 @@ def full_shape(text: str, rules) -> dict:
     """
     blocks, cards, objs = CP.parse(text, rules)
     head = {b.ordinal: b.raw_heading for b in blocks}
+    fields = [(c.name, f) for c in cards for f in c.fields] \
+        + [(o.name, f) for o in objs for f in o.fields]
     return {
         "blocks": [(b.ordinal, b.raw_heading, b.status,
                     b.rule.rule_id if b.rule else None,
                     head.get(b.parent_ordinal), b.heading_path,
-                    b.failure_reason, b.context_kind) for b in blocks],
+                    b.failure_reason, b.context_kind,
+                    head.get(b.absorbed_into), b.review_class) for b in blocks],
         "cards": [(c.kind, c.name, c.heading_path) for c in cards],
         "objects": [(o.disposition, o.name, o.heading_path) for o in objs],
-        "fields": [(c.name, f.field_name, f.heading_path, f.name_source,
-                    text[f.source_start:f.source_end]) for c in cards
-                   for f in c.fields]
-                  + [(o.name, f.field_name, f.heading_path, f.name_source,
-                      text[f.source_start:f.source_end]) for o in objs
-                     for f in o.fields],
+        "fields": [(n, f.field_name, f.heading_path, f.name_source,
+                    unmarked(text[f.source_start:f.source_end]))
+                   for n, f in fields],
+        # Raw, for the bound: which fields' bytes may differ by markup at all.
+        "raw": [(n, f.field_name, text[f.source_start:f.source_end],
+                 any(b.absorbed_into == f.block_ordinal for b in blocks))
+                for n, f in fields],
     }
 
 
@@ -135,12 +158,30 @@ Opening statement for the object.
 
 ## Some Heading Nobody Registered
 
-This block is not recognised, which closes the object above it.
+This block is not recognised. Under D58 it does NOT close the object: only
+registered structure changes ownership, so it is body of the opening field.
 
 ## Monitoring
 
-This label is registered, but the container was closed by the unrecognised
-block, so there is nothing it can belong to.
+Registered, and the object is still open, so this IS the object's field.
+
+## Monitoring
+
+A second monitoring label in the same object. The object already holds that
+field, so this changes no ownership and is kept as body of the first.
+
+## Decision intelligence
+
+Registered, but only for strategy and principle containers -- never for a
+curated object (050) -- so it too is body, not a field.
+
+## Strategy family — Rotating equipment
+
+A registered boundary. It closes the object.
+
+## When useful
+
+Registered, but the boundary above closed everything, so it has no owner.
 """
 
 NESTED_OK = """# Widget Maintenance — Update
@@ -257,22 +298,72 @@ def main() -> int:
           len(blocks) == 2, f"{[b.raw_heading for b in blocks]}")
 
     # ==================================================================
-    print("\n3. AMBIGUITY FAILS CLOSED")
+    print("\n3. AMBIGUITY FAILS CLOSED -- ONLY REGISTERED STRUCTURE MOVES OWNERSHIP")
     blocks, cards, objs = CP.parse(AMBIGUOUS, rules)
-    by_head = {b.raw_heading: b for b in blocks}
+    # By ORDINAL, never by heading text. An earlier version indexed a dict
+    # by raw_heading, so `by_head["Monitoring"]` was the LAST Monitoring and
+    # the "no container open" check was examining the wrong block.
+    by = {b.raw_heading: [x for x in blocks if x.raw_heading == b.raw_heading]
+          for b in blocks}
+    first_mon, owned_mon, dup_mon = by["Monitoring"]
+    stray = by["Some Heading Nobody Registered"][0]
+    di = by["Decision intelligence"][0]
+    late = by["When useful"][0]
+    obj = next(b for b in blocks if b.raw_heading.startswith("ADD"))
     check("a registered label with NO container open is REVIEW_REQUIRED",
-          by_head["Monitoring"].status == "REVIEW_REQUIRED",
-          by_head["Monitoring"].status)
-    check("...and says why, naming what it needed",
-          "container open at that point" in (by_head["Monitoring"].failure_reason or ""),
-          str(by_head["Monitoring"].failure_reason))
-    check("an unregistered heading is REVIEW_REQUIRED",
-          by_head["Some Heading Nobody Registered"].status == "REVIEW_REQUIRED")
-    later = [b for b in blocks if b.raw_heading == "Monitoring"][-1]
-    check("a registered label AFTER an unrecognised block is REVIEW_REQUIRED",
-          later.status == "REVIEW_REQUIRED", later.status)
-    check("...so the object gained no field from it",
-          all("monitoring" not in {f.field_name for f in o.fields} for o in objs))
+          first_mon.status == "REVIEW_REQUIRED"
+          and first_mon.review_class == "REGISTERED_NO_CONTAINER",
+          f"{first_mon.status} {first_mon.review_class}")
+    check("...and says the label is KNOWN and the container missing",
+          "REGISTERED" in (first_mon.failure_reason or "")
+          and "no container was open" in (first_mon.failure_reason or ""),
+          str(first_mon.failure_reason))
+    check("an unregistered heading is REVIEW_REQUIRED, reason NO_RULE",
+          stray.status == "REVIEW_REQUIRED" and stray.review_class == "NO_RULE",
+          f"{stray.status} {stray.review_class}")
+    check("...and is ABSORBED into the field it sits in, not dropped",
+          stray.absorbed_into == obj.ordinal, str(stray.absorbed_into))
+    # D58 REVERSES what this section used to assert. `0df47bf` held that a
+    # registered label after an unrecognised block had no owner, because the
+    # unrecognised block closed the container. The canonical .docx refuted
+    # that: its emphasised body sentences are bold paragraphs, so the old
+    # rule orphaned every subsection after one. The label attaching here is
+    # the fix, not a loosening.
+    check("D58: a registered label AFTER an unrecognised block still attaches",
+          owned_mon.status == "PARSED"
+          and owned_mon.parent_ordinal == obj.ordinal,
+          f"{owned_mon.status} parent={owned_mon.parent_ordinal}")
+    check("a SECOND occurrence of a field is REVIEW_REQUIRED, never an overwrite",
+          dup_mon.status == "REVIEW_REQUIRED"
+          and dup_mon.review_class == "REGISTERED_DUPLICATE_FIELD"
+          and dup_mon.absorbed_into == owned_mon.ordinal,
+          f"{dup_mon.status} {dup_mon.review_class} into={dup_mon.absorbed_into}")
+    check("a label the container kind may not own is REVIEW_REQUIRED",
+          di.status == "REVIEW_REQUIRED"
+          and di.review_class == "REGISTERED_NOT_OWNABLE",
+          f"{di.status} {di.review_class}")
+    check("a registered BOUNDARY closes the container; a label after it has "
+          "no owner",
+          late.status == "REVIEW_REQUIRED"
+          and late.review_class == "REGISTERED_NO_CONTAINER"
+          and late.absorbed_into is None,
+          f"{late.status} {late.review_class} into={late.absorbed_into}")
+    fields = {f.field_name: f for o in objs for f in o.fields}
+    check("the object holds exactly one monitoring field and no decision field",
+          sorted(fields) == ["monitoring", "opening_statement"], str(sorted(fields)))
+    # .get, never []: with the old rule restored there is no monitoring field,
+    # and a KeyError here stopped the suite before section 7 -- the real
+    # .docx case -- could run. Red by crash hides which checks have teeth.
+    mf, of = fields.get("monitoring"), fields.get("opening_statement")
+    mon_text = AMBIGUOUS[mf.source_start:mf.source_end] if mf else ""
+    check("...whose VERBATIM text runs through both absorbed labels",
+          "A second monitoring label" in mon_text
+          and "## Decision intelligence" in mon_text
+          and "Strategy family" not in mon_text, repr(mon_text[-80:]))
+    open_text = AMBIGUOUS[of.source_start:of.source_end] if of else ""
+    check("...and the opening field keeps the unregistered heading as body",
+          "## Some Heading Nobody Registered" in open_text
+          and "Registered, and the object" not in open_text, repr(open_text[-80:]))
 
     # The positive control: the same labels DO attach when a container is
     # genuinely open. Without this the section above would pass on a parser
@@ -297,6 +388,10 @@ def main() -> int:
                   for m in ("", "#", "###", "######")}
         base = shapes[""]
         for m in ("#", "###", "######"):
+            leaked = [r[:2] for r, r0 in zip(shapes[m]["raw"], base["raw"])
+                      if r[2] != r0[2] and not r0[3]]
+            check(f"  {name} {m!r:>8}: raw text differs ONLY where a field "
+                  "absorbed a heading", leaked == [], str(leaked))
             for part in ("blocks", "cards", "objects", "fields"):
                 check(f"  {name} {m!r:>8}: {part} identical — incl. heading_path"
                       " and ownership", shapes[m][part] == base[part],
@@ -372,6 +467,53 @@ def main() -> int:
         check("  verify() is clean", CP.verify(doc, flds) == [])
         check("  everything stored is VERBATIM_SOURCE",
               all(f.provenance == "VERBATIM_SOURCE" for f in flds))
+
+    # ==================================================================
+    print("\n7. THE CANONICAL SHAPE, IN A REAL .docx (D58)")
+    # The failure independent review measured on the real document, rebuilt
+    # SYNTHETICALLY: an emphasised body sentence is a bold paragraph exactly
+    # like a label, and it sits between two registered subsections. Read
+    # through the SAME path the survey uses -- the real .docx reader and the
+    # production classify / attach -- not a Markdown stand-in, because the
+    # Markdown renderings are what hid this in the first place.
+    import curated_survey as SV
+    dpath = FIXTURES.parent / "docx" / "bold_body_between_labels.docx"
+    dblocks, dsig = SV.docx_candidates(dpath)
+    CP.classify(dblocks, rules)
+    CP.attach(dblocks)
+    CP.derive_paths(dblocks)
+    dby = {b.raw_heading: b for b in dblocks}
+    s1 = dby.get("Strategy 1 — Rotor balancing")
+    emph = next((b for b in dblocks if b.raw_heading.startswith("Vibration")), None)
+    why = dby.get("Why this can be useful")
+    cdl = dby.get("Client decision logic")
+    what = dby.get("What the strategy means")
+    check("the fixture is read as SIX bold candidates from a real package",
+          len(dblocks) == 6 and dsig["heading_styled"] == 0
+          and dsig["outline_levels"] == 0,
+          f"{[b.raw_heading[:30] for b in dblocks]} {dsig}")
+    if None in (s1, emph, why, cdl, what):
+        check("every expected candidate is present", False, str(list(dby)))
+    else:
+        check("the emphasised body sentence matches no rule and is AUDITED",
+              emph.status == "REVIEW_REQUIRED" and emph.review_class == "NO_RULE",
+              f"{emph.status} {emph.review_class}")
+        check("...and is absorbed into the field BEFORE it, not dropped",
+              emph.absorbed_into == what.ordinal, str(emph.absorbed_into))
+        check("the subsection AFTER it is still owned by its container",
+              why.status == "PARSED" and why.parent_ordinal == s1.ordinal,
+              f"{why.status} parent={why.parent_ordinal}")
+        check("...and so is client_decision_logic, the field GATE 1 protects",
+              cdl.status == "PARSED" and cdl.parent_ordinal == s1.ordinal
+              and cdl.rule is not None
+              and cdl.rule.field_name == "client_decision_logic",
+              f"{cdl.status} parent={cdl.parent_ordinal}")
+        check("...with the path of an owned subsection, not an orphan's",
+              cdl.heading_path == f"{s1.raw_heading} > Client decision logic",
+              cdl.heading_path)
+        s2 = dby.get("Strategy 2 — Bearing inspection")
+        check("the next registered container still opens its own",
+              s2 is not None and s2.status == "PARSED" and s2.parent_ordinal is None)
 
     print("\n" + "=" * 60)
     if FAILS:

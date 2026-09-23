@@ -4810,3 +4810,74 @@ was **not reachable** — `level` is set only where `num` is, so the conflict
 test short-circuited first — so this removes a hazard rather than fixing a
 crash. "Inherited bold" now states its scope: bold declared by the paragraph's
 own style, with `basedOn`, `docDefaults` and character styles NOT resolved.
+
+## D58 — only registered structure changes ownership
+
+### The canonical source refuted "unknown closes the container"
+
+`0df47bf` (D56) closed the open container on ANY unrecognised block, and that
+rule was validated only on the Markdown fixtures. Independent review ran the
+survey against the canonical `T2D_V_1.docx` (outside the repository; not
+available in this build's session) and measured: **28 STRATEGY containers,
+21 attaching nothing, 8 attaching only SUB_WHAT_MEANS, 0 keeping
+`client_decision_logic`**; `Decision logic` reported UNRECOGNISED 14 times;
+the cross-container ambiguity list a false zero. An emphasised body sentence
+in a flat .docx is a bold paragraph indistinguishable from a label, so the
+first one after `What the strategy means` closed the strategy and orphaned
+everything registered after it. The Markdown hid it because the model that
+rendered the fixtures turned those sentences into inline bold.
+
+**Decision.** A registered container opens one; a registered subsection the
+open container kind may own attaches; a registered boundary that is neither
+(`Strategy family — …`) closes it. **Anything else inside an open container is
+absorbed as body of the current field** — text and span preserved, the block
+kept REVIEW_REQUIRED with `absorbed_into_ordinal` and `review_class`
+(`052`), listed by `v_curated_absorbed_body`. A registered label the
+container may not own, or a second copy of a field it already holds, is
+absorbed the same way, never attached and never overwriting.
+
+**Rejected:** telling labels from emphasis by length, punctuation, a trailing
+colon or capitalisation — the heuristics Option 2 forbids. Adding grammar
+rules to recover coverage — the labels are the practitioner's.
+
+### The survey stopped merging two findings into one
+
+REVIEW_REQUIRED is now reported by `review_class`: matches no rule;
+matches a REGISTERED label with no container open; registered but not ownable
+there; registered but a duplicate field. Absorbed ("unowned bold inside a
+field") is counted per field. The cross-container list counts ONLY registered
+labels that met a container, marked `attached` or `refused`, with the
+attached-only count printed beside it. A refusal stays in the list on
+purpose: `Decision intelligence` refused inside a curated object is the
+finding that opened Q1. A second list asks the question of the RULE, across
+wordings — and flags SUB_WHY, attached in strategy cards and in the Video 14
+Market object (`Why it attracts clients`).
+
+### What it costs — reported, not absorbed
+
+`docs/evidence/gate4_containment.md` has every row.
+
+- **Video 1 is not text-invariant.** 8 containers, 24 fields, 23 texts
+  byte-identical. **Strategy 6's `client_decision_logic` grew 1,191 → 4,456
+  chars**, frozen span as its exact prefix, by absorbing the document's
+  closing sections. That field is retrieval-exposed.
+- **GATE 3's within-band ranking moved with no retrieval code changed**:
+  4, 1, 6 → 4, 6, 1 (measured with each parser on the same seed). The answer
+  key's bands still hold and the acceptance suite passes.
+- **Video 14: 49 → 48 REVIEW_REQUIRED, 12 → 13 fields**; 46 blocks absorbed;
+  the SKIP object absorbs 27, including `Main Practitioner Principle`.
+- **One new registered role**, `why_useful` (RATIONALE) in the Market object.
+  None is PRIORITISATION.
+
+All four have the same cure — registering the practitioner's section labels
+as boundaries or containers — and **that is a coverage decision for the
+practitioner, not this build.**
+
+### A stale comment
+
+`curated_parser.py`'s case-insensitivity comment still said `Decision logic`,
+`Client decision logic` and `Decision intelligence` "are one construct however
+they are cased" — the premise `050` refuted. Corrected in the source:
+case-insensitivity makes two casings one label, never two labels one
+construct. The applied migrations are untouched; `050` already records the
+refutation.

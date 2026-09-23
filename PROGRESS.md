@@ -3389,3 +3389,34 @@ kinds -- exactly `Decision intelligence` across the two fixtures.
 
 **Attribution corrected everywhere:** the conversion method was confirmed by
 the developer who generated the fixtures, not by the practitioner.
+
+## GATE 4 review round 5 — only registered structure changes ownership (2026-09-23, D58)
+
+**The containment rule changed because the canonical source refuted it.**
+Independent review measured the real `T2D_V_1.docx` at `1cfdde8`: 0 of 28
+strategy containers kept `client_decision_logic`, because an emphasised bold
+body sentence closed the container. Now only registered structure changes
+ownership; anything else inside a container is absorbed as body of the
+current field, span preserved, audited (`052`, `v_curated_absorbed_body`).
+
+**The canonical survey was NOT re-run** — the .docx is not in this session.
+The review's run is the only canonical measurement.
+
+**Survey:** reasons separated (no rule / registered, no container /
+registered, not ownable / duplicate field); absorbed text counted; the
+cross-container list counts only registered labels that met a container;
+a rule-level list added (flags SUB_WHY).
+
+**Fixtures:** Video 1 8 containers / 24 fields, 23 texts identical, Strategy 6
+`client_decision_logic` 1,191 → 4,456 chars (frozen prefix exact). Video 14
+48 of 61 REVIEW_REQUIRED (was 49), 13 fields (was 12). GATE 3 within-band
+order 4, 1, 6 → 4, 6, 1; bands hold. `docs/evidence/gate4_containment.md`.
+
+**New test:** a synthetic .docx with an emphasised bold sentence between
+registered subsections; both stay owned. Restoring the old rule turns it red.
+
+**Next exact task:** a practitioner decision on which of their section labels
+are boundaries — it is what stops Strategy 6's field and Video 14's SKIP
+object absorbing the documents' closing material. Separately still open: Q1
+(`Decision intelligence`), label coverage, MERGE / ADD_UPGRADE / REINFORCE
+target resolution before curated objects are retrieval-exposed.

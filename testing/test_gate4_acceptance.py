@@ -244,8 +244,13 @@ def main() -> int:
         "  from curated_blocks where envelope_id=%s", (env,)).fetchone()
     print(f"        {blocks[0]} blocks, {blocks[1]} REVIEW_REQUIRED")
     check("every block is stored, parsed or not", blocks[0] == 61, str(blocks))
-    check("REVIEW_REQUIRED is 49 -- the flat-structure result, reported",
-          blocks[1] == 49, str(blocks))
+    # 48 SINCE D58 (was 49). The one block that changed is
+    # `Why it attracts clients`: a REGISTERED SUB_WHY label that the
+    # unrecognised `Market claim observed` above it used to orphan, by
+    # closing the Market object. Only registered structure changes ownership
+    # now, so it attaches. Every other REVIEW_REQUIRED block is unchanged.
+    check("REVIEW_REQUIRED is 48 -- the flat-structure result, reported",
+          blocks[1] == 48, str(blocks))
     noreason = conn.execute(
         "select count(*) from curated_blocks where envelope_id=%s "
         "  and status='REVIEW_REQUIRED' and failure_reason is null",
@@ -403,16 +408,28 @@ def main() -> int:
     # 050 withdrew the one registered role Video 14 had: `Decision
     # intelligence` means prognosis in a curated object, so storing it as
     # client_decision_logic (PRIORITISATION) answered Q1 by surface form.
-    check("NO Video 14 field carries a registered role",
-          v14.get("SEMANTIC_ROLE_REGISTERED", 0) == 0, str(v14))
     reg = conn.execute(
-        """select s.field_name, s.semantic_role
+        """select o.name, s.field_name, s.semantic_role
              from v_curated_field_semantics s
              join curated_objects o on o.object_id = s.object_id
             where o.envelope_id=%s and s.semantic_state='SEMANTIC_ROLE_REGISTERED'""",
         (env,)).fetchall()
-    check("...so no prognosis is presented to Pass B as prioritisation",
-          reg == [], str(reg))
+    # D58 CHANGED THIS, and the change is reported rather than absorbed.
+    # Before D58 the answer was "no registered role at all". Now exactly ONE:
+    # the Market object's `Why it attracts clients` -> why_useful (RATIONALE),
+    # a registered SUB_WHY label that only the refuted close-on-unknown rule
+    # had been orphaning. WHETHER that label means "rationale" inside a
+    # market-expectation object is the same kind of question as Q1, it is
+    # the practitioner's, and the survey's rule-level list flags SUB_WHY for
+    # it. Asserted EXACTLY, so any further role appearing is a failure.
+    check("Video 14 carries exactly ONE registered role, and it is named",
+          [(n.split(" — ")[-1][:6], f, r) for n, f, r in reg]
+          == [("Market", "why_useful", "RATIONALE")], str(reg))
+    # The guard this section exists for, unweakened: no prognosis stored as
+    # prioritisation (050 withdrew exactly that for `Decision intelligence`).
+    check("...and NONE is prioritisation, so no prognosis reaches Pass B as it",
+          not any(r == "PRIORITISATION" or f == "client_decision_logic"
+                  for _n, f, r in reg), str(reg))
     di = conn.execute(
         """select status::text, rule_id from curated_blocks
             where envelope_id=%s and raw_heading='Decision intelligence'""",

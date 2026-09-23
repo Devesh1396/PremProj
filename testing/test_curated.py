@@ -266,6 +266,52 @@ def main() -> int:
               stored[0][:120])
         check("...marked VERBATIM_SOURCE", stored[4] == "VERBATIM_SOURCE")
 
+        # D58. CONTAINS was the GATE 1 comparison and it cannot see a field
+        # GROWING. Under D58 the unregistered section headings after Strategy
+        # 6 (the document's closing material) change no ownership and are
+        # absorbed into this field, so it is no longer exactly the frozen
+        # span. That is a CHANGE to a retrieval-exposed field and it is
+        # asserted precisely rather than tolerated by a substring test: the
+        # field STARTS at the frozen offset with the frozen bytes, and every
+        # byte past the frozen span is covered by a block the audit records
+        # as absorbed into this field.
+        start, end = stored[2], stored[3]
+        check("...starting EXACTLY at the frozen span",
+              start == S6["expected_source_start"]
+              and stored[0].startswith(S6["expected_verbatim_text"]),
+              f"[{start}:{end}] vs [{S6['expected_source_start']}:"
+              f"{S6['expected_source_end']}]")
+        grown = end > S6["expected_source_end"]
+        cover = conn.execute(
+            """select coalesce(min(a.source_start), %s),
+                      coalesce(max(a.source_end), %s), count(*)
+                 from v_curated_absorbed_body a
+                where a.envelope_id=%s
+                  and a.into_ordinal=(
+                      select b.ordinal from curated_fields f
+                        join curated_blocks b on b.block_id=f.block_id
+                        join curated_strategies s on s.curated_id=f.curated_id
+                       where s.envelope_id=%s and f.field_name=%s
+                         and s.ordinal=(select max(ordinal) from curated_strategies
+                                         where envelope_id=%s))""",
+            (end, end, envelope_id, envelope_id, S6["expected_field"],
+             envelope_id)).fetchone()
+        tail = stored[0][len(S6["expected_verbatim_text"]):]
+        # Block spans keep trailing whitespace; field spans are stripped
+        # (strip_span). So the last absorbed block may END a few bytes past
+        # the field -- and those bytes must be whitespace IN THE SOURCE.
+        src = (FIXTURES / "t2d_video1.md").read_text(encoding="utf-8")
+        check("...and anything beyond it is ABSORBED, audited, unowned material",
+              (not grown and cover[2] == 0)
+              or (grown and cover[0] >= S6["expected_source_end"]
+                  and cover[1] >= end and not src[end:cover[1]].strip()
+                  and cover[2] > 0
+                  and not tail[:cover[0] - S6["expected_source_end"]].strip()),
+              f"field [{start}:{end}], absorbed [{cover[0]}:{cover[1]}] "
+              f"x{cover[2]}, gap {tail[:max(0, cover[0] - S6['expected_source_end'])]!r}")
+        print(f"        client_decision_logic: {len(stored[0])} chars; frozen span "
+              f"{len(S6['expected_verbatim_text'])}; {cover[2]} absorbed block(s)")
+
     # ==================================================================
     print("\nE-F. every field IS the slice of the source it claims to be")
 
